@@ -16,6 +16,7 @@ the specification each crate owns.
 | Text | `glyphon` 0.12 (`cosmic-text`) | GPU text with proper shaping and fallback |
 | Widgets | `peel-ui` (project-owned) | Dense music editors need custom rendering and input |
 | Audio I/O | `cpal` 0.18 behind `peel-engine`'s backend | Core Audio, WASAPI, ALSA/PipeWire today; dedicated ASIO and HAL adapters later |
+| MIDI input | `midir` 0.11 behind `peel-midi-io` | Core MIDI, WinMM and ALSA sequencer with one API |
 | Engine queues | `rtrb` | Bounded, wait-free SPSC ring buffers |
 | Media | `symphonia` decode, `hound` WAV encode | Pure Rust, offline |
 | Persistence | JSON manifest plus content-addressed shards, `blake3` hashes | Open, inspectable and recoverable |
@@ -34,6 +35,7 @@ the specification each crate owns.
 | `peel-media` | Decoding, resampling, WAV export, waveform peaks | engine, GUI |
 | `peel-project` | `.peelproj` save/load, atomic writes, asset collection | engine, GUI |
 | `peel-midi` | Standard MIDI File import/export | engine, GUI |
+| `peel-midi-io` | Hardware MIDI input: port discovery and hotplug, message parsing | engine, GUI, document |
 | `peel-session` | Document to engine bridge: plan compiler, device slots, sample loading | GUI |
 | `peel-ui` | GPU renderer, text, input, theme, widgets | document, engine |
 | `peel-app` | The desktop application and its editors | — |
@@ -69,6 +71,16 @@ flowchart LR
    one through the retire queue, so nothing is freed on the audio thread.
 5. The UI reads telemetry atomics each frame for the playhead, meters and
    processing load.
+6. Hardware MIDI skips the UI. `peel-midi-io` parses each port on its own
+   callback thread and `peel-session` forwards the note to the engine's
+   live input queue, a second bounded SPSC ring beside the command queue.
+   The engine applies the sustain pedal and starts the note on the selected
+   channel's instrument at the next block. The UI only chooses the target
+   channel, rescans ports every couple of seconds and drains the notes the
+   engine recorded with their playhead position.
+7. Switching audio device or buffer size builds a new engine
+   (`Session::restart_audio`) and brings it to the old one's state: devices
+   reinstalled in their slots, samples resent, plan recompiled.
 
 ## Time
 

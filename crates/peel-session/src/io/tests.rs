@@ -218,6 +218,24 @@ fn midi_keeps_working_after_an_audio_restart() {
 }
 
 #[test]
+fn spread_timing_still_plays_every_note_promptly() {
+    let mut s = session();
+    let piano = channel(&s, "Piano");
+    s.set_live_target(Some(piano));
+    s.set_midi_timing(LiveTiming::Spread);
+    // Notes arrive at arbitrary points in the audio callbacks; each is heard
+    // within a couple of blocks and none is lost.
+    for key in 40..60u8 {
+        s.io.bridge.handle(&note_on(key, 100));
+        wait_for(&mut s, "the note to sound", |s| sounds(s, piano));
+        s.io.bridge.handle(&note_off(key));
+        std::thread::sleep(Duration::from_millis(u64::from(key) % 7));
+    }
+    assert_eq!(s.midi_activity(), 20);
+    assert_eq!(s.engine.live_stats().dropped(), 0);
+}
+
+#[test]
 fn silent_sessions_do_not_open_hardware_and_polling_is_harmless() {
     let mut s = session();
     assert!(!s.midi_enabled());
@@ -253,6 +271,24 @@ fn restarting_on_the_real_device_keeps_the_sound() {
         .expect("fallback");
     assert!(s.audio_warning().is_some());
     assert!(!s.engine.is_null_backend());
+
+    // MIDI notes reach the device callback in both timing modes.
+    s.set_live_target(Some(piano));
+    for timing in [LiveTiming::Immediate, LiveTiming::Spread] {
+        s.set_midi_timing(timing);
+        for key in 50..56u8 {
+            s.io.bridge.handle(&note_on(key, 110));
+            wait_for(&mut s, "a MIDI note on the device", |s| sounds(s, piano));
+            s.io.bridge.handle(&note_off(key));
+            std::thread::sleep(Duration::from_millis(15));
+        }
+    }
+    assert_eq!(s.engine.live_stats().dropped(), 0);
+    assert_eq!(
+        s.telemetry().overruns.load(Ordering::Relaxed),
+        0,
+        "no missed deadlines"
+    );
 }
 
 /// A virtual MIDI keyboard stands in for hardware: its bytes travel through

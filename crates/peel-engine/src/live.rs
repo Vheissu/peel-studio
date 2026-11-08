@@ -342,7 +342,8 @@ impl LiveInput {
     }
 
     /// Releases every live note on `slot` now, including notes the pedal is
-    /// holding (MIDI CC123 / CC120).
+    /// holding (MIDI CC123 / CC120). [`LIVE_TARGET_NONE`] means every
+    /// instrument.
     pub fn all_notes_off(&self, slot: Slot) -> bool {
         let shared = &self.inner.shared;
         let ev = LiveEvent {
@@ -354,12 +355,11 @@ impl LiveInput {
         push_event(&mut tx, shared, ev, true)
     }
 
-    /// [`all_notes_off`](LiveInput::all_notes_off) on the current target.
+    /// [`all_notes_off`](LiveInput::all_notes_off) on the current target, or
+    /// on every instrument when there is none (a panic button must always
+    /// work, even for notes started before the target was cleared).
     pub fn all_notes_off_target(&self) -> bool {
-        match self.inner.shared.target.get() {
-            Some(slot) => self.all_notes_off(slot),
-            None => false,
-        }
+        self.all_notes_off(self.inner.shared.target.raw())
     }
 
     /// The instrument live notes are played on.
@@ -424,7 +424,7 @@ pub(crate) enum LiveOp {
         slot: u32,
         key: u8,
     },
-    /// Release every live note on the slot.
+    /// Release every live note on the slot ([`LIVE_TARGET_NONE`]: on all).
     AllOff {
         slot: u32,
     },
@@ -635,16 +635,15 @@ impl LiveState {
                 }
             }
             LiveKind::AllNotesOff => {
+                // `LIVE_TARGET_NONE` matches every instrument.
                 let slot = ev.slot;
-                if slot == LIVE_TARGET_NONE {
-                    return;
-                }
+                let every = slot == LIVE_TARGET_NONE;
                 for h in &mut self.held {
-                    if *h == slot {
+                    if every || *h == slot {
                         *h = LIVE_TARGET_NONE;
                     }
                 }
-                self.sustained.retain(|&(s, _)| s != slot);
+                self.sustained.retain(|&(s, _)| !every && s != slot);
                 emit(out, offset, LiveOp::AllOff { slot });
             }
         }
@@ -820,6 +819,29 @@ mod tests {
             &[ev(LIVE_TARGET_NONE, LiveKind::Sustain { down: false })],
         );
         assert_eq!(ops, vec![LiveOp::Off { slot: 2, key: 62 }]);
+    }
+
+    #[test]
+    fn all_notes_off_without_a_slot_clears_everything() {
+        let mut s = state();
+        run(
+            &mut s,
+            &[
+                ev(LIVE_TARGET_NONE, LiveKind::Sustain { down: true }),
+                on(1, 60),
+                on(2, 62),
+                off(2, 62),
+            ],
+        );
+        let ops = run(&mut s, &[ev(LIVE_TARGET_NONE, LiveKind::AllNotesOff)]);
+        assert_eq!(
+            ops,
+            vec![LiveOp::AllOff {
+                slot: LIVE_TARGET_NONE
+            }]
+        );
+        assert_eq!(s.sustained_len(), 0);
+        assert!(s.held.iter().all(|&h| h == LIVE_TARGET_NONE));
     }
 
     #[test]

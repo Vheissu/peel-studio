@@ -85,7 +85,7 @@ mod tests {
                 start.elapsed() < Duration::from_secs(8),
                 "timed out waiting for {what}"
             );
-            std::thread::sleep(Duration::from_millis(50));
+            std::thread::sleep(Duration::from_millis(5));
         }
     }
 
@@ -148,6 +148,45 @@ mod tests {
             midi.poll_ports();
             !ours(&midi)
         });
+    }
+
+    /// How long a message takes from the sender to the handler on this
+    /// machine's MIDI layer (prints the median and the worst of 200).
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "needs the system MIDI service (CoreMIDI or the ALSA sequencer)"]
+    fn callback_latency_through_the_system_midi_layer() {
+        use midir::os::unix::VirtualOutput;
+        use std::sync::Mutex;
+
+        let name = "Peel Latency Keyboard";
+        let mut keyboard = midir::MidiOutput::new("Peel latency test")
+            .expect("MIDI output")
+            .create_virtual(name)
+            .unwrap_or_else(|_| panic!("could not create a virtual port"));
+        let arrivals: Arc<Mutex<Vec<Instant>>> = Arc::default();
+        let sink = arrivals.clone();
+        let midi = MidiInput::new(move |_| sink.lock().unwrap().push(Instant::now()));
+        wait_until("the virtual keyboard to connect", || {
+            midi.poll_ports();
+            midi.connected().iter().any(|p| p.name.contains(name))
+        });
+
+        let mut delays = Vec::new();
+        for i in 0..200u8 {
+            let before = arrivals.lock().unwrap().len();
+            let sent = Instant::now();
+            keyboard.send(&[0x90, 40 + i % 40, 100]).unwrap();
+            wait_until("the message", || arrivals.lock().unwrap().len() > before);
+            delays.push(arrivals.lock().unwrap()[before].duration_since(sent));
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        delays.sort();
+        eprintln!(
+            "sender to handler: median {:?}, worst {:?}",
+            delays[delays.len() / 2],
+            delays[delays.len() - 1]
+        );
     }
 
     /// Plug in a MIDI keyboard and play a note within 30 seconds.

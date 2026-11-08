@@ -184,6 +184,23 @@ fn all_notes_off_releases_held_and_sustained_notes_of_the_instrument() {
 }
 
 #[test]
+fn the_panic_button_works_with_no_target() {
+    let mut off = rig(empty_plan(2), None);
+    let live = off.take_live_input().unwrap();
+    let target = live.target().clone();
+    target.set(Some(0));
+    live.sustain(true);
+    live.note_to_target(60, 1.0, true);
+    target.set(Some(1));
+    live.note_to_target(62, 0.5, true);
+    live.note_to_target(62, 0.0, false); // held by the pedal
+    assert_eq!(level(&mut off), 1.5);
+    target.set(None);
+    assert!(live.all_notes_off_target());
+    assert_eq!(level(&mut off), 0.0, "every instrument went quiet");
+}
+
+#[test]
 fn a_note_off_follows_its_note_on_after_the_target_changes() {
     let log = new_log();
     let mut off = rig(empty_plan(2), Some(log.clone()));

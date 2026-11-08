@@ -5,7 +5,7 @@
 //! no allocation, no locks, bounded work per chunk.
 
 use super::Engine;
-use crate::live::{LiveAction, LiveOp, MAX_EVENTS_PER_BLOCK};
+use crate::live::{LIVE_TARGET_NONE, LiveAction, LiveOp, MAX_EVENTS_PER_BLOCK};
 
 impl Engine {
     /// Stages the live events that belong in a chunk of `frames`.
@@ -41,12 +41,13 @@ impl Engine {
         }
     }
 
-    /// Releases every live note on a slot `offset` frames into the block.
+    /// Releases every live note on a slot (every slot for
+    /// [`LIVE_TARGET_NONE`]) `offset` frames into the block.
     fn release_live_slot(&mut self, slot: u32, offset: u32) {
         let mut i = 0;
         while i < self.active.len() {
             let n = self.active.get(i);
-            if n.live && n.slot == slot {
+            if n.live && (slot == LIVE_TARGET_NONE || n.slot == slot) {
                 let n = self.active.swap_remove(i);
                 self.stage_note_off(n, offset);
             } else {
