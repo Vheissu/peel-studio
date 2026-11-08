@@ -28,6 +28,7 @@ pub enum Tool {
     Paint,
     Select,
     Erase,
+    Slice,
 }
 
 /// What the inspector shows.

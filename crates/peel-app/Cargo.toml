@@ -20,6 +20,7 @@ peel-devices.workspace = true
 peel-dsp.workspace = true
 peel-media.workspace = true
 peel-time.workspace = true
+peel-engine.workspace = true
 peel-midi.workspace = true
 log.workspace = true
 env_logger.workspace = true

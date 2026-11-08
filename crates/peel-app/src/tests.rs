@@ -923,3 +923,73 @@ fn monkey_input_keeps_the_project_valid() {
         );
     }
 }
+
+#[test]
+fn slicing_a_clip_keeps_the_music_identical() {
+    use std::collections::HashMap;
+    let mut h = Harness::new();
+    let notes = |h: &Harness| -> Vec<(u64, u8)> {
+        let p = h.session().project();
+        let slots: HashMap<_, _> = p
+            .channels
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (c.device.id, i as u32))
+            .collect();
+        let meters: HashMap<_, _> = p
+            .mixer
+            .tracks
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (t.id, i as u16))
+            .collect();
+        let samples = HashMap::new();
+        let ctx = peel_session::CompileContext {
+            mode: PlayMode::Song,
+            slots: &slots,
+            meters: &meters,
+            samples: &samples,
+        };
+        let (plan, _) = peel_session::compile(p, &ctx);
+        let mut v: Vec<(u64, u8)> = plan
+            .sequence
+            .iter()
+            .filter_map(|e| match e.kind {
+                peel_engine::SeqKind::NoteOn { key, .. } => {
+                    Some(((e.beat * 960.0).round() as u64, key))
+                }
+                _ => None,
+            })
+            .collect();
+        v.sort();
+        v
+    };
+    let before = notes(&h);
+    let clips_before = h.session().project().arrangement().clips.len();
+    // Slice the Beat clip at bar 3 and the Chords clip at a beat inside a chord.
+    let beat = h.session().project().arrangement().clips[0].clone();
+    crate::playlist::slice_clip(&mut h.studio.session, &beat, Time::beats(8));
+    let chords = h.session().project().arrangement().clips[1].clone();
+    crate::playlist::slice_clip(&mut h.studio.session, &chords, Time::beats(6));
+    assert_eq!(
+        h.session().project().arrangement().clips.len(),
+        clips_before + 2
+    );
+    let after = notes(&h);
+    // Every original onset survives; chords sounding across the cut are
+    // chased (restarted at the cut) so they keep sounding.
+    // Multiset difference: after minus before.
+    let mut extra = after.clone();
+    for n in &before {
+        let i = extra
+            .iter()
+            .position(|x| x == n)
+            .unwrap_or_else(|| panic!("lost {n:?}"));
+        extra.remove(i);
+    }
+    assert!(
+        extra.iter().all(|(t, _)| *t == 6 * 960),
+        "only chased notes at the cut: {extra:?}"
+    );
+    assert_eq!(extra.len(), 6, "three piano and three pad notes chased");
+}

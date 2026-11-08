@@ -266,6 +266,7 @@ fn header(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) {
         (Tool::Draw, icons::PENCIL, "Draw"),
         (Tool::Paint, icons::BRUSH, "Paint"),
         (Tool::Select, icons::CURSOR, "Select"),
+        (Tool::Slice, icons::KNIFE, "Slice"),
         (Tool::Erase, icons::ERASER, "Erase"),
     ] {
         let b = ui.icon_button(
@@ -708,7 +709,7 @@ fn clips(
     });
     if resp.hovered && ui.state::<DragState>(drag_id).kind == Drag::None {
         match (ws.playlist.tool, &hit) {
-            (Tool::Erase, _) => ui.set_cursor(CursorIcon::Crosshair),
+            (Tool::Erase, _) | (Tool::Slice, _) => ui.set_cursor(CursorIcon::Crosshair),
             (_, Some((_, Part::Body))) => ui.set_cursor(CursorIcon::Grab),
             (_, Some((_, Part::AutoBody))) => ui.set_cursor(CursorIcon::Crosshair),
             (_, Some(_)) => ui.set_cursor(CursorIcon::EwResize),
@@ -731,6 +732,13 @@ fn clips(
         };
         match (ws.playlist.tool, hit.clone()) {
             (Tool::Erase, _) => st.kind = Drag::Erase,
+            (Tool::Slice, Some((c, _))) => {
+                let at = Time::from_f64(beat, 960).round_to(snap);
+                if at > c.start && at < c.end() {
+                    slice_clip(s, &c, at);
+                }
+            }
+            (Tool::Slice, None) => {}
             (tool, Some((c, Part::AutoBody))) if tool != Tool::Erase => {
                 ws.playlist.selection.clear();
                 ws.playlist.selection.insert(c.id);
@@ -1985,4 +1993,48 @@ pub fn create_automation(
         false,
     );
     clip_id
+}
+
+/// Splits a clip at `at` into two clips that play exactly what it did.
+pub fn slice_clip(s: &mut Session, c: &Clip, at: Time) -> Option<Id> {
+    if at <= c.start || at >= c.end() {
+        return None;
+    }
+    let cut = at - c.start;
+    let mut left = c.clone();
+    left.length = cut;
+    let mut right = c.clone();
+    right.id = Id::new();
+    right.start = at;
+    right.offset = c.offset + cut;
+    right.length = c.length - cut;
+    if let (ClipContent::Audio { fade_out, .. }, ClipContent::Audio { fade_in, .. }) =
+        (&mut left.content, &mut right.content)
+    {
+        *fade_out = Time::ZERO;
+        *fade_in = Time::ZERO;
+    }
+    if let ClipContent::Audio {
+        fade_in, fade_out, ..
+    } = &mut left.content
+    {
+        *fade_in = (*fade_in).min(left.length);
+        *fade_out = (*fade_out).min(left.length);
+    }
+    if let ClipContent::Audio {
+        fade_in, fade_out, ..
+    } = &mut right.content
+    {
+        *fade_in = (*fade_in).min(right.length);
+        *fade_out = (*fade_out).min(right.length);
+    }
+    let right_id = right.id;
+    s.doc.edit("Slice clip", |p| {
+        let arr = p.arrangement_mut();
+        if let Some(x) = arr.clips.iter_mut().find(|x| x.id == left.id) {
+            *x = left;
+        }
+        arr.clips.push(right);
+    });
+    Some(right_id)
 }

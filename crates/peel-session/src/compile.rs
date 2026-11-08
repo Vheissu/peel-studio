@@ -356,19 +356,30 @@ fn realize(
             if n.start >= l {
                 continue;
             }
-            let on = iter_origin + n.start;
-            if on < start || on >= end {
+            let mut on = iter_origin + n.start;
+            let note_end = (n.start + n.length).min(l);
+            let off = (iter_origin + note_end).min(end);
+            // Chase: a note that began before the clip's visible start but
+            // is still sounding there starts at the clip start (the spec's
+            // default clip-start policy), so trimmed and sliced clips keep
+            // sounding.
+            let chased = on < start && off > start;
+            if chased {
+                on = start;
+            } else if on < start || on >= end {
                 continue;
             }
             if !passes_probability(p.seed, n.id, salt, k, n.probability) {
                 continue;
             }
-            let note_end = (n.start + n.length).min(l);
-            let off = (iter_origin + note_end).min(end);
             if off <= on {
                 continue;
             }
-            let sw = swing_offset(n.start, p.swing);
+            let sw = if chased {
+                0.0
+            } else {
+                swing_offset(n.start, p.swing)
+            };
             let v = *voice;
             *voice = voice.wrapping_add(1).max(1);
             out.push(SeqEvent {
