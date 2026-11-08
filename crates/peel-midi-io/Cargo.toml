@@ -1,0 +1,13 @@
+[package]
+name = "peel-midi-io"
+description = "Hardware MIDI input for Peel Studio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+midir = "0.11"
+log.workspace = true
