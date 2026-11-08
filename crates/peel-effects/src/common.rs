@@ -197,7 +197,7 @@ impl SilenceTracker {
         let loud = left
             .iter()
             .chain(right.iter())
-            .any(|x| !(x.abs() <= Self::FLOOR));
+            .any(|x| x.abs() > Self::FLOOR);
         if loud {
             self.quiet = 0;
         } else {
