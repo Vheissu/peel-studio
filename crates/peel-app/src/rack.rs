@@ -52,20 +52,24 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
     );
     ws.rack_scroll = offset.y;
 
-    // Drops onto the rack add channels.
-    if let Some((item, _)) = ui.take_drop::<BrowserItem>(body) {
-        match item {
-            BrowserItem::Device(type_id) => {
-                if let Some(id) = add_instrument(s, type_id) {
-                    select(ws, id);
-                }
-            }
-            BrowserItem::Sample(path) => {
-                if let Some(id) = add_sample_channel(s, &path) {
-                    select(ws, id);
-                }
-            }
-            BrowserItem::Pattern(_) => {}
+    // Drops onto the rack add channels (instruments and samples only).
+    let accepts = |i: &BrowserItem| match i {
+        BrowserItem::Device(id) | BrowserItem::Preset(id, _) => {
+            peel_devices::descriptor(id).is_some_and(|d| d.kind == peel_dsp::DeviceKind::Instrument)
+        }
+        BrowserItem::Sample(_) => true,
+        BrowserItem::Pattern(_) => false,
+    };
+    let hovering_drop = ui.drop_hover::<BrowserItem>(body).is_some_and(accepts);
+    if hovering_drop && let Some((item, _)) = ui.take_drop::<BrowserItem>(body) {
+        let added = match item {
+            BrowserItem::Device(type_id) => add_instrument(s, type_id),
+            BrowserItem::Preset(type_id, preset) => add_instrument_preset(s, type_id, Some(preset)),
+            BrowserItem::Sample(path) => add_sample_channel(s, &path),
+            BrowserItem::Pattern(_) => None,
+        };
+        if let Some(id) = added {
+            select(ws, id);
         }
     }
     for path in ui.take_dropped_files(body) {
@@ -75,9 +79,6 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
             select(ws, id);
         }
     }
-    let hovering_drop = ui
-        .drop_hover::<BrowserItem>(body)
-        .is_some_and(|i| !matches!(i, BrowserItem::Pattern(_)));
 
     // Column layout.
     let name_w = 132.0;
@@ -688,9 +689,21 @@ fn note_preview(
 
 /// Adds a native instrument channel routed to a new mixer track.
 pub fn add_instrument(s: &mut Session, type_id: &str) -> Option<Id> {
+    add_instrument_preset(s, type_id, None)
+}
+
+/// Adds an instrument channel with a factory preset applied.
+pub fn add_instrument_preset(s: &mut Session, type_id: &str, preset: Option<&str>) -> Option<Id> {
     let desc = peel_devices::descriptor(type_id)?;
-    let dev = template::device(type_id, None);
-    let name = desc.name.to_string();
+    let dev = template::device(type_id, preset);
+    let name = preset
+        .filter(|p| {
+            !peel_devices::presets(type_id)
+                .first()
+                .is_some_and(|f| f.name == *p)
+        })
+        .unwrap_or(desc.name)
+        .to_string();
     let mut new_id = None;
     s.doc.edit(format!("Add {name}"), |p| {
         let n = p.channels.len();

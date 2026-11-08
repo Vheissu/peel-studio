@@ -117,14 +117,22 @@ fn strip(
     ui.scene
         .rect(r, t.radius_m, if selected { t.raised } else { t.panel_alt });
     // Effect drops.
-    if let Some((BrowserItem::Device(type_id), _)) = ui.take_drop::<BrowserItem>(r)
-        && peel_devices::descriptor(type_id).is_some_and(|d| d.kind == peel_dsp::DeviceKind::Effect)
-    {
-        add_insert(s, tr.id, type_id);
-        ws.focus = Some(Focus::Track(tr.id));
-    }
-    if ui.drop_hover::<BrowserItem>(r).is_some_and(|i| matches!(i, BrowserItem::Device(id) if peel_devices::descriptor(id).is_some_and(|d| d.kind == peel_dsp::DeviceKind::Effect))) {
+    let is_effect = |i: &BrowserItem| match i {
+        BrowserItem::Device(id) | BrowserItem::Preset(id, _) => {
+            peel_devices::descriptor(id).is_some_and(|d| d.kind == peel_dsp::DeviceKind::Effect)
+        }
+        _ => false,
+    };
+    if ui.drop_hover::<BrowserItem>(r).is_some_and(is_effect) {
         ui.scene.outline(r, t.radius_m, 2.0, t.focus.alpha(0.7));
+        if let Some((item, _)) = ui.take_drop::<BrowserItem>(r) {
+            match item {
+                BrowserItem::Device(id) => add_insert(s, tr.id, id),
+                BrowserItem::Preset(id, preset) => add_insert_preset(s, tr.id, id, Some(preset)),
+                _ => {}
+            }
+            ws.focus = Some(Focus::Track(tr.id));
+        }
     }
 
     let mut col_r = r.shrink2(6.0, 6.0);
@@ -416,10 +424,15 @@ fn toggle(ui: &mut Ui, id: W, r: Rect, label: &str, on: bool, color: Color) -> b
 }
 
 pub fn add_insert(s: &mut Session, track: Id, type_id: &str) {
+    add_insert_preset(s, track, type_id, None);
+}
+
+/// Adds an insert effect with a factory preset applied.
+pub fn add_insert_preset(s: &mut Session, track: Id, type_id: &str, preset: Option<&str>) {
     let name = peel_devices::descriptor(type_id)
         .map_or("effect", |d| d.name)
         .to_string();
-    let dev = template::device(type_id, None);
+    let dev = template::device(type_id, preset);
     s.doc.edit(format!("Add {name}"), |p| {
         if let Some(t) = p.mixer.track_mut(track) {
             t.inserts.push(dev);

@@ -520,3 +520,25 @@ fn playlist_marquee_selects_and_moves_a_group() {
     }
     assert_eq!(h.session().doc.undo_label(), Some("Move 2 clips"));
 }
+
+#[test]
+fn browser_presets_add_configured_channels() {
+    let mut h = Harness::new();
+    let n = h.session().project().channels.len();
+    h.click(W::new(("browser-dev", "peel.synth.bass")).with("caret"));
+    h.frame();
+    h.click(W::new(("browser-preset", "peel.synth.bass", "Acid")));
+    let p = h.session().project();
+    assert_eq!(p.channels.len(), n + 1);
+    let ch = p.channels.last().unwrap();
+    assert_eq!(ch.name, "Acid");
+    assert_eq!(ch.device.preset.as_deref(), Some("Acid"));
+    let preset = peel_devices::presets("peel.synth.bass")
+        .iter()
+        .find(|p| p.name == "Acid")
+        .unwrap();
+    for (k, v) in preset.params {
+        assert_eq!(ch.device.params.get(*k), Some(v), "{k}");
+    }
+    assert_eq!(h.studio.ws.selected_channel, Some(ch.id));
+}

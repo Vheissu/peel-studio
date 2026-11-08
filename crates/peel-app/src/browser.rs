@@ -17,6 +17,8 @@ use crate::workspace::{BrowserTab, DockTab, Focus, Workspace};
 #[derive(Clone, Debug)]
 pub enum BrowserItem {
     Device(&'static str),
+    /// A device type with a named factory preset.
+    Preset(&'static str, &'static str),
     Sample(PathBuf),
     Pattern(Id),
 }
@@ -113,6 +115,15 @@ pub fn draw(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) {
     }
 }
 
+#[derive(Default)]
+struct Expanded(std::collections::HashSet<&'static str>);
+
+enum Row {
+    Heading(&'static str),
+    Device(&'static peel_dsp::DeviceDescriptor, bool),
+    Preset(&'static peel_dsp::DeviceDescriptor, &'static str),
+}
+
 fn devices(
     ui: &mut Ui,
     r: Rect,
@@ -122,16 +133,50 @@ fn devices(
     ws: &mut Workspace,
 ) {
     let t = ui.theme.clone();
-    let mut list: Vec<&'static peel_dsp::DeviceDescriptor> = peel_devices::all()
-        .filter(|d| d.kind == kind)
-        .filter(|d| {
-            query.is_empty()
-                || d.name.to_lowercase().contains(query)
-                || d.category.to_lowercase().contains(query)
-        })
-        .collect();
+    let expanded_id = W::new("browser-expanded");
+    if let Ok(t) = std::env::var("PEEL_EXPAND")
+        && let Some(d) = peel_devices::descriptor(&t)
+    {
+        ui.state::<Expanded>(expanded_id).0.insert(d.type_id);
+    }
+    let mut list: Vec<&'static peel_dsp::DeviceDescriptor> =
+        peel_devices::all().filter(|d| d.kind == kind).collect();
     list.sort_by_key(|d| d.category);
-    if list.is_empty() {
+    // Build rows; a search matches devices, categories and preset names.
+    let mut rows: Vec<Row> = Vec::new();
+    let mut last = "";
+    for d in &list {
+        let presets = peel_devices::presets(d.type_id);
+        let name_hit = query.is_empty()
+            || d.name.to_lowercase().contains(query)
+            || d.category.to_lowercase().contains(query);
+        let preset_hits: Vec<&'static str> = presets
+            .iter()
+            .map(|p| p.name)
+            .filter(|n| !query.is_empty() && n.to_lowercase().contains(query))
+            .collect();
+        if !name_hit && preset_hits.is_empty() {
+            continue;
+        }
+        if d.category != last {
+            rows.push(Row::Heading(d.category));
+            last = d.category;
+        }
+        let open =
+            !preset_hits.is_empty() || ui.state::<Expanded>(expanded_id).0.contains(d.type_id);
+        rows.push(Row::Device(d, open));
+        if open {
+            let shown: Vec<&'static str> = if preset_hits.is_empty() {
+                presets.iter().map(|p| p.name).collect()
+            } else {
+                preset_hits
+            };
+            for p in shown {
+                rows.push(Row::Preset(d, p));
+            }
+        }
+    }
+    if rows.is_empty() {
         ui.text(
             r.with_h(40.0),
             "Nothing matches",
@@ -141,25 +186,13 @@ fn devices(
         );
         return;
     }
-    let mut rows: Vec<(
-        Option<&'static str>,
-        Option<&'static peel_dsp::DeviceDescriptor>,
-    )> = Vec::new();
-    let mut last = "";
-    for d in &list {
-        if d.category != last {
-            rows.push((Some(d.category), None));
-            last = d.category;
-        }
-        rows.push((None, Some(d)));
-    }
     let content_h = rows.len() as f32 * ROW_H + 8.0;
     let mut off = vec2(0.0, ws.browser_scroll);
     ui.scroll_area(W::new("browser-scroll"), r, vec2(r.w, content_h), &mut off);
     ws.browser_scroll = off.y;
     ui.scene.push_clip(r);
     let mut y = r.y - off.y;
-    for (heading, dev) in rows {
+    for row_kind in rows {
         let row = Rect {
             x: r.x,
             y,
@@ -170,68 +203,138 @@ fn devices(
         if row.bottom() < r.y || row.y > r.bottom() {
             continue;
         }
-        if let Some(h) = heading {
-            ui.text(
-                Rect {
-                    y: row.y + 6.0,
-                    h: row.h - 6.0,
-                    ..row.shrink2(6.0, 0.0)
-                },
-                h,
-                t.caption,
-                t.text_faint,
-                Align::Start,
-            );
-            continue;
-        }
-        let Some(d) = dev else { continue };
-        let id = W::new(("browser-dev", d.type_id));
-        let resp = ui.interact(id, row);
-        let hot = ui.animate_bool(id, resp.hovered);
-        if hot > 0.0 {
-            ui.scene.rect(row, t.radius_m, t.raised.alpha(hot));
-        }
-        let mut cells = row.shrink2(8.0, 0.0);
-        let cc = category_color(d.category);
-        let icon_r = cells.cut_left(22.0);
-        ui.scene.rect(
-            Rect::from_center(icon_r.center(), 22.0, 22.0),
-            5.0,
-            cc.alpha(0.16),
-        );
-        ui.icon(icon_r, category_icon(d.category), 13.0, cc);
-        cells.cut_left(8.0);
-        ui.text(cells, d.name, t.label, t.text, Align::Start);
-        if hot > 0.2 {
-            ui.icon(
-                cells.cut_right(18.0),
-                icons::PLUS,
-                13.0,
-                t.text_dim.alpha(hot),
-            );
-        }
-        ui.tooltip(&resp, d.description);
-        if resp.hovered {
-            ui.set_cursor(CursorIcon::Grab);
-        }
-        if resp.dragging && ui.drag_distance() > 6.0 && ui.dragging_payload().is_none() {
-            ui.start_drag(DragPayload {
-                data: Box::new(BrowserItem::Device(d.type_id)),
-                label: d.name.to_string(),
-                color: cc,
-            });
-        }
-        if resp.clicked {
-            add_device(s, ws, d);
+        match row_kind {
+            Row::Heading(h) => {
+                ui.text(
+                    Rect {
+                        y: row.y + 6.0,
+                        h: row.h - 6.0,
+                        ..row.shrink2(6.0, 0.0)
+                    },
+                    h,
+                    t.caption,
+                    t.text_faint,
+                    Align::Start,
+                );
+            }
+            Row::Device(d, open) => {
+                let id = W::new(("browser-dev", d.type_id));
+                let mut cells = row.shrink2(4.0, 0.0);
+                let has_presets = !peel_devices::presets(d.type_id).is_empty();
+                let caret_r = cells.cut_left(16.0);
+                let resp = ui.interact(
+                    id,
+                    Rect {
+                        x: caret_r.right(),
+                        w: row.right() - caret_r.right(),
+                        ..row
+                    },
+                );
+                let hot = ui.animate_bool(id, resp.hovered);
+                if hot > 0.0 {
+                    ui.scene.rect(row, t.radius_m, t.raised.alpha(hot));
+                }
+                if has_presets {
+                    let caret = ui.interact(id.with("caret"), caret_r);
+                    ui.icon(
+                        caret_r,
+                        if open {
+                            icons::CARET_DOWN
+                        } else {
+                            icons::CARET_RIGHT
+                        },
+                        11.0,
+                        if caret.hovered { t.text } else { t.text_faint },
+                    );
+                    ui.tooltip(&caret, "Presets");
+                    if caret.clicked {
+                        let set = &mut ui.state::<Expanded>(expanded_id).0;
+                        if !set.remove(d.type_id) {
+                            set.insert(d.type_id);
+                        }
+                    }
+                }
+                let cc = category_color(d.category);
+                let icon_r = cells.cut_left(22.0);
+                ui.scene.rect(
+                    Rect::from_center(icon_r.center(), 22.0, 22.0),
+                    5.0,
+                    cc.alpha(0.16),
+                );
+                ui.icon(icon_r, category_icon(d.category), 13.0, cc);
+                cells.cut_left(8.0);
+                ui.text(cells, d.name, t.label, t.text, Align::Start);
+                if hot > 0.2 {
+                    ui.icon(
+                        cells.cut_right(18.0),
+                        icons::PLUS,
+                        13.0,
+                        t.text_dim.alpha(hot),
+                    );
+                }
+                ui.tooltip(&resp, d.description);
+                if resp.hovered {
+                    ui.set_cursor(CursorIcon::Grab);
+                }
+                if resp.dragging && ui.drag_distance() > 6.0 && ui.dragging_payload().is_none() {
+                    ui.start_drag(DragPayload {
+                        data: Box::new(BrowserItem::Device(d.type_id)),
+                        label: d.name.to_string(),
+                        color: cc,
+                    });
+                }
+                if resp.clicked {
+                    add_device(s, ws, d, None);
+                }
+            }
+            Row::Preset(d, preset) => {
+                let id = W::new(("browser-preset", d.type_id, preset));
+                let resp = ui.interact(id, row);
+                let hot = ui.animate_bool(id, resp.hovered);
+                if hot > 0.0 {
+                    ui.scene.rect(row, t.radius_m, t.raised.alpha(hot * 0.8));
+                }
+                let mut cells = row.shrink2(4.0, 0.0);
+                cells.cut_left(16.0 + 22.0 + 8.0);
+                let cc = category_color(d.category);
+                let dot = cells.cut_left(12.0);
+                ui.scene
+                    .circle(dot.center() - vec2(4.0, 0.0), 2.5, cc.alpha(0.8));
+                ui.text(
+                    cells,
+                    preset,
+                    t.body,
+                    t.text_dim.mix(t.text, hot),
+                    Align::Start,
+                );
+                if resp.hovered {
+                    ui.set_cursor(CursorIcon::Grab);
+                }
+                if resp.dragging && ui.drag_distance() > 6.0 && ui.dragging_payload().is_none() {
+                    ui.start_drag(DragPayload {
+                        data: Box::new(BrowserItem::Preset(d.type_id, preset)),
+                        label: preset.to_string(),
+                        color: cc,
+                    });
+                }
+                if resp.clicked {
+                    add_device(s, ws, d, Some(preset));
+                }
+            }
         }
     }
     ui.scene.pop_clip();
 }
 
-fn add_device(s: &mut Session, ws: &mut Workspace, d: &'static peel_dsp::DeviceDescriptor) {
+fn add_device(
+    s: &mut Session,
+    ws: &mut Workspace,
+    d: &'static peel_dsp::DeviceDescriptor,
+    preset: Option<&str>,
+) {
     match d.kind {
         DeviceKind::Instrument => {
-            if let Some(id) = rack::add_instrument(s, d.type_id) {
+            if let Some(id) = rack::add_instrument_preset(s, d.type_id, preset) {
                 ws.selected_channel = Some(id);
                 ws.focus = Some(Focus::Channel(id));
                 ws.dock = DockTab::Rack;
@@ -247,7 +350,7 @@ fn add_device(s: &mut Session, ws: &mut Workspace, d: &'static peel_dsp::DeviceD
                     .map(|c| c.track),
             };
             if let Some(track) = track {
-                crate::mixer::add_insert(s, track, d.type_id);
+                crate::mixer::add_insert_preset(s, track, d.type_id, preset);
                 ws.focus = Some(Focus::Track(track));
             }
         }
