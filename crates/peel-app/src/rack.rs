@@ -81,6 +81,7 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
         }
         BrowserItem::Sample(_) => true,
         BrowserItem::Pattern(_) => false,
+        BrowserItem::Plugin { instrument, .. } => *instrument,
     };
     let hovering_drop = ui.drop_hover::<BrowserItem>(body).is_some_and(accepts);
     if hovering_drop && let Some((item, _)) = ui.take_drop::<BrowserItem>(body) {
@@ -89,6 +90,7 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
             BrowserItem::Preset(type_id, preset) => add_instrument_preset(s, type_id, Some(preset)),
             BrowserItem::Sample(path) => add_sample_channel(s, &path),
             BrowserItem::Pattern(_) => None,
+            BrowserItem::Plugin { type_id, name, .. } => add_plugin_channel(s, &type_id, &name),
         };
         if let Some(id) = added {
             select(ws, id);
@@ -761,6 +763,17 @@ pub fn add_instrument_preset(s: &mut Session, type_id: &str, preset: Option<&str
     s.doc.edit(format!("Add {name}"), |p| {
         let n = p.channels.len();
         new_id = Some(template::add_channel(p, &name, n * 5 + 2, dev, 60));
+    });
+    new_id
+}
+
+/// Adds a channel playing an installed plugin instrument.
+pub fn add_plugin_channel(s: &mut Session, type_id: &str, name: &str) -> Option<Id> {
+    let dev = peel_document::DeviceInstance::new(type_id, 1);
+    let mut new_id = None;
+    s.doc.edit(format!("Add {name}"), |p| {
+        let n = p.channels.len();
+        new_id = Some(template::add_channel(p, name, n * 5 + 2, dev, 60));
     });
     new_id
 }

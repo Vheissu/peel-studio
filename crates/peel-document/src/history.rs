@@ -82,6 +82,12 @@ impl Document {
         self.apply(f)
     }
 
+    /// Changes data that is not part of the musical history (for example
+    /// plugin state captured on save): no undo entry, no revision change.
+    pub fn patch(&mut self, f: impl FnOnce(&mut Project)) {
+        f(&mut self.project);
+    }
+
     /// Closes the current gesture so the next edit starts a new entry.
     pub fn end_gesture(&mut self) {
         self.gesture = None;

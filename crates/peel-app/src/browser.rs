@@ -21,6 +21,12 @@ pub enum BrowserItem {
     Preset(&'static str, &'static str),
     Sample(PathBuf),
     Pattern(Id),
+    /// An installed CLAP plugin (`clap:<id>`).
+    Plugin {
+        type_id: String,
+        name: String,
+        instrument: bool,
+    },
 }
 
 const ROW_H: f32 = 28.0;
@@ -122,6 +128,16 @@ enum Row {
     Heading(&'static str),
     Device(&'static peel_dsp::DeviceDescriptor, bool),
     Preset(&'static peel_dsp::DeviceDescriptor, &'static str),
+    /// Index into the plugin list.
+    Plugin(usize),
+    Scanning,
+}
+
+/// An installed plugin as the browser lists it.
+struct PluginRow {
+    type_id: String,
+    name: String,
+    vendor: String,
 }
 
 fn devices(
@@ -174,6 +190,30 @@ fn devices(
             for p in shown {
                 rows.push(Row::Preset(d, p));
             }
+        }
+    }
+    // Third-party plugins after the built-in devices.
+    let instrument = kind == DeviceKind::Instrument;
+    let plugins: Vec<PluginRow> = s
+        .plugins()
+        .iter()
+        .filter(|p| (p.role == peel_host_clap::ClapRole::Instrument) == instrument)
+        .filter(|p| {
+            query.is_empty()
+                || p.name.to_lowercase().contains(query)
+                || p.vendor.to_lowercase().contains(query)
+        })
+        .map(|p| PluginRow {
+            type_id: peel_session::plugin_type_id(p),
+            name: p.name.clone(),
+            vendor: p.vendor.clone(),
+        })
+        .collect();
+    if !plugins.is_empty() || (s.plugins_scanning() && query.is_empty()) {
+        rows.push(Row::Heading("Plugins"));
+        rows.extend((0..plugins.len()).map(Row::Plugin));
+        if s.plugins_scanning() {
+            rows.push(Row::Scanning);
         }
     }
     if rows.is_empty() {
@@ -287,6 +327,68 @@ fn devices(
                     add_device(s, ws, d, None);
                 }
             }
+            Row::Scanning => {
+                let mut cells = row.shrink2(4.0, 0.0);
+                cells.cut_left(16.0 + 22.0 + 8.0);
+                ui.text(
+                    cells,
+                    "Looking for plugins",
+                    t.body,
+                    t.text_faint,
+                    Align::Start,
+                );
+            }
+            Row::Plugin(i) => {
+                let p = &plugins[i];
+                let id = W::new(("browser-plugin", p.type_id.as_str()));
+                let mut cells = row.shrink2(4.0, 0.0);
+                cells.cut_left(16.0);
+                let resp = ui.interact_button(id, row, &p.name);
+                let hot = ui.animate_bool(id, resp.hovered);
+                if hot > 0.0 {
+                    ui.scene.rect(row, t.radius_m, t.raised.alpha(hot));
+                }
+                let cc = t.text_dim;
+                let icon_r = cells.cut_left(22.0);
+                ui.scene.rect(
+                    Rect::from_center(icon_r.center(), 22.0, 22.0),
+                    5.0,
+                    cc.alpha(0.16),
+                );
+                ui.icon(icon_r, icons::PLUGS, 13.0, cc);
+                cells.cut_left(8.0);
+                if hot > 0.2 {
+                    ui.icon(
+                        cells.cut_right(18.0),
+                        icons::PLUS,
+                        13.0,
+                        t.text_dim.alpha(hot),
+                    );
+                }
+                let vendor_w = ui.measure(&p.vendor, t.caption).x.min(cells.w * 0.4);
+                let vendor_r = cells.cut_right(vendor_w);
+                ui.text(vendor_r, &p.vendor, t.caption, t.text_faint, Align::End);
+                cells.cut_right(6.0);
+                let shown = ui.fit_text(&p.name, t.label, cells.w);
+                ui.text(cells, &shown, t.label, t.text, Align::Start);
+                if resp.hovered {
+                    ui.set_cursor(CursorIcon::Grab);
+                }
+                if resp.dragging && ui.drag_distance() > 6.0 && ui.dragging_payload().is_none() {
+                    ui.start_drag(DragPayload {
+                        data: Box::new(BrowserItem::Plugin {
+                            type_id: p.type_id.clone(),
+                            name: p.name.clone(),
+                            instrument,
+                        }),
+                        label: p.name.clone(),
+                        color: cc,
+                    });
+                }
+                if resp.clicked {
+                    add_plugin(s, ws, &p.type_id, &p.name, instrument);
+                }
+            }
             Row::Preset(d, preset) => {
                 let id = W::new(("browser-preset", d.type_id, preset));
                 let resp = ui.interact(id, row);
@@ -353,6 +455,28 @@ fn add_device(
                 crate::mixer::add_insert_preset(s, track, d.type_id, preset);
                 ws.focus = Some(Focus::Track(track));
             }
+        }
+    }
+}
+
+fn add_plugin(s: &mut Session, ws: &mut Workspace, type_id: &str, name: &str, instrument: bool) {
+    if instrument {
+        if let Some(id) = rack::add_plugin_channel(s, type_id, name) {
+            ws.selected_channel = Some(id);
+            ws.focus = Some(Focus::Channel(id));
+            ws.dock = DockTab::Rack;
+        }
+    } else {
+        let track = match ws.focus {
+            Some(Focus::Track(t)) => Some(t),
+            _ => ws
+                .selected_channel
+                .and_then(|c| s.project().channel(c))
+                .map(|c| c.track),
+        };
+        if let Some(track) = track {
+            crate::mixer::add_plugin_insert(s, track, type_id, name);
+            ws.focus = Some(Focus::Track(track));
         }
     }
 }

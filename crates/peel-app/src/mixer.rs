@@ -122,6 +122,7 @@ fn strip(
         BrowserItem::Device(id) | BrowserItem::Preset(id, _) => {
             peel_devices::descriptor(id).is_some_and(|d| d.kind == peel_dsp::DeviceKind::Effect)
         }
+        BrowserItem::Plugin { instrument, .. } => !*instrument,
         _ => false,
     };
     if ui.drop_hover::<BrowserItem>(r).is_some_and(is_effect) {
@@ -130,6 +131,9 @@ fn strip(
             match item {
                 BrowserItem::Device(id) => add_insert(s, tr.id, id),
                 BrowserItem::Preset(id, preset) => add_insert_preset(s, tr.id, id, Some(preset)),
+                BrowserItem::Plugin { type_id, name, .. } => {
+                    add_plugin_insert(s, tr.id, &type_id, &name)
+                }
                 _ => {}
             }
             ws.focus = Some(Focus::Track(tr.id));
@@ -450,6 +454,16 @@ fn toggle(ui: &mut Ui, id: W, r: Rect, label: &str, on: bool, color: Color) -> b
 
 pub fn add_insert(s: &mut Session, track: Id, type_id: &str) {
     add_insert_preset(s, track, type_id, None);
+}
+
+/// Adds an installed plugin effect as an insert.
+pub fn add_plugin_insert(s: &mut Session, track: Id, type_id: &str, name: &str) {
+    let dev = peel_document::DeviceInstance::new(type_id, 1);
+    s.doc.edit(format!("Add {name}"), |p| {
+        if let Some(t) = p.mixer.track_mut(track) {
+            t.inserts.push(dev);
+        }
+    });
 }
 
 /// Adds an insert effect with a factory preset applied.

@@ -20,6 +20,8 @@ pub struct Studio {
     pub show_keys: bool,
     pub recorder: crate::recorder::Recorder,
     recovered: Vec<peel_project::AutosaveEntry>,
+    /// `PEEL_PLUGIN` debug insert still waiting for the plugin scan.
+    debug_plugin: Option<String>,
     last_autosave: std::time::Instant,
     autosaved_revision: u64,
 }
@@ -62,6 +64,7 @@ impl Studio {
             show_keys: std::env::var_os("PEEL_KEYS").is_some(),
             recorder: Default::default(),
             recovered,
+            debug_plugin: std::env::var("PEEL_PLUGIN").ok(),
             last_autosave: std::time::Instant::now(),
             autosaved_revision: revision,
         };
@@ -150,6 +153,7 @@ impl Studio {
         }
         self.last_autosave = std::time::Instant::now();
         self.autosaved_revision = rev;
+        self.session.capture_plugin_states();
         let project = self.session.project().clone();
         let source = self.session.path.clone();
         let root = crate::prefs::autosave_dir();
@@ -578,6 +582,7 @@ impl Studio {
         let t = ui.theme.clone();
         let mut row = r.shrink2(12.0, 0.0);
         if let Some(job) = &self.ws.export {
+            job.idle();
             if let Some(result) = job.take_result() {
                 match result {
                     Ok(p) => self
@@ -764,6 +769,20 @@ impl App for Studio {
 impl Studio {
     fn update_inner(&mut self, ui: &mut Ui, win: &WindowControl) {
         self.session.tick();
+        if let Some(type_id) = &self.debug_plugin
+            && let Some(name) = self
+                .session
+                .plugins()
+                .iter()
+                .find(|p| peel_session::plugin_type_id(p) == *type_id)
+                .map(|p| p.name.clone())
+        {
+            let master = self.session.project().mixer.tracks[0].id;
+            crate::mixer::add_plugin_insert(&mut self.session, master, type_id, &name);
+            self.ws.focus = Some(Focus::Track(master));
+            self.ws.browser_tab = crate::workspace::BrowserTab::Effects;
+            self.debug_plugin = None;
+        }
         self.session.set_live_target(self.ws.selected_channel);
         self.session.poll_midi();
         self.recorder.frame(&mut self.session);

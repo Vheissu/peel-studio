@@ -286,14 +286,22 @@ impl Session {
             self.samples = SampleLoader::new();
         }
 
+        // Plugins are rebuilt from their current state.
+        self.capture_plugin_states();
+        let project = self.doc.project().clone();
+
         // Every device in the slot it had, so the plan's indices stay valid.
         let installed: Vec<_> = self
             .devices
-            .values()
-            .map(|d| (d.slot, d.type_id.clone(), d.params.clone(), d.sample))
+            .iter()
+            .map(|(id, d)| (*id, d.slot, d.type_id.clone(), d.params.clone(), d.sample))
             .collect();
-        for (slot, type_id, params, sample) in installed {
-            let Some(mut device) = peel_devices::create(&type_id) else {
+        for (id, slot, type_id, params, sample) in installed {
+            let device = match crate::find_device(&project, id) {
+                Some(inst) if type_id.starts_with("clap:") => self.create_device(inst),
+                _ => peel_devices::create(&type_id),
+            };
+            let Some(mut device) = device else {
                 continue;
             };
             let desc = device.descriptor();

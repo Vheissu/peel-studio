@@ -126,6 +126,13 @@ impl DescriptorSpec {
 
 static CACHE: Mutex<Vec<&'static DeviceDescriptor>> = Mutex::new(Vec::new());
 
+/// The most recently loaded descriptor for a CLAP device type id
+/// (`clap:<plugin id>`), if an instance of it has been loaded.
+pub fn cached_descriptor(type_id: &str) -> Option<&'static DeviceDescriptor> {
+    let cache = CACHE.lock().unwrap_or_else(PoisonError::into_inner);
+    cache.iter().rev().find(|d| d.type_id == type_id).copied()
+}
+
 /// Returns the cached descriptor equal to `spec`, leaking a new one only if
 /// the plugin's layout has not been seen before.
 pub(crate) fn intern(spec: DescriptorSpec) -> &'static DeviceDescriptor {

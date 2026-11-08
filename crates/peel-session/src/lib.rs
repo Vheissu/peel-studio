@@ -9,6 +9,7 @@ mod audio;
 mod compile;
 mod export;
 mod io;
+mod plugins;
 mod samples;
 pub mod template;
 
@@ -29,6 +30,7 @@ pub use export::{ExportJob, ExportSettings, render as render_to_wav};
 pub use io::{
     LiveTiming, MidiPortInfo, OutputDeviceInfo, PortSelection, RecordedMidi, list_output_devices,
 };
+pub use plugins::{PluginRegistry, type_id_for as plugin_type_id};
 pub use samples::SampleLoader;
 
 struct DeviceSlot {
@@ -67,6 +69,7 @@ pub struct Session {
     play_start: f64,
     metronome: bool,
     samples: SampleLoader,
+    plugins: PluginRegistry,
     notice: Option<Notice>,
     missing: Vec<String>,
     /// Audio device selection and live MIDI input (see `io.rs`).
@@ -100,7 +103,12 @@ impl Session {
                 EngineHandle::start_null(config.clone()).expect("null audio engine")
             }
         };
-        Session::with_engine(project, engine, io::IoState::new(config, false))
+        Session::with_engine(
+            project,
+            engine,
+            io::IoState::new(config, false),
+            PluginRegistry::start_scan(),
+        )
     }
 
     /// A session on the silent software clock (tests, headless tools). It
@@ -108,10 +116,20 @@ impl Session {
     pub fn new_silent(project: Project) -> Session {
         let config = EngineConfig::default();
         let engine = EngineHandle::start_null(config.clone()).expect("null audio engine");
-        Session::with_engine(project, engine, io::IoState::new(config, true))
+        Session::with_engine(
+            project,
+            engine,
+            io::IoState::new(config, true),
+            PluginRegistry::disabled(),
+        )
     }
 
-    fn with_engine(project: Project, engine: EngineHandle, io: io::IoState) -> Session {
+    fn with_engine(
+        project: Project,
+        engine: EngineHandle,
+        io: io::IoState,
+        plugins: PluginRegistry,
+    ) -> Session {
         log::info!(
             "audio: {} at {} Hz, block {}",
             engine.device_name(),
@@ -141,6 +159,7 @@ impl Session {
             play_start: 0.0,
             metronome: false,
             samples: SampleLoader::new(),
+            plugins,
             notice: None,
             missing: Vec::new(),
             io,
@@ -160,6 +179,11 @@ impl Session {
     /// loaded samples and syncs the engine with the document.
     pub fn tick(&mut self) {
         self.engine.collect_garbage();
+        if self.plugins.poll() {
+            // Plugins referenced by the project can now be created.
+            self.synced = None;
+        }
+        self.plugins.idle();
         for (asset, result) in self.samples.poll() {
             match result {
                 Ok(buf) => {
@@ -216,6 +240,7 @@ impl Session {
                     .engine
                     .send(EngineCommand::RemoveDevice { slot: d.slot });
                 self.free_slots.push(d.slot);
+                self.plugins.forget(id);
             }
         }
         self.missing.clear();
@@ -254,6 +279,63 @@ impl Session {
         }
     }
 
+    /// A native device, or a CLAP plugin restored from its saved state.
+    pub(crate) fn create_device(
+        &mut self,
+        inst: &DeviceInstance,
+    ) -> Option<Box<dyn peel_dsp::Device>> {
+        if let Some(d) = peel_devices::create(&inst.type_id) {
+            return Some(d);
+        }
+        if inst.type_id.starts_with("clap:") {
+            let (rate, block) = (self.engine.sample_rate(), self.engine.max_block());
+            match self.plugins.create(inst, rate, block) {
+                Ok(d) => return Some(d),
+                Err(e) => {
+                    if !self.plugins.is_scanning() {
+                        log::warn!("{e}");
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Installed CLAP plugins (empty until the background scan finishes).
+    pub fn plugins(&self) -> &[peel_host_clap::ClapPluginInfo] {
+        self.plugins.plugins()
+    }
+
+    pub fn plugins_scanning(&self) -> bool {
+        self.plugins.is_scanning()
+    }
+
+    /// Looks for newly installed plugins in the background.
+    pub fn rescan_plugins(&mut self) {
+        self.plugins.rescan();
+    }
+
+    /// Replaces the installed plugin set (tests and tools).
+    pub fn set_plugins(&mut self, plugins: Vec<peel_host_clap::ClapPluginInfo>) {
+        self.plugins.set(plugins);
+        self.synced = None;
+    }
+
+    /// Stores every live plugin's state in the document (not an undo step).
+    pub fn capture_plugin_states(&mut self) {
+        let states = self.plugins.capture_states();
+        if states.is_empty() {
+            return;
+        }
+        self.doc.patch(|p| {
+            for (id, state) in states {
+                if let Some(d) = find_device_mut(p, id) {
+                    d.state = Some(state);
+                }
+            }
+        });
+    }
+
     fn install_device(&mut self, inst: &DeviceInstance, project: &Project) {
         if let Some(old) = self.devices.remove(&inst.id) {
             let _ = self
@@ -261,7 +343,7 @@ impl Session {
                 .send(EngineCommand::RemoveDevice { slot: old.slot });
             self.free_slots.push(old.slot);
         }
-        let Some(mut device) = peel_devices::create(&inst.type_id) else {
+        let Some(mut device) = self.create_device(inst) else {
             self.missing.push(inst.type_id.clone());
             return;
         };
@@ -669,6 +751,7 @@ impl Session {
             let title = project.meta.title.clone();
             self.doc.edit("Rename project", |p| p.meta.title = title);
         }
+        self.capture_plugin_states();
         peel_project::save(self.doc.project(), &path).map_err(|e| e.to_string())?;
         self.doc.mark_saved();
         self.path = Some(path.clone());
@@ -720,7 +803,31 @@ impl Session {
     }
 
     /// Renders the arrangement to a WAV file on a background thread.
-    pub fn export(&self, settings: ExportSettings) -> ExportJob {
+    pub fn export(&mut self, settings: ExportSettings) -> ExportJob {
+        // Plugins get their own instances, built here on the main thread
+        // from their current state.
+        self.capture_plugin_states();
+        let mut prebuilt = export::Prebuilt::new();
+        let mut plugin_handles = Vec::new();
+        let project = self.doc.project().clone();
+        let instances = project
+            .channels
+            .iter()
+            .map(|c| &c.device)
+            .chain(project.mixer.tracks.iter().flat_map(|t| t.inserts.iter()))
+            .filter(|d| d.type_id.starts_with("clap:"));
+        for inst in instances {
+            match self
+                .plugins
+                .create_offline(inst, settings.sample_rate as f32, 512)
+            {
+                Ok((dev, handle)) => {
+                    prebuilt.insert(inst.id, dev);
+                    plugin_handles.push(handle);
+                }
+                Err(e) => log::warn!("export: {e}"),
+            }
+        }
         let samples: HashMap<Id, Arc<SampleBuffer>> = self
             .doc
             .project()
@@ -732,6 +839,8 @@ impl Session {
             self.doc.project().clone(),
             samples,
             self.export_loads(),
+            prebuilt,
+            plugin_handles,
             settings,
         )
     }

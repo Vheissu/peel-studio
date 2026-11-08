@@ -68,7 +68,7 @@ fn wait(s: &mut Session, what: &str, mut done: impl FnMut(&mut Session) -> bool)
     }
 }
 
-fn export_to(s: &Session, path: &Path, rate: u32) -> Result<PathBuf, String> {
+fn export_to(s: &mut Session, path: &Path, rate: u32) -> Result<PathBuf, String> {
     let job = s.export(ExportSettings {
         path: path.to_path_buf(),
         sample_rate: rate,
@@ -384,9 +384,9 @@ fn read_wav(path: &Path) -> Vec<f32> {
 fn export_places_trimmed_audio_at_the_right_samples() {
     let dir = Scratch::new();
     // Not decoded when the export starts: the export loads it itself.
-    let (s, _) = clip_session(&dir);
+    let (mut s, _) = clip_session(&dir);
     let out = dir.path("mix.wav");
-    export_to(&s, &out, 48_000).unwrap();
+    export_to(&mut s, &out, 48_000).unwrap();
     let mix = read_wav(&out);
 
     let ramp = ramp_data(48_000);
@@ -411,7 +411,7 @@ fn export_resamples_decoded_audio_to_the_export_rate() {
     // Decoded at the engine's 48 kHz, exported at 44.1 kHz.
     wait(&mut s, "audio decoded", |s| s.audio_peaks(asset).is_some());
     let out = dir.path("mix.wav");
-    export_to(&s, &out, 44_100).unwrap();
+    export_to(&mut s, &out, 44_100).unwrap();
     let mix = read_wav(&out);
 
     // Beat 2 is sample 44100 at this rate.
@@ -439,16 +439,16 @@ fn a_muted_clip_is_not_exported_and_needs_no_file() {
         .edit("Mute", |p| p.arrangement_mut().clips[0].muted = true);
     std::fs::remove_file(dir.path("ramp.wav")).unwrap();
     let out = dir.path("mix.wav");
-    export_to(&s, &out, 48_000).unwrap();
+    export_to(&mut s, &out, 48_000).unwrap();
     assert!(read_wav(&out).iter().all(|&x| x == 0.0));
 }
 
 #[test]
 fn a_clip_whose_file_is_missing_fails_the_export_by_name() {
     let dir = Scratch::new();
-    let (s, _) = clip_session(&dir);
+    let (mut s, _) = clip_session(&dir);
     std::fs::remove_file(dir.path("ramp.wav")).unwrap();
-    let err = export_to(&s, &dir.path("mix.wav"), 48_000).unwrap_err();
+    let err = export_to(&mut s, &dir.path("mix.wav"), 48_000).unwrap_err();
     assert!(err.contains("ramp.wav"), "{err}");
     assert!(!dir.path("mix.wav").exists());
 }

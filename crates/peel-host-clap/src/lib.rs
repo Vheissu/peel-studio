@@ -95,6 +95,7 @@ mod scan;
 mod state;
 mod thread;
 
+pub use descriptor::cached_descriptor;
 pub use device::ClapDevice;
 pub use error::ClapError;
 pub use handle::{ClapHandle, ClapStats};

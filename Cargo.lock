@@ -489,6 +489,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
+name = "base64"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
+
+[[package]]
 name = "bit-set"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2390,6 +2396,7 @@ dependencies = [
  "peel-dsp",
  "peel-effects",
  "peel-engine",
+ "peel-host-clap",
  "peel-media",
  "peel-midi",
  "peel-project",
@@ -2425,6 +2432,7 @@ version = "0.1.0"
 dependencies = [
  "peel-dsp",
  "peel-effects",
+ "peel-host-clap",
  "peel-instruments",
 ]
 
@@ -2467,7 +2475,7 @@ name = "peel-host-clap"
 version = "0.1.0"
 dependencies = [
  "clap-sys",
- "libloading",
+ "libloading 0.8.9",
  "log",
  "peel-dsp",
  "serde",
@@ -2526,6 +2534,7 @@ dependencies = [
 name = "peel-session"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "blake3",
  "log",
  "midir",
@@ -2533,10 +2542,12 @@ dependencies = [
  "peel-document",
  "peel-dsp",
  "peel-engine",
+ "peel-host-clap",
  "peel-media",
  "peel-midi-io",
  "peel-project",
  "peel-time",
+ "serde_json",
 ]
 
 [[package]]

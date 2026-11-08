@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use peel_document::{ClipContent, Id, Project};
-use peel_dsp::SampleBuffer;
+use peel_dsp::{Device, SampleBuffer};
 use peel_engine::{EngineCommand, EngineConfig, OfflineEngine, Slot};
 
 use crate::compile::{CompileContext, PlayMode, compile};
@@ -27,7 +27,13 @@ pub struct ExportJob {
     progress: Arc<AtomicU32>,
     cancel: Arc<AtomicBool>,
     result: Arc<Mutex<Option<Result<PathBuf, String>>>>,
+    /// Plugin instances rendering in the job. Kept here so they are
+    /// serviced from, and finally destroyed on, the main thread.
+    plugins: Vec<peel_host_clap::ClapHandle>,
 }
+
+/// Devices built on the main thread for an export (plugins), by instance id.
+pub type Prebuilt = HashMap<Id, Box<dyn Device>>;
 
 impl ExportJob {
     /// Starts an export. `loads` are audio files the clips need that the
@@ -36,6 +42,8 @@ impl ExportJob {
         project: Project,
         samples: HashMap<Id, Arc<SampleBuffer>>,
         loads: Vec<(Id, PathBuf)>,
+        prebuilt: Prebuilt,
+        plugins: Vec<peel_host_clap::ClapHandle>,
         settings: ExportSettings,
     ) -> ExportJob {
         let progress = Arc::new(AtomicU32::new(0));
@@ -54,7 +62,7 @@ impl ExportJob {
                         Err(e) => log::warn!("export: could not load {}: {e}", path.display()),
                     }
                 }
-                let out = render(&project, &samples, &settings, &p, &c);
+                let out = render_with(&project, &samples, prebuilt, &settings, &p, &c);
                 if let Ok(mut slot) = r.lock() {
                     *slot = Some(out);
                 }
@@ -64,6 +72,14 @@ impl ExportJob {
             progress,
             cancel,
             result,
+            plugins,
+        }
+    }
+
+    /// Services the job's plugins; call every frame while it runs.
+    pub fn idle(&self) {
+        for h in &self.plugins {
+            let _ = h.idle();
         }
     }
 
@@ -91,6 +107,25 @@ pub fn render(
     progress: &AtomicU32,
     cancel: &AtomicBool,
 ) -> Result<PathBuf, String> {
+    render_with(
+        project,
+        samples,
+        Prebuilt::new(),
+        settings,
+        progress,
+        cancel,
+    )
+}
+
+/// [`render`] with devices that had to be created on the main thread.
+pub fn render_with(
+    project: &Project,
+    samples: &HashMap<Id, Arc<SampleBuffer>>,
+    mut prebuilt: Prebuilt,
+    settings: &ExportSettings,
+    progress: &AtomicU32,
+    cancel: &AtomicBool,
+) -> Result<PathBuf, String> {
     let rate = settings.sample_rate as f32;
     let config = EngineConfig {
         max_block: 512,
@@ -105,7 +140,10 @@ pub fn render(
         .map(|c| &c.device)
         .chain(project.mixer.tracks.iter().flat_map(|t| t.inserts.iter()));
     for (i, inst) in devices.enumerate() {
-        let Some(mut device) = peel_devices::create(&inst.type_id) else {
+        let Some(mut device) = prebuilt
+            .remove(&inst.id)
+            .or_else(|| peel_devices::create(&inst.type_id))
+        else {
             continue;
         };
         let desc = device.descriptor();

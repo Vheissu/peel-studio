@@ -56,6 +56,7 @@ pub const COPY: &str = "\u{e1ca}";
 pub const TRASH: &str = "\u{e4a6}";
 pub const MAGNET: &str = "\u{e680}";
 pub const LIGHTNING: &str = "\u{e2de}";
+pub const PLUGS: &str = "\u{e946}";
 pub const STAR: &str = "\u{e46a}";
 pub const SQUARES: &str = "\u{e464}";
 pub const ROWS: &str = "\u{e5a2}";
@@ -121,6 +122,7 @@ const NAMES: &[(&str, &str)] = &[
     (TRASH, "Trash"),
     (MAGNET, "Magnet"),
     (LIGHTNING, "Lightning"),
+    (PLUGS, "Plug"),
     (STAR, "Star"),
     (SQUARES, "Tiles"),
     (ROWS, "Rows"),

@@ -35,18 +35,19 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          cargo build --release -p peel-app -p peel-cli
+          cargo build --release -p peel-app -p peel-cli -p peel-host-clap --bins
           New-Item -ItemType Directory -Force dist/PeelStudio | Out-Null
           Copy-Item target/release/peel-studio.exe dist/PeelStudio/
           Copy-Item target/release/peel.exe dist/PeelStudio/
+          Copy-Item target/release/peel-clap-scan.exe dist/PeelStudio/
           Copy-Item LICENSE, README.md, assets/LICENSES.md dist/PeelStudio/
           Compress-Archive -Path dist/PeelStudio -DestinationPath dist/Peel-Studio-windows-x64.zip
       - name: Package Linux
         if: runner.os == 'Linux'
         run: |
-          cargo build --release -p peel-app -p peel-cli
+          cargo build --release -p peel-app -p peel-cli -p peel-host-clap --bins
           mkdir -p dist/peel-studio/share/applications dist/peel-studio/share/icons/hicolor/256x256/apps dist/peel-studio/bin
-          cp target/release/peel-studio target/release/peel dist/peel-studio/bin/
+          cp target/release/peel-studio target/release/peel target/release/peel-clap-scan dist/peel-studio/bin/
           cp packaging/linux/peel-studio.desktop dist/peel-studio/share/applications/
           cp assets/icons/peel-256.png dist/peel-studio/share/icons/hicolor/256x256/apps/peel-studio.png
           cp LICENSE README.md assets/LICENSES.md dist/peel-studio/

@@ -11,11 +11,13 @@ cd "$(dirname "$0")/.."
 
 VERSION=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')
 APP="dist/Peel Studio.app"
-cargo build --release -p peel-app
+cargo build --release -p peel-app -p peel-host-clap --bins
 
 rm -rf "$APP" dist/iconset
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" dist/iconset
 cp target/release/peel-studio "$APP/Contents/MacOS/peel-studio"
+# Plugin scanner: a crashing plugin takes down this helper, not the app.
+cp target/release/peel-clap-scan "$APP/Contents/MacOS/peel-clap-scan"
 
 # Icon set from the generated PNGs.
 cp assets/icons/peel-16.png dist/iconset/icon_16x16.png

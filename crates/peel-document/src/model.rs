@@ -89,6 +89,9 @@ pub struct DeviceInstance {
     /// Optional user preset name shown in the device header.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preset: Option<String>,
+    /// Opaque state of an external plugin (base64), captured on save.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
 }
 
 impl DeviceInstance {
@@ -101,6 +104,7 @@ impl DeviceInstance {
             sample: None,
             bypass: false,
             preset: None,
+            state: None,
         }
     }
 }

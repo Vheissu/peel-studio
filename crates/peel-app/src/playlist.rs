@@ -260,7 +260,7 @@ fn header(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) {
     let mut row = r.shrink2(14.0, 6.0);
     // Arrangement picker (the playlist's title).
     let arr_name = s.project().arrangement().name.clone();
-    let title_w = ui.measure(&arr_name, t.label).x.min(150.0) + 50.0;
+    let title_w = ui.measure(&arr_name, t.label).x.min(150.0) + 58.0;
     let title = row.cut_left(title_w);
     row.cut_left(8.0);
     let tresp = ui.interact_button(W::new("arrangement-picker"), title, &arr_name);
