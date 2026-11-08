@@ -25,3 +25,6 @@ log.workspace = true
 env_logger.workspace = true
 rfd.workspace = true
 dirs.workspace = true
+peel-project.workspace = true
+serde.workspace = true
+serde_json.workspace = true

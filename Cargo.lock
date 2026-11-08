@@ -1851,10 +1851,13 @@ dependencies = [
  "peel-dsp",
  "peel-media",
  "peel-midi",
+ "peel-project",
  "peel-session",
  "peel-time",
  "peel-ui",
  "rfd",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -2,15 +2,18 @@
 
 mod browser;
 mod inspector;
+mod keys;
 mod midi;
 mod mixer;
 mod piano_roll;
 mod playlist;
+mod prefs;
 mod rack;
 mod rename;
 mod studio;
 mod transport;
 mod util;
+mod welcome;
 mod workspace;
 
 #[cfg(test)]

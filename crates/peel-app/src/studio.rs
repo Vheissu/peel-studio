@@ -7,13 +7,24 @@ use peel_session::{ExportSettings, PlayMode, Session};
 use peel_ui::Id as W;
 use peel_ui::{Align, App, KeyCode, NamedKey, Rect, Ui, WindowControl};
 
+use crate::prefs::Prefs;
+use crate::welcome::{WelcomeAction, WelcomeData};
 use crate::workspace::{DockTab, Focus, Workspace};
 use crate::{browser, inspector, mixer, piano_roll, playlist, rack, transport};
 
 pub struct Studio {
     pub session: Session,
     pub ws: Workspace,
+    pub prefs: Prefs,
+    pub welcome: bool,
+    pub show_keys: bool,
+    recovered: Vec<peel_project::AutosaveEntry>,
+    last_autosave: std::time::Instant,
+    autosaved_revision: u64,
 }
+
+/// Seconds between autosaves of a changed project.
+const AUTOSAVE_EVERY: f32 = 60.0;
 
 /// Gap between panes.
 pub const GAP: f32 = 6.0;
@@ -29,9 +40,138 @@ impl Studio {
             .or(session.project().channels.first())
             .map(|c| c.id);
         ws.focus = ws.selected_channel.map(Focus::Channel);
-        let mut studio = Studio { session, ws };
+        let prefs = Prefs::load();
+        ws.octave = prefs.octave;
+        if let Some(dir) = prefs.sample_dir.clone().filter(|d| d.is_dir()) {
+            ws.sample_dir = Some(dir);
+        }
+        let recovered = if cfg!(test) {
+            Vec::new()
+        } else {
+            peel_project::list_autosaves(&crate::prefs::autosave_dir()).unwrap_or_default()
+        };
+        let screenshot = std::env::var_os("PEEL_SCREENSHOT").is_some();
+        let welcome = !cfg!(test) && !screenshot && (prefs.show_welcome || !recovered.is_empty());
+        let revision = session.doc.revision();
+        let mut studio = Studio {
+            session,
+            ws,
+            prefs,
+            welcome: welcome || std::env::var_os("PEEL_WELCOME").is_some(),
+            show_keys: std::env::var_os("PEEL_KEYS").is_some(),
+            recovered,
+            last_autosave: std::time::Instant::now(),
+            autosaved_revision: revision,
+        };
         studio.apply_debug_env();
         studio
+    }
+
+    fn reset_workspace(&mut self) {
+        let sample_dir = self.ws.sample_dir.clone();
+        let octave = self.ws.octave;
+        self.ws = Workspace::default();
+        self.ws.sample_dir = sample_dir;
+        self.ws.octave = octave;
+        self.ws.selected_channel = self
+            .session
+            .project()
+            .channels
+            .iter()
+            .find(|c| c.name == "Piano")
+            .or(self.session.project().channels.first())
+            .map(|c| c.id);
+        self.ws.focus = self.ws.selected_channel.map(Focus::Channel);
+        self.autosaved_revision = self.session.doc.revision();
+    }
+
+    fn welcome(&mut self, ui: &mut Ui) {
+        let recent = self.prefs.existing_recent();
+        let mut show = self.prefs.show_welcome;
+        let action = crate::welcome::draw(
+            ui,
+            WelcomeData {
+                recent: &recent,
+                recovered: &self.recovered,
+                show_at_startup: &mut show,
+            },
+        );
+        if show != self.prefs.show_welcome {
+            self.prefs.show_welcome = show;
+            self.prefs.save();
+        }
+        let Some(action) = action else { return };
+        self.welcome = false;
+        match action {
+            WelcomeAction::NewBeat => {
+                self.session
+                    .replace_project(peel_session::template::beat_and_melody());
+                self.reset_workspace();
+            }
+            WelcomeAction::Empty => {
+                let mut p = peel_session::template::empty();
+                p.mixer.tracks[0]
+                    .inserts
+                    .push(peel_session::template::device("peel.fx.limiter", None));
+                self.session.replace_project(p);
+                self.reset_workspace();
+            }
+            WelcomeAction::Open => self.open(),
+            WelcomeAction::OpenPath(p) => self.open_path(p),
+            WelcomeAction::Recover(p) => match self.session.open(&p) {
+                Ok(()) => {
+                    self.session.path = None;
+                    self.reset_workspace();
+                    self.recovered.retain(|e| e.path != p);
+                    let title = self.session.project().meta.title.clone();
+                    self.session
+                        .notify(format!("Recovered {title}. Save it to keep it."), false);
+                }
+                Err(e) => self.session.notify(format!("Could not recover: {e}"), true),
+            },
+            WelcomeAction::Close => {}
+        }
+    }
+
+    /// Periodically saves changed work to the autosave area off the UI
+    /// thread so a crash never loses more than a minute.
+    fn autosave(&mut self, force: bool) {
+        if cfg!(test) {
+            return;
+        }
+        let rev = self.session.doc.revision();
+        if rev == self.autosaved_revision || !self.session.doc.is_dirty() {
+            return;
+        }
+        if !force && self.last_autosave.elapsed().as_secs_f32() < AUTOSAVE_EVERY {
+            return;
+        }
+        self.last_autosave = std::time::Instant::now();
+        self.autosaved_revision = rev;
+        let project = self.session.project().clone();
+        let source = self.session.path.clone();
+        let root = crate::prefs::autosave_dir();
+        let job = move || {
+            let r = match &source {
+                Some(src) => peel_project::autosave_from(&project, &root, src),
+                None => peel_project::autosave(&project, &root),
+            };
+            if let Err(e) = r {
+                log::warn!("autosave failed: {e}");
+            }
+        };
+        if force {
+            job();
+        } else {
+            std::thread::spawn(job);
+        }
+    }
+
+    fn saved(&mut self, path: &std::path::Path) {
+        self.prefs.add_recent(path);
+        let id = self.session.project().id;
+        let _ = peel_project::discard_autosave(&crate::prefs::autosave_dir(), id);
+        self.autosaved_revision = self.session.doc.revision();
     }
 
     /// `PEEL_DOCK=rack|roll|mixer`, `PEEL_FOCUS=master` and `PEEL_PLAY=1`
@@ -109,6 +249,9 @@ impl Studio {
         switch(NamedKey::F6, DockTab::Rack, &mut self.ws);
         switch(NamedKey::F7, DockTab::PianoRoll, &mut self.ws);
         switch(NamedKey::F9, DockTab::Mixer, &mut self.ws);
+        if ui.input.take_named(NamedKey::F1) {
+            self.show_keys = !self.show_keys;
+        }
         if ui.input.take_named(NamedKey::Escape) {
             self.session.stop_preview();
         }
@@ -229,8 +372,9 @@ impl Studio {
 
     pub fn save(&mut self) {
         if self.session.path.is_some() {
-            if let Err(e) = self.session.save(None) {
-                self.session.notify(format!("Save failed: {e}"), true);
+            match self.session.save(None) {
+                Ok(p) => self.saved(&p),
+                Err(e) => self.session.notify(format!("Save failed: {e}"), true),
             }
         } else {
             self.save_as();
@@ -243,9 +387,11 @@ impl Studio {
             .set_file_name(&name)
             .add_filter("Peel project", &["peelproj"])
             .save_file()
-            && let Err(e) = self.session.save(Some(path))
         {
-            self.session.notify(format!("Save failed: {e}"), true);
+            match self.session.save(Some(path)) {
+                Ok(p) => self.saved(&p),
+                Err(e) => self.session.notify(format!("Save failed: {e}"), true),
+            }
         }
     }
 
@@ -278,9 +424,11 @@ impl Studio {
             }
         };
         if ok {
-            self.ws = Workspace::default();
-            self.ws.selected_channel = self.session.project().channels.first().map(|c| c.id);
-            self.ws.focus = self.ws.selected_channel.map(Focus::Channel);
+            self.welcome = false;
+            self.reset_workspace();
+            if ext == "peelproj" {
+                self.prefs.add_recent(&path);
+            }
         }
     }
 
@@ -356,6 +504,18 @@ impl Studio {
                 Align::Start,
             );
         }
+        let help = ui.icon_button(
+            W::new("keys-help"),
+            row.cut_right(24.0),
+            peel_ui::icons::KEYBOARD,
+            false,
+            None,
+        );
+        ui.tooltip(&help, "Keyboard shortcuts (F1)");
+        if help.clicked {
+            self.show_keys = true;
+        }
+        row.cut_right(8.0);
         let right = format!(
             "{}  ·  {:.0} kHz  ·  octave {}",
             self.session.device_name(),
@@ -373,7 +533,10 @@ pub fn current_pattern(session: &Session) -> Id {
 impl App for Studio {
     fn update(&mut self, ui: &mut Ui, win: &WindowControl) {
         self.session.tick();
-        self.shortcuts(ui, win);
+        if !self.welcome {
+            self.shortcuts(ui, win);
+        }
+        self.autosave(false);
         let t = ui.theme.clone();
         let screen = ui.screen();
         ui.scene.rect(screen, 0.0, t.bg);
@@ -410,6 +573,11 @@ impl App for Studio {
             self.open_path(path);
         }
 
+        if self.welcome {
+            self.welcome(ui);
+        } else if self.show_keys && crate::keys::overlay(ui) {
+            self.show_keys = false;
+        }
         if self.session.is_playing() {
             ui.request_repaint();
         }
@@ -431,6 +599,18 @@ impl App for Studio {
 
     fn shutdown(&mut self) {
         self.session.panic();
+        // Unsaved work stays recoverable; a clean session leaves nothing.
+        if self.session.doc.is_dirty() {
+            self.autosave(true);
+        } else if !cfg!(test) {
+            let _ = peel_project::discard_autosave(
+                &crate::prefs::autosave_dir(),
+                self.session.project().id,
+            );
+        }
+        self.prefs.octave = self.ws.octave;
+        self.prefs.sample_dir = self.ws.sample_dir.clone();
+        self.prefs.save();
     }
 }
 

@@ -60,3 +60,5 @@ pub const STAR: &str = "\u{e46a}";
 pub const SQUARES: &str = "\u{e464}";
 pub const ROWS: &str = "\u{e5a2}";
 pub const COLUMNS: &str = "\u{e546}";
+pub const QUESTION: &str = "\u{e3e8}";
+pub const KEYBOARD: &str = "\u{e2d8}";
