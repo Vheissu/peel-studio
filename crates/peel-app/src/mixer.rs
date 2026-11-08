@@ -294,6 +294,15 @@ fn strip(
         t.text_dim,
         true,
     );
+    automate_menu(
+        ui,
+        s,
+        ws,
+        k,
+        peel_document::AutomationTarget::TrackPan { track: tr.id },
+        (tr.pan + 1.0) * 0.5,
+        "Automate pan",
+    );
     ui.tooltip(
         &k,
         &peel_dsp::ParamDescriptor::linear(0, "", "", "", -1.0, 1.0, 0.0, peel_dsp::Unit::Pan)
@@ -395,6 +404,15 @@ fn strip(
     if f.released {
         s.doc.end_gesture();
     }
+    automate_menu(
+        ui,
+        s,
+        ws,
+        f,
+        peel_document::AutomationTarget::TrackGain { track: tr.id },
+        db_to_fader(tr.gain_db),
+        "Automate volume",
+    );
     let peaks = s.take_track_meter(tr.id);
     ui.meter(W::new(("meter", tr.id)), meter_r, peaks);
     let _ = ink_on(c);
@@ -438,4 +456,28 @@ pub fn add_insert_preset(s: &mut Session, track: Id, type_id: &str, preset: Opti
             t.inserts.push(dev);
         }
     });
+}
+
+/// Right-click menu on a mixer control offering an automation clip.
+fn automate_menu(
+    ui: &mut Ui,
+    s: &mut Session,
+    ws: &mut Workspace,
+    resp: peel_ui::Response,
+    target: peel_document::AutomationTarget,
+    value: f32,
+    label: &str,
+) {
+    let menu = resp.id.with("automate");
+    if resp.secondary_clicked {
+        ui.open_popup(menu, resp.rect);
+    }
+    if ui.menu(
+        menu,
+        vec2(resp.rect.x, resp.rect.bottom()),
+        &[MenuItem::new(label)],
+    ) == Some(0)
+    {
+        crate::playlist::create_automation(s, ws, target, value);
+    }
 }

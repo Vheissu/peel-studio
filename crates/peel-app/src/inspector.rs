@@ -52,7 +52,7 @@ fn scroll_body(ui: &mut Ui, id: W, r: Rect, content_h: f32) -> f32 {
     off.y
 }
 
-fn channel(ui: &mut Ui, r: Rect, id: Id, s: &mut Session, _ws: &mut Workspace) {
+fn channel(ui: &mut Ui, r: Rect, id: Id, s: &mut Session, ws: &mut Workspace) {
     let t = ui.theme.clone();
     let Some(ch) = s.project().channel(id).cloned() else {
         return;
@@ -268,10 +268,10 @@ fn channel(ui: &mut Ui, r: Rect, id: Id, s: &mut Session, _ws: &mut Workspace) {
         );
         return;
     };
-    device_panel(ui, body, &ch.device, desc, s, col(ch.color));
+    device_panel(ui, body, &ch.device, desc, s, ws, col(ch.color));
 }
 
-fn track(ui: &mut Ui, r: Rect, id: Id, s: &mut Session, _ws: &mut Workspace) {
+fn track(ui: &mut Ui, r: Rect, id: Id, s: &mut Session, ws: &mut Workspace) {
     let t = ui.theme.clone();
     let Some(tr) = s.project().mixer.track(id).cloned() else {
         return;
@@ -482,7 +482,7 @@ fn track(ui: &mut Ui, r: Rect, id: Id, s: &mut Session, _ws: &mut Workspace) {
             Align::Start,
         );
         c.cut_top(4.0);
-        device_panel(ui, c, dev, desc, s, t.accent);
+        device_panel(ui, c, dev, desc, s, ws, t.accent);
         ui.scene
             .hline(card.x, card.right(), card.bottom() + 3.0, t.line);
     }
@@ -534,6 +534,7 @@ fn device_panel(
     dev: &DeviceInstance,
     desc: &'static DeviceDescriptor,
     s: &mut Session,
+    ws: &mut Workspace,
     accent: Color,
 ) {
     let t = ui.theme.clone();
@@ -743,6 +744,33 @@ fn device_panel(
                         p.name,
                         &p.format(value),
                     );
+                    let menu = W::new(("param-menu", dev.id, p.id));
+                    if resp.secondary_clicked {
+                        ui.open_popup(menu, resp.rect);
+                    }
+                    let items = [
+                        MenuItem::new("Create automation clip"),
+                        MenuItem::new("Reset to default"),
+                    ];
+                    match ui.menu(menu, vec2(resp.rect.x, resp.rect.bottom()), &items) {
+                        Some(0) => {
+                            let target = peel_document::AutomationTarget::Param {
+                                device: dev.id,
+                                param: p.key.to_string(),
+                            };
+                            crate::playlist::create_automation(
+                                s,
+                                ws,
+                                target,
+                                p.to_normalized(value),
+                            );
+                        }
+                        Some(1) => {
+                            s.set_param(dev.id, p.key, p.default, menu.0);
+                            s.doc.end_gesture();
+                        }
+                        _ => {}
+                    }
                     if resp.changed {
                         let plain = p.from_normalized(norm);
                         s.set_param(dev.id, p.key, plain, resp.id.0);

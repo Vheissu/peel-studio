@@ -42,7 +42,7 @@ use crate::events::{ActiveNote, ActiveNotes, OffResult, Staging};
 use crate::live::{LiveInput, LiveShared, LiveState, LiveTiming, RecordedReceiver};
 use crate::mixer::{Mixer, mix_ramped, peak, sanitize_peak, scale_ramped, slew, target_gains};
 use crate::monitor::{Metronome, Preview};
-use crate::plan::{RenderPlan, SeqKind};
+use crate::plan::{AutomationTarget, RenderPlan, SeqKind};
 use crate::retire::Retirer;
 use crate::telemetry::Telemetry;
 use crate::{EngineConfig, LIVE_VOICE_BASE, MAX_TRACKS};
@@ -763,6 +763,7 @@ impl Engine {
         self.audio.begin_chunk();
         if was_playing {
             self.schedule(block_start, block_end);
+            self.apply_automation(beat_start);
         }
         let overflows = self.stage.finish_chunk(&mut self.active);
         if overflows > 0 {
@@ -773,6 +774,38 @@ impl Engine {
 
         self.mix(frames, beat_start, was_playing, left, right);
         self.finish_chunk(block_end);
+    }
+
+    /// Applies every automation lane active at `beat`. Devices and the mixer
+    /// smooth the change, so once per chunk is enough.
+    fn apply_automation(&mut self, beat: f64) {
+        let plan = &mut *self.plan;
+        for lane in plan.automation.iter_mut() {
+            let Some(v) = lane.value_at(beat) else {
+                continue;
+            };
+            if !v.is_finite() || (v - lane.last).abs() <= f32::EPSILON {
+                continue;
+            }
+            lane.last = v;
+            match lane.target {
+                AutomationTarget::Param { slot, id } => {
+                    if let Some(Some(dev)) = self.slots.get_mut(slot as usize) {
+                        dev.set_param(id, v);
+                    }
+                }
+                AutomationTarget::TrackGain(t) => {
+                    if let Some(tr) = plan.tracks.get_mut(t as usize) {
+                        tr.gain = v.clamp(0.0, MAX_GAIN);
+                    }
+                }
+                AutomationTarget::TrackPan(t) => {
+                    if let Some(tr) = plan.tracks.get_mut(t as usize) {
+                        tr.pan = v.clamp(-1.0, 1.0);
+                    }
+                }
+            }
+        }
     }
 
     /// Delivers sequence events and metronome clicks for

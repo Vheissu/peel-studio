@@ -810,6 +810,67 @@ mod tests {
     }
 
     #[test]
+    fn exported_volume_automation_fades_the_song_out() {
+        use peel_document::{AutomationPoint, AutomationTarget, Clip, ClipContent, Time};
+        let dir = std::env::temp_dir().join(format!("peel-auto-test-{}", Id::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("fade.wav");
+        let mut project = template::beat_and_melody();
+        let master = project.mixer.tracks[0].id;
+        let lane = project.arrangement().tracks[5].id;
+        let unity = peel_document::db_to_fader(0.0);
+        project.arrangement_mut().clips.push(Clip {
+            id: Id::new(),
+            track: lane,
+            start: Time::ZERO,
+            length: Time::beats(32),
+            offset: Time::ZERO,
+            muted: false,
+            content: ClipContent::Automation {
+                target: AutomationTarget::TrackGain { track: master },
+                points: vec![
+                    AutomationPoint {
+                        position: Time::beats(16),
+                        value: unity,
+                    },
+                    AutomationPoint {
+                        position: Time::beats(28),
+                        value: 0.0,
+                    },
+                ],
+            },
+        });
+        assert!(
+            peel_document::validate(&project)
+                .iter()
+                .all(|i| !i.is_error())
+        );
+        let settings = ExportSettings {
+            path: out.clone(),
+            sample_rate: 44_100,
+            bits: 24,
+            tail_seconds: 0.0,
+        };
+        let progress = std::sync::atomic::AtomicU32::new(0);
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        render_to_wav(&project, &HashMap::new(), &settings, &progress, &cancel).expect("render");
+        let buf = peel_media::decode_file(&out).expect("decode");
+        let sec = |beat: f64| (beat * 60.0 / 118.0 * 44_100.0) as usize;
+        let rms = |a: f64, b: f64| {
+            let s = &buf.left()[sec(a)..sec(b)];
+            (s.iter().map(|x| x * x).sum::<f32>() / s.len() as f32).sqrt()
+        };
+        let before = rms(8.0, 16.0);
+        let after = rms(28.5, 31.5);
+        assert!(before > 0.05, "playing before the fade: {before}");
+        assert!(
+            after < before * 0.01,
+            "silent after the fade: {after} vs {before}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn export_renders_audio() {
         let dir = std::env::temp_dir().join(format!("peel-export-test-{}", Id::new()));
         std::fs::create_dir_all(&dir).unwrap();

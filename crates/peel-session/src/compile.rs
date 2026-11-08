@@ -143,6 +143,7 @@ pub fn compile(p: &Project, ctx: &CompileContext) -> (RenderPlan, PlanIndex) {
     // ---- sequence ----
     let mut seq = Vec::new();
     let mut audio = Vec::new();
+    let mut automation = Vec::new();
     let mut voice: u32 = 1;
     let (length, loop_range) = match ctx.mode {
         PlayMode::Pattern(pid) => {
@@ -198,8 +199,11 @@ pub fn compile(p: &Project, ctx: &CompileContext) -> (RenderPlan, PlanIndex) {
                             audio.push(region);
                         }
                     }
-                    // Compiled into automation lanes separately.
-                    ClipContent::Automation { .. } => {}
+                    ClipContent::Automation { target, points } => {
+                        if let Some(lane) = automation_lane(p, clip, target, points, &index, ctx) {
+                            automation.push(lane);
+                        }
+                    }
                 }
             }
             let bar = p.time_signature.bar_length();
@@ -221,6 +225,7 @@ pub fn compile(p: &Project, ctx: &CompileContext) -> (RenderPlan, PlanIndex) {
         loop_range,
         channels,
         audio,
+        automation,
         tracks,
         master: (order.len() - 1) as u16,
         beats_per_bar: (p.time_signature.bar_length().as_f64()
@@ -399,6 +404,7 @@ fn realize(
 pub fn same_structure(a: &RenderPlan, b: &RenderPlan) -> bool {
     a.sequence == b.sequence
         && a.audio == b.audio
+        && a.automation == b.automation
         && a.tempo == b.tempo
         && a.length_beats == b.length_beats
         && a.loop_range == b.loop_range
@@ -414,6 +420,64 @@ pub fn same_structure(a: &RenderPlan, b: &RenderPlan) -> bool {
             .iter()
             .zip(&b.tracks)
             .all(|(x, y)| x.inserts == y.inserts && x.output == y.output && x.meter == y.meter)
+}
+
+/// Compiles one automation clip into an engine lane: breakpoints move to
+/// absolute beats and normalized values become the target's plain values.
+fn automation_lane(
+    p: &Project,
+    clip: &peel_document::Clip,
+    target: &peel_document::AutomationTarget,
+    points: &[peel_document::AutomationPoint],
+    index: &PlanIndex,
+    ctx: &CompileContext,
+) -> Option<peel_engine::AutomationLane> {
+    use peel_document::AutomationTarget as T;
+    use peel_engine::AutomationTarget as E;
+    let (engine_target, convert): (E, Box<dyn Fn(f32) -> f32>) = match target {
+        T::Param { device, param } => {
+            let inst = crate::find_device(p, *device)?;
+            let desc = peel_devices::descriptor(&inst.type_id)?.param_by_key(param)?;
+            let slot = *ctx.slots.get(device)?;
+            (
+                E::Param { slot, id: desc.id },
+                Box::new(move |v| desc.from_normalized(v)),
+            )
+        }
+        T::TrackGain { track } => {
+            let t = *index.tracks.get(track)?;
+            (
+                E::TrackGain(t),
+                Box::new(|v| db_to_gain(peel_document::fader_to_db(v))),
+            )
+        }
+        T::TrackPan { track } => {
+            let t = *index.tracks.get(track)?;
+            (
+                E::TrackPan(t),
+                Box::new(|v| (v * 2.0 - 1.0).clamp(-1.0, 1.0)),
+            )
+        }
+    };
+    if points.is_empty() {
+        return None;
+    }
+    let origin = clip.start - clip.offset;
+    Some(peel_engine::AutomationLane {
+        target: engine_target,
+        start: clip.start.as_f64(),
+        end: clip.end().as_f64(),
+        points: points
+            .iter()
+            .map(|pt| {
+                (
+                    (origin + pt.position).as_f64(),
+                    convert(pt.value.clamp(0.0, 1.0)),
+                )
+            })
+            .collect(),
+        last: peel_engine::AUTOMATION_UNSET,
+    })
 }
 
 #[cfg(test)]

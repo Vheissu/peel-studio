@@ -1871,3 +1871,68 @@ fn draw_automation_clip(
             .outline(cr, t.radius_s, 1.5, Color::WHITE.alpha(0.85));
     }
 }
+
+/// Adds an automation clip for `target` on the first empty lane (or a new
+/// one), spanning the arrangement, flat at `value`. Returns the clip id.
+pub fn create_automation(
+    s: &mut Session,
+    ws: &mut Workspace,
+    target: peel_document::AutomationTarget,
+    value: f32,
+) -> Id {
+    let arr = s.project().arrangement().clone();
+    let bar = s.project().time_signature.bar_length();
+    let length = arr.end().ceil_to(bar).max(bar.mul_int(8));
+    let free_lane = arr
+        .tracks
+        .iter()
+        .find(|t| !arr.clips.iter().any(|c| c.track == t.id))
+        .map(|t| t.id);
+    let (label, _) = automation_label(s, &target);
+    let clip_id = Id::new();
+    let value = value.clamp(0.0, 1.0);
+    s.doc.edit(format!("Automate {label}"), |p| {
+        let lane = match free_lane {
+            Some(l) => l,
+            None => {
+                let t = Track {
+                    id: Id::new(),
+                    name: "Automation".into(),
+                    color: None,
+                    muted: false,
+                };
+                let id = t.id;
+                p.arrangement_mut().tracks.push(t);
+                id
+            }
+        };
+        p.arrangement_mut().clips.push(Clip {
+            id: clip_id,
+            track: lane,
+            start: Time::ZERO,
+            length,
+            offset: Time::ZERO,
+            muted: false,
+            content: ClipContent::Automation {
+                target,
+                points: vec![
+                    peel_document::AutomationPoint {
+                        position: Time::ZERO,
+                        value,
+                    },
+                    peel_document::AutomationPoint {
+                        position: length,
+                        value,
+                    },
+                ],
+            },
+        });
+    });
+    ws.playlist.selection.clear();
+    ws.playlist.selection.insert(clip_id);
+    s.notify(
+        format!("Created automation for {label}. Click the clip to add points."),
+        false,
+    );
+    clip_id
+}

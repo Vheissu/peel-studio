@@ -36,6 +36,8 @@ pub struct RenderPlan {
     /// Audio file regions, in any order. Each plays into its own mixer
     /// track (see [`AudioRegion`]).
     pub audio: Vec<AudioRegion>,
+    /// Parameter envelopes applied while playing.
+    pub automation: Vec<AutomationLane>,
     /// Mixer tracks in processing order: every track appears after all of
     /// the tracks that feed it. The master is `tracks[master]`.
     pub tracks: Vec<TrackRoute>,
@@ -55,6 +57,7 @@ impl RenderPlan {
             loop_range: Some((0.0, 4.0)),
             channels: Vec::new(),
             audio: Vec::new(),
+            automation: Vec::new(),
             tracks: vec![TrackRoute::new(None, 0)],
             master: 0,
             beats_per_bar: 4,
@@ -181,5 +184,58 @@ impl TrackRoute {
             output,
             meter,
         }
+    }
+}
+
+/// What an automation lane drives.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum AutomationTarget {
+    /// A device parameter (plain value).
+    Param { slot: Slot, id: peel_dsp::ParamId },
+    /// A mixer track's linear gain.
+    TrackGain(TrackIndex),
+    /// A mixer track's pan (-1..=1).
+    TrackPan(TrackIndex),
+}
+
+/// Value the engine has not applied yet (forces the first application).
+pub const AUTOMATION_UNSET: f32 = -1.0e30;
+
+/// One automation clip, compiled to absolute beats and plain values.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AutomationLane {
+    pub target: AutomationTarget,
+    /// Active range `[start, end)` in quarter notes.
+    pub start: f64,
+    pub end: f64,
+    /// Breakpoints `(beat, plain value)`, sorted by beat. Values hold before
+    /// the first and after the last point inside the active range.
+    pub points: Vec<(f64, f32)>,
+    /// Last value the engine applied ([`AUTOMATION_UNSET`] on the control
+    /// side).
+    pub last: f32,
+}
+
+impl AutomationLane {
+    /// Envelope value at `beat`, or `None` outside the active range.
+    pub fn value_at(&self, beat: f64) -> Option<f32> {
+        if beat < self.start || beat >= self.end || self.points.is_empty() {
+            return None;
+        }
+        let i = self.points.partition_point(|p| p.0 <= beat);
+        if i == 0 {
+            return Some(self.points[0].1);
+        }
+        if i >= self.points.len() {
+            return Some(self.points[self.points.len() - 1].1);
+        }
+        let (b0, v0) = self.points[i - 1];
+        let (b1, v1) = self.points[i];
+        let span = b1 - b0;
+        if span <= 0.0 {
+            return Some(v1);
+        }
+        let t = ((beat - b0) / span) as f32;
+        Some(v0 + (v1 - v0) * t)
     }
 }

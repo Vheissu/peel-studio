@@ -623,3 +623,67 @@ fn dragging_a_clip_left_edge_trims_its_start() {
     assert_eq!(c.length, beat_clip.length - Time::beats(4));
     assert_eq!(c.end(), beat_clip.end(), "the end stays put");
 }
+
+#[test]
+fn automating_a_fader_creates_an_editable_clip() {
+    let mut h = Harness::new();
+    h.click(W::new(("dock-tab", "Mixer")));
+    h.frame();
+    let track = h.session().project().mixer.tracks[1].id;
+    let fader = h.rect(W::new(("fader", track)));
+    h.move_to(fader.center());
+    h.move_to(fader.center());
+    h.press(1);
+    h.release(1);
+    h.frame();
+    h.click(
+        W::new(("fader", track))
+            .with("automate")
+            .with(("item", 0usize)),
+    );
+    let clip = h
+        .session()
+        .project()
+        .arrangement()
+        .clips
+        .iter()
+        .find(|c| matches!(&c.content, ClipContent::Automation { target: peel_document::AutomationTarget::TrackGain { track: t }, .. } if *t == track))
+        .cloned()
+        .expect("automation clip");
+    let ClipContent::Automation { points, .. } = &clip.content else {
+        unreachable!()
+    };
+    assert_eq!(points.len(), 2);
+    // Click inside the envelope to add a breakpoint.
+    h.frame();
+    let canvas = h.rect(W::new("pl-canvas"));
+    let lane = h
+        .session()
+        .project()
+        .arrangement()
+        .tracks
+        .iter()
+        .position(|t| t.id == clip.track)
+        .unwrap();
+    let lane_h = h.studio.ws.playlist.lane_h;
+    let zoom = h.studio.ws.playlist.zoom_x;
+    let p = vec2(
+        canvas.x + zoom * 6.0,
+        canvas.y + lane_h * lane as f32 + lane_h * 0.75,
+    );
+    h.click_at(p);
+    let after = h
+        .session()
+        .project()
+        .arrangement()
+        .clips
+        .iter()
+        .find(|c| c.id == clip.id)
+        .cloned()
+        .unwrap();
+    let ClipContent::Automation { points, .. } = &after.content else {
+        unreachable!()
+    };
+    assert_eq!(points.len(), 3, "{points:?}");
+    assert!(points.windows(2).all(|w| w[0].position <= w[1].position));
+}

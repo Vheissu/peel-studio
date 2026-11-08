@@ -192,6 +192,48 @@ impl Studio {
                 log::error!("PEEL_AUDIO: {e}");
             }
         }
+        if std::env::var_os("PEEL_AUTOMATION").is_some() {
+            use peel_document::{AutomationPoint, AutomationTarget, ClipContent, Time};
+            let master = self.session.project().mixer.tracks[0].id;
+            let synth = self
+                .session
+                .project()
+                .mixer
+                .tracks
+                .iter()
+                .find(|t| t.name == "Synth")
+                .map(|t| t.id)
+                .unwrap_or(master);
+            let fade = crate::playlist::create_automation(
+                &mut self.session,
+                &mut self.ws,
+                AutomationTarget::TrackGain { track: master },
+                0.8,
+            );
+            let pan = crate::playlist::create_automation(
+                &mut self.session,
+                &mut self.ws,
+                AutomationTarget::TrackPan { track: synth },
+                0.5,
+            );
+            let pt = |b: i64, v: f32| AutomationPoint {
+                position: Time::beats(b),
+                value: v,
+            };
+            self.session.doc.edit("Shape automation", |p| {
+                for c in p.arrangement_mut().clips.iter_mut() {
+                    if let ClipContent::Automation { points, .. } = &mut c.content {
+                        if c.id == fade {
+                            *points = vec![pt(0, 0.8), pt(20, 0.8), pt(30, 0.15), pt(32, 0.0)];
+                        } else if c.id == pan {
+                            *points = (0..=8)
+                                .map(|i| pt(i * 4, if i % 2 == 0 { 0.15 } else { 0.85 }))
+                                .collect();
+                        }
+                    }
+                }
+            });
+        }
         if std::env::var_os("PEEL_EQ").is_some() {
             let master = self.session.project().mixer.tracks[0].id;
             let eq = peel_session::template::device("peel.fx.eq", Some("Vocal Presence"));
