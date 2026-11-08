@@ -13,21 +13,89 @@
 //! | `peel.fx.filter`     | Filter  | Filter     |
 //! | `peel.fx.chorus`     | Chorus  | Modulation |
 //! | `peel.fx.utility`    | Utility | Utility    |
+//!
+//! Every effect processes the left and right buffers in place, ignores note
+//! events, splits blocks at parameter events so changes land on the exact
+//! frame, smooths its parameters against zipper noise, and allocates only in
+//! `prepare`. Concrete types are public so a host can reach device-specific
+//! readouts, for example [`compressor::Compressor::gain_reduction_db`],
+//! [`limiter::Limiter::gain_reduction_db`] and [`eq::eq_response_db`].
 
 use peel_dsp::{Device, DeviceDescriptor, Preset};
 
+mod common;
+mod oversample;
+
+pub mod chorus;
+pub mod compressor;
+pub mod delay;
+pub mod drive;
+pub mod eq;
+pub mod filter;
+pub mod limiter;
+pub mod reverb;
+pub mod utility;
+
 /// Every effect descriptor, in browser order.
 pub fn descriptors() -> &'static [&'static DeviceDescriptor] {
-    &[]
+    static ALL: [&DeviceDescriptor; 9] = [
+        &eq::DESCRIPTOR,
+        &compressor::DESCRIPTOR,
+        &limiter::DESCRIPTOR,
+        &delay::DESCRIPTOR,
+        &reverb::DESCRIPTOR,
+        &drive::DESCRIPTOR,
+        &filter::DESCRIPTOR,
+        &chorus::DESCRIPTOR,
+        &utility::DESCRIPTOR,
+    ];
+    &ALL
 }
 
 /// Creates an effect with default parameter values (not yet prepared).
-pub fn create(_type_id: &str) -> Option<Box<dyn Device>> {
-    None
+///
+/// The device is usable straight away at 48 kHz; the host should still call
+/// `prepare` with the real sample rate and block size before installing it.
+pub fn create(type_id: &str) -> Option<Box<dyn Device>> {
+    Some(match type_id {
+        "peel.fx.eq" => Box::new(eq::Eq::new()),
+        "peel.fx.compressor" => Box::new(compressor::Compressor::new()),
+        "peel.fx.limiter" => Box::new(limiter::Limiter::new()),
+        "peel.fx.delay" => Box::new(delay::Delay::new()),
+        "peel.fx.reverb" => Box::new(reverb::Reverb::new()),
+        "peel.fx.drive" => Box::new(drive::Drive::new()),
+        "peel.fx.filter" => Box::new(filter::Filter::new()),
+        "peel.fx.chorus" => Box::new(chorus::Chorus::new()),
+        "peel.fx.utility" => Box::new(utility::Utility::new()),
+        _ => return None,
+    })
 }
 
 /// Factory presets for a device type, in browser order. The first preset
-/// should equal the descriptor defaults.
-pub fn presets(_type_id: &str) -> &'static [Preset] {
-    &[]
+/// equals the descriptor defaults.
+pub fn presets(type_id: &str) -> &'static [Preset] {
+    match type_id {
+        "peel.fx.eq" => &eq::PRESETS,
+        "peel.fx.compressor" => &compressor::PRESETS,
+        "peel.fx.limiter" => &limiter::PRESETS,
+        "peel.fx.delay" => &delay::PRESETS,
+        "peel.fx.reverb" => &reverb::PRESETS,
+        "peel.fx.drive" => &drive::PRESETS,
+        "peel.fx.filter" => &filter::PRESETS,
+        "peel.fx.chorus" => &chorus::PRESETS,
+        "peel.fx.utility" => &utility::PRESETS,
+        _ => &[],
+    }
+}
+
+/// Plain values of every parameter of `device` in descriptor order. This is
+/// the layout [`eq::eq_response_db`] expects, and a convenient snapshot for
+/// any UI that needs all values at once (control thread only; it allocates).
+pub fn read_params(device: &dyn Device) -> Vec<f32> {
+    device
+        .descriptor()
+        .params
+        .iter()
+        .map(|p| device.param(p.id))
+        .collect()
 }

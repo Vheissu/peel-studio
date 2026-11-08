@@ -9,3 +9,10 @@ authors.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+
+# The contract files (param.rs, util.rs) predate the workspace clippy gate:
+# constructors take many arguments by design and `Smoothed::next` is the
+# audio-rate tick, not an iterator.
+[lints.clippy]
+too_many_arguments = "allow"
+should_implement_trait = "allow"
