@@ -221,6 +221,7 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
     if export.clicked {
         studio.export();
     }
+    export_panel(ui, export.rect, studio);
     right.cut_right(6.0);
     let save = ui.icon_button(
         W::new("save"),
@@ -525,5 +526,107 @@ fn delete_pattern(studio: &mut Studio, pid: Id) {
     let first = studio.session.project().patterns.first().map(|p| p.id);
     if let Some(f) = first {
         studio.session.select_pattern(f);
+    }
+}
+
+fn export_panel(ui: &mut Ui, anchor: Rect, studio: &mut Studio) {
+    let id = W::new("export-panel");
+    if studio.ws.export_panel {
+        studio.ws.export_panel = false;
+        ui.open_popup(id, anchor);
+    }
+    if !ui.is_popup_open(id) {
+        return;
+    }
+    let t = ui.theme.clone();
+    let screen = ui.screen();
+    let w = 300.0;
+    let r = Rect {
+        x: (anchor.right() - w).min(screen.right() - w - 8.0),
+        y: anchor.bottom() + 6.0,
+        w,
+        h: 214.0,
+    };
+    let mut action = 0;
+    ui.popup_panel(id, r, |ui, r| {
+        let mut body = r.shrink(16.0);
+        ui.text(
+            body.cut_top(22.0),
+            "Export",
+            t.heading,
+            t.text,
+            Align::Start,
+        );
+        body.cut_top(10.0);
+        let row = |body: &mut Rect| {
+            let mut r = body.cut_top(28.0);
+            body.cut_top(8.0);
+            let label = r.cut_left(64.0);
+            (label, r)
+        };
+        let (l, c) = row(&mut body);
+        ui.text(l, "Format", t.caption, t.text_dim, Align::Start);
+        let bits = [16u16, 24, 32];
+        let mut i = bits
+            .iter()
+            .position(|b| *b == studio.ws.export_bits)
+            .unwrap_or(1);
+        if ui.segmented(
+            W::new("export-bits"),
+            c,
+            &["16-bit", "24-bit", "32 float"],
+            &mut i,
+        ) {
+            studio.ws.export_bits = bits[i];
+        }
+        let (l, c) = row(&mut body);
+        ui.text(l, "Rate", t.caption, t.text_dim, Align::Start);
+        let rates = [44_100u32, 48_000, 96_000];
+        let mut i = rates
+            .iter()
+            .position(|x| *x == studio.ws.export_rate)
+            .unwrap_or(1);
+        if ui.segmented(
+            W::new("export-rate"),
+            c,
+            &["44.1 kHz", "48 kHz", "96 kHz"],
+            &mut i,
+        ) {
+            studio.ws.export_rate = rates[i];
+        }
+        let (l, c) = row(&mut body);
+        ui.text(l, "Tail", t.caption, t.text_dim, Align::Start);
+        let tails = [0.0f32, 3.0, 8.0];
+        let mut i = tails
+            .iter()
+            .position(|x| *x == studio.ws.export_tail)
+            .unwrap_or(1);
+        if ui.segmented(W::new("export-tail"), c, &["None", "3 s", "8 s"], &mut i) {
+            studio.ws.export_tail = tails[i];
+        }
+        body.cut_top(6.0);
+        let mut buttons = body.cut_top(34.0);
+        let midi = buttons.cut_left(100.0);
+        buttons.cut_left(8.0);
+        if ui
+            .button_primary(W::new("export-audio"), buttons, "Export WAV")
+            .clicked
+        {
+            action = 1;
+        }
+        if ui.button(W::new("export-midi"), midi, "MIDI").clicked {
+            action = 2;
+        }
+    });
+    match action {
+        1 => {
+            ui.close_popup();
+            studio.export_audio();
+        }
+        2 => {
+            ui.close_popup();
+            studio.export_midi();
+        }
+        _ => {}
     }
 }

@@ -88,6 +88,10 @@ pub struct Workspace {
     pub browser_scroll: f32,
     /// Notes copied in the Piano Roll.
     pub clipboard: Vec<peel_document::Note>,
+    pub export_panel: bool,
+    pub export_bits: u16,
+    pub export_rate: u32,
+    pub export_tail: f32,
 }
 
 impl Default for Workspace {
@@ -131,6 +135,10 @@ impl Default for Workspace {
             export: None,
             browser_scroll: 0.0,
             clipboard: Vec::new(),
+            export_panel: false,
+            export_bits: 24,
+            export_rate: 48_000,
+            export_tail: 3.0,
         }
     }
 }

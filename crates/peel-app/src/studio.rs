@@ -182,6 +182,9 @@ impl Studio {
             Ok("mixer") => self.ws.dock = DockTab::Mixer,
             _ => {}
         }
+        if std::env::var_os("PEEL_EXPORT").is_some() {
+            self.ws.export_panel = true;
+        }
         if std::env::var_os("PEEL_SCALE").is_some() {
             self.ws.roll.scale = Some(crate::harmony::Scale { root: 9, kind: 1 });
         }
@@ -435,7 +438,13 @@ impl Studio {
         }
     }
 
+    /// Opens the export panel (from the shortcut or the toolbar).
     pub fn export(&mut self) {
+        self.ws.export_panel = true;
+    }
+
+    /// Renders the arrangement to WAV with the panel's settings.
+    pub fn export_audio(&mut self) {
         if self.ws.export.is_some() {
             return;
         }
@@ -449,11 +458,39 @@ impl Studio {
         };
         let settings = ExportSettings {
             path,
-            sample_rate: 48_000,
-            bits: 24,
-            tail_seconds: 3.0,
+            sample_rate: self.ws.export_rate,
+            bits: self.ws.export_bits,
+            tail_seconds: self.ws.export_tail,
         };
         self.ws.export = Some(self.session.export(settings));
+    }
+
+    /// Writes the arrangement as a Standard MIDI File.
+    pub fn export_midi(&mut self) {
+        let name = format!("{}.mid", self.session.project().meta.title);
+        let Some(path) = rfd::FileDialog::new()
+            .set_file_name(&name)
+            .add_filter("MIDI file", &["mid"])
+            .save_file()
+        else {
+            return;
+        };
+        match peel_midi::export_arrangement(
+            self.session.project(),
+            &peel_midi::ExportOptions::default(),
+        ) {
+            Ok(out) => match std::fs::write(&path, &out.bytes) {
+                Ok(()) => self
+                    .session
+                    .notify(format!("Exported {}", path.display()), false),
+                Err(e) => self
+                    .session
+                    .notify(format!("Could not write MIDI: {e}"), true),
+            },
+            Err(e) => self
+                .session
+                .notify(format!("Could not export MIDI: {e}"), true),
+        }
     }
 
     fn status_bar(&mut self, ui: &mut Ui, r: Rect) {
