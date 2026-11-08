@@ -194,6 +194,17 @@ impl Studio {
                 log::error!("PEEL_AUDIO: {e}");
             }
         }
+        if let Some(path) = std::env::var_os("PEEL_SAMPLE")
+            && let Some(id) =
+                crate::rack::add_sample_channel(&mut self.session, std::path::Path::new(&path))
+        {
+            self.ws.selected_channel = Some(id);
+            self.ws.focus = Some(Focus::Channel(id));
+            if let Some(dev) = self.session.project().channel(id).map(|c| c.device.id) {
+                self.session.set_param(dev, "sample.start", 0.18, 1);
+                self.session.doc.end_gesture();
+            }
+        }
         if std::env::var_os("PEEL_GRAPH").is_some() {
             self.ws.rack_graph = true;
         }

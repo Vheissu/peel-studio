@@ -526,7 +526,7 @@ fn groups(desc: &DeviceDescriptor) -> Vec<(&'static str, Vec<&'static ParamDescr
 
 /// Enumerations with more than two choices get a full-width selector.
 fn is_wide_choice(p: &ParamDescriptor) -> bool {
-    p.is_choice() && p.choices.len() > 2
+    p.is_choice() && (p.choices.len() > 2 || p.choices != ["Off", "On"])
 }
 
 fn device_panel(
@@ -894,6 +894,60 @@ fn sample_view(ui: &mut Ui, body: &mut Rect, dev: &DeviceInstance, s: &mut Sessi
         t.text_dim,
         Align::Start,
     );
+    // Start marker: drag to choose where playback begins.
+    let start = dev
+        .params
+        .get("sample.start")
+        .copied()
+        .unwrap_or(0.0)
+        .clamp(0.0, 1.0);
+    let x = r.x + r.w * start;
+    if start > 0.0 {
+        ui.scene
+            .rect(Rect { w: x - r.x, ..r }, t.radius_m, t.bg.alpha(0.6));
+    }
+    let handle = Rect {
+        x: x - 6.0,
+        w: 12.0,
+        ..r
+    };
+    let id = W::new(("sample-start", dev.id));
+    let resp = ui.interact(id, handle);
+    ui.name(&resp, "Sample start");
+    let hot = resp.hovered || resp.active;
+    ui.scene.rect(
+        Rect {
+            x: x - 1.0,
+            w: 2.0,
+            ..r
+        },
+        1.0,
+        if hot { t.text } else { t.accent },
+    );
+    ui.scene.triangle(
+        Rect {
+            x: x - 5.0,
+            y: r.y,
+            w: 10.0,
+            h: 7.0,
+        },
+        peel_ui::Dir::Down,
+        0.5,
+        if hot { t.text } else { t.accent },
+    );
+    if hot {
+        ui.set_cursor(peel_ui::CursorIcon::EwResize);
+    }
+    ui.tooltip(&resp, &format!("Start {:.0}%", start * 100.0));
+    if resp.dragging
+        && let Some(p) = ui.pointer()
+    {
+        let v = ((p.x - r.x) / r.w).clamp(0.0, 0.99);
+        s.set_param(dev.id, "sample.start", v, id.0);
+    }
+    if resp.released {
+        s.doc.end_gesture();
+    }
 }
 
 const EQ_DB: f32 = 18.0;
