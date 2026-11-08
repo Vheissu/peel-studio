@@ -216,6 +216,13 @@ pub fn beat_and_melody() -> Project {
     arr.clips.push(clip(lanes[0], 0, 32, beat_id));
     arr.clips.push(clip(lanes[1], 0, 32, chords_id));
     arr.clips.push(clip(lanes[2], 16, 16, bass_id));
+    for (beat, name) in [(0, "Intro"), (16, "Drop")] {
+        arr.markers.push(peel_document::Marker {
+            id: Id::new(),
+            position: Time::beats(beat),
+            name: name.into(),
+        });
+    }
     p
 }
 

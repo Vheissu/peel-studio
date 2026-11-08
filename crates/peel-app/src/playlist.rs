@@ -15,6 +15,8 @@ use crate::workspace::{DockTab, Tool, Workspace};
 
 const HEAD_W: f32 = 150.0;
 const RULER_H: f32 = 26.0;
+/// Extra ruler height for the marker row when the arrangement has markers.
+const MARKER_H: f32 = 20.0;
 const EDGE: f32 = 8.0;
 
 #[derive(Clone, Copy, PartialEq, Default)]
@@ -96,7 +98,12 @@ pub fn draw(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) {
     body.cut_bottom(8.0);
 
     let arr = s.project().arrangement().clone();
-    let mut top = body.cut_top(RULER_H);
+    let ruler_h = if arr.markers.is_empty() {
+        RULER_H
+    } else {
+        RULER_H + MARKER_H
+    };
+    let mut top = body.cut_top(ruler_h);
     let heads = body.cut_left(HEAD_W);
     top.cut_left(HEAD_W);
     let lanes_r = body;
@@ -153,6 +160,7 @@ pub fn draw(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) {
 
     lanes_bg(ui, &v, &arr.tracks, s);
     ruler(ui, top, &v, s);
+    markers(ui, top, &v, s);
     track_heads(ui, heads, &v, &arr.tracks, s);
     clips(ui, &v, &arr.tracks, &arr.clips, s, ws);
 
@@ -492,6 +500,171 @@ fn ruler(ui: &mut Ui, r: Rect, v: &View, s: &mut Session) {
     if resp.double_clicked {
         s.doc
             .edit("Clear loop", |p| p.arrangement_mut().loop_range = None);
+    }
+    // Right-click: markers and loop.
+    let menu = id.with("menu");
+    if resp.secondary_clicked
+        && let Some(p) = ui.pointer()
+    {
+        let beat = Time::from_f64(v.beat(p.x).max(0.0), 960).round_to(Time::beats(1));
+        ui.state::<DragState>(st_id).start_beat = beat.as_f64();
+        ui.open_popup(
+            menu,
+            Rect {
+                x: p.x,
+                y: p.y,
+                w: 0.0,
+                h: 0.0,
+            },
+        );
+    }
+    let has_loop = s.project().arrangement().loop_range.is_some();
+    let items = [
+        MenuItem::new("Add marker"),
+        MenuItem::new("Clear loop").enabled(has_loop),
+    ];
+    let at = ui.state::<DragState>(st_id).start_beat;
+    if let Some(i) = ui.menu(menu, vec2(r.x, r.bottom()), &items) {
+        match i {
+            0 => {
+                add_marker(s, Time::from_f64(at, 960).round_to(Time::beats(1)));
+            }
+            _ => s
+                .doc
+                .edit("Clear loop", |p| p.arrangement_mut().loop_range = None),
+        }
+    }
+}
+
+/// Adds a marker named after its position in the song.
+pub fn add_marker(s: &mut Session, at: Time) -> Id {
+    let n = s.project().arrangement().markers.len() + 1;
+    let m = peel_document::Marker {
+        id: Id::new(),
+        position: at,
+        name: format!("Marker {n}"),
+    };
+    let id = m.id;
+    s.doc.edit("Add marker", |p| {
+        let arr = p.arrangement_mut();
+        arr.markers.push(m);
+        arr.markers.sort_by_key(|m| m.position);
+    });
+    id
+}
+
+/// Marker tags in the ruler's lower row: click to jump, drag to move,
+/// right-click or double-click to rename, right-click to delete.
+fn markers(ui: &mut Ui, r: Rect, v: &View, s: &mut Session) {
+    let t = ui.theme.clone();
+    let list = s.project().arrangement().markers.clone();
+    if list.is_empty() {
+        return;
+    }
+    let row = Rect {
+        y: r.y + RULER_H - 4.0,
+        h: MARKER_H - 2.0,
+        ..r
+    };
+    ui.scene.push_clip(r);
+    let mut rects = Vec::new();
+    for m in &list {
+        let x = v.x(m.position.as_f64());
+        let w = ui.measure(&m.name, t.caption).x + 14.0;
+        let tag = Rect { x, w, ..row };
+        rects.push(tag);
+        if tag.right() < r.x || tag.x > r.right() {
+            continue;
+        }
+        ui.scene
+            .vline(x, r.y + 12.0, row.bottom(), t.text.alpha(0.7));
+        ui.scene.rect(tag, 3.0, t.control);
+        ui.scene.rect(Rect { w: 3.0, ..tag }, 1.5, t.text_dim);
+        ui.text(
+            Rect {
+                x: tag.x + 8.0,
+                w: tag.w - 8.0,
+                ..tag
+            },
+            &m.name,
+            t.caption,
+            t.text,
+            Align::Start,
+        );
+    }
+    ui.scene.pop_clip();
+    for (m, tag) in list.iter().zip(rects) {
+        let visible = Rect {
+            x: tag.x.max(r.x),
+            w: (tag.right().min(r.right()) - tag.x.max(r.x)).max(0.0),
+            ..tag
+        };
+        if visible.w <= 0.0 {
+            continue;
+        }
+        let id = W::new(("marker", m.id));
+        let resp = ui.interact_button(id, visible, &m.name);
+        if resp.hovered || resp.active {
+            ui.scene.outline(visible, 3.0, 1.0, t.text_dim);
+            ui.set_cursor(if resp.dragging {
+                CursorIcon::Grabbing
+            } else {
+                CursorIcon::Pointer
+            });
+        }
+        ui.tooltip(&resp, "Click to jump. Drag to move.");
+        if resp.dragging
+            && ui.drag_distance() > 3.0
+            && let Some(p) = ui.pointer()
+        {
+            let at = Time::from_f64(v.beat(p.x).max(0.0), 960).round_to(Time::beats(1));
+            if at != m.position {
+                let mid = m.id;
+                s.doc.edit_gesture(id.0, "Move marker", |p| {
+                    let arr = p.arrangement_mut();
+                    if let Some(x) = arr.markers.iter_mut().find(|x| x.id == mid) {
+                        x.position = at;
+                    }
+                    arr.markers.sort_by_key(|m| m.position);
+                });
+            }
+        }
+        if resp.released {
+            s.doc.end_gesture();
+        }
+        if resp.clicked && ui.drag_distance() <= 3.0 {
+            if s.mode() != PlayMode::Song {
+                s.set_mode(PlayMode::Song);
+            }
+            s.seek(m.position.as_f64());
+        }
+        let rename = id.with("rename");
+        if resp.double_clicked {
+            crate::rename::open(ui, rename, visible, &m.name);
+        }
+        let menu = id.with("menu");
+        if resp.secondary_clicked {
+            ui.open_popup(menu, visible);
+        }
+        let items = [MenuItem::new("Rename"), MenuItem::new("Delete")];
+        match ui.menu(menu, vec2(visible.x, visible.bottom() + 4.0), &items) {
+            Some(0) => crate::rename::open(ui, rename, visible, &m.name),
+            Some(_) => {
+                let mid = m.id;
+                s.doc.edit("Delete marker", |p| {
+                    p.arrangement_mut().markers.retain(|x| x.id != mid)
+                });
+            }
+            None => {}
+        }
+        if let Some(name) = crate::rename::show(ui, rename) {
+            let mid = m.id;
+            s.doc.edit("Rename marker", |p| {
+                if let Some(x) = p.arrangement_mut().markers.iter_mut().find(|x| x.id == mid) {
+                    x.name = name;
+                }
+            });
+        }
     }
 }
 

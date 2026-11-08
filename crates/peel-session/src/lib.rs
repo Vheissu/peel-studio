@@ -633,6 +633,11 @@ impl Session {
         self.engine.telemetry().beat()
     }
 
+    /// Where the last seek or play started (Stop returns here).
+    pub fn start_position(&self) -> f64 {
+        self.play_start
+    }
+
     pub fn metronome(&self) -> bool {
         self.metronome
     }

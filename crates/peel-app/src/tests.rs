@@ -1021,3 +1021,43 @@ fn duplicating_an_arrangement_shares_patterns() {
     );
     assert!(peel_document::validate(p).iter().all(|i| !i.is_error()));
 }
+
+#[test]
+fn markers_jump_move_and_get_added() {
+    let mut h = Harness::new();
+    let markers = |h: &Harness| h.session().project().arrangement().markers.clone();
+    let drop = markers(&h)[1].clone();
+    assert_eq!(drop.name, "Drop");
+    // Click: the playhead jumps there in Song mode.
+    h.click(W::new(("marker", drop.id)));
+    assert_eq!(h.session().mode(), PlayMode::Song);
+    assert!(
+        (h.session().start_position() - 16.0).abs() < 1e-6,
+        "{}",
+        h.session().start_position()
+    );
+    // Drag four bars right.
+    let r = h.rect(W::new(("marker", drop.id)));
+    let bar_px = {
+        let a = h.rect(W::new(("marker", markers(&h)[0].id)));
+        (r.x - a.x) / 4.0
+    };
+    let from = vec2(r.x + 6.0, r.center().y);
+    h.drag(from, from + vec2(bar_px * 4.0, 0.0), 8);
+    let moved = markers(&h).into_iter().find(|m| m.id == drop.id).unwrap();
+    assert_eq!(moved.position, Time::beats(32));
+    assert_eq!(h.session().doc.undo_label(), Some("Move marker"));
+    // Right-click the ruler: Add marker.
+    let ruler = h.rect(W::new("pl-ruler"));
+    h.move_to(vec2(ruler.x + bar_px * 2.0 + 2.0, ruler.y + 6.0));
+    h.press(1);
+    h.release(1);
+    h.click(W::new("pl-ruler").with("menu").with(("item", 0usize)));
+    let all = markers(&h);
+    assert_eq!(all.len(), 3);
+    assert!(
+        all.windows(2).all(|w| w[0].position <= w[1].position),
+        "kept in order"
+    );
+    assert_eq!(all[1].position, Time::beats(8));
+}
