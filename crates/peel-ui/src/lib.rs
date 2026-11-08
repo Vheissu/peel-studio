@@ -20,6 +20,9 @@ pub mod theme;
 pub mod ui;
 pub mod widgets;
 
+#[cfg(test)]
+mod tests;
+
 pub use a11y::{Action, ActionRequest, Role, Semantics};
 pub use app::{App, WindowControl, WindowOptions, run};
 pub use focus::{Adjust, FocusKind};

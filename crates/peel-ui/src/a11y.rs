@@ -162,10 +162,9 @@ fn default_actions(role: Role) -> &'static [Action] {
         Role::Slider | Role::SpinButton | Role::Splitter => {
             &[Action::Increment, Action::Decrement, Action::SetValue]
         }
-        Role::TextInput
-        | Role::SearchInput
-        | Role::MultilineTextInput
-        | Role::NumberInput => &[Action::SetValue, Action::ReplaceSelectedText],
+        Role::TextInput | Role::SearchInput | Role::MultilineTextInput | Role::NumberInput => {
+            &[Action::SetValue, Action::ReplaceSelectedText]
+        }
         _ => &[],
     }
 }
@@ -543,12 +542,7 @@ impl Ui {
 
     /// Describes `id` and makes it the parent of every widget described
     /// inside `f`.
-    pub fn describe_group<R>(
-        &mut self,
-        id: Id,
-        sem: Semantics,
-        f: impl FnOnce(&mut Ui) -> R,
-    ) -> R {
+    pub fn describe_group<R>(&mut self, id: Id, sem: Semantics, f: impl FnOnce(&mut Ui) -> R) -> R {
         let on = self.a11y.on;
         if on {
             self.describe_node(id, sem);
@@ -637,6 +631,9 @@ impl Ui {
     /// Called by [`Ui::tooltip`] every frame: the tooltip text names an
     /// unnamed widget and describes a named one.
     pub(crate) fn a11y_tooltip(&mut self, id: Id, text: &str) {
+        if !self.a11y.on {
+            return;
+        }
         let Some(&i) = self.a11y.index.get(&id) else {
             return;
         };
@@ -660,11 +657,19 @@ impl Ui {
         let bounds = rect.map(|r| r.intersect(&self.scene.clip()));
         if let Some(&i) = self.a11y.index.get(&id) {
             let slot = &mut self.a11y.slots[i];
-            if let Some(l) = sem.label.take() {
-                if rank >= slot.label_rank {
-                    slot.sem.label = Some(l);
-                    slot.label_rank = rank;
+            if let Some(l) = sem.label.take()
+                && rank >= slot.label_rank
+            {
+                // A tooltip that served as the name becomes the
+                // description once a better name arrives.
+                if slot.label_rank == RANK_TOOLTIP
+                    && slot.sem.description.is_none()
+                    && slot.sem.label.as_deref() != Some(l.as_str())
+                {
+                    slot.sem.description = slot.sem.label.take();
                 }
+                slot.sem.label = Some(l);
+                slot.label_rank = rank;
             }
             if bounds.is_some() {
                 slot.bounds = bounds;

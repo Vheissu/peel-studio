@@ -21,4 +21,5 @@ accesskit = "0.25.2"
 accesskit_winit = "0.34.2"
 
 [dev-dependencies]
+accesskit_consumer = "0.39.2"
 env_logger.workspace = true

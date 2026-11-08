@@ -308,9 +308,7 @@ impl Ui {
             return;
         }
         let n = ids.len() as i32;
-        let pos = self
-            .kb_focus
-            .and_then(|f| ids.iter().position(|i| *i == f));
+        let pos = self.kb_focus.and_then(|f| ids.iter().position(|i| *i == f));
         let next = match pos {
             Some(p) => (p as i32 + delta).rem_euclid(n),
             None if delta > 0 => 0,

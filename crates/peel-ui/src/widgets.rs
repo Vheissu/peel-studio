@@ -151,6 +151,14 @@ struct MeterState {
 /// Keyboard step of a splitter, in logical pixels.
 const SPLITTER_STEP: f32 = 16.0;
 
+/// Icon fonts live in the Unicode private use area.
+fn is_icon_glyph(label: &str) -> bool {
+    label
+        .chars()
+        .next()
+        .is_some_and(|c| ('\u{e000}'..='\u{f8ff}').contains(&c))
+}
+
 /// Linear peak to a 0..=1 meter position (-60 dB .. +6 dB).
 pub fn meter_pos(peak: f32) -> f32 {
     if peak <= 1e-6 {
@@ -331,6 +339,21 @@ impl Ui {
         let mut changed = false;
         self.a11y_node(id, r, RANK_TEXT, || Semantics::new(Role::RadioGroup));
         self.a11y_push(id);
+        // Only the selected option is a tab stop. Arrow keys move the
+        // selection (and focus with it) like a radio group.
+        let old_sel = *selected;
+        let steps = if options.is_empty() {
+            0
+        } else {
+            self.take_adjust(id.with(old_sel)).steps
+        };
+        if steps != 0 {
+            let next = (old_sel as i32 + steps).rem_euclid(options.len() as i32) as usize;
+            if next != old_sel {
+                *selected = next;
+                changed = true;
+            }
+        }
         let sel_x = self.animate(id.with("sel"), *selected as f32, 22.0);
         if let Some(first) = cells.first() {
             let step = first.w + 2.0;
@@ -340,38 +363,10 @@ impl Ui {
             };
             self.scene.rect(sr, t.radius_s, t.control_hover);
         }
-        let mut refocus = None;
         for (i, (cell, label)) in cells.iter().zip(options).enumerate() {
             let seg = id.with(i);
             let resp = self.interact(seg, *cell);
-            // Only the selected option is a tab stop; arrow keys move the
-            // selection (and focus) like a radio group.
-            if *selected == i {
-                self.focusable(seg, *cell, FocusKind::Choice);
-                let steps = self.take_adjust(seg).steps;
-                if steps != 0 && !options.is_empty() {
-                    let n = options.len() as i32;
-                    let next = (i as i32 + steps).rem_euclid(n) as usize;
-                    if next != i {
-                        refocus = Some(next);
-                    }
-                }
-            }
-            let is_icon = label
-                .chars()
-                .next()
-                .is_some_and(|c| ('\u{e000}'..='\u{f8ff}').contains(&c));
-            let selected_now = *selected == i;
-            self.a11y_node(seg, *cell, RANK_TEXT, || {
-                let name: &str = if is_icon {
-                    icons::name(label).unwrap_or("")
-                } else {
-                    label
-                };
-                Semantics::new(Role::RadioButton)
-                    .label(name)
-                    .toggled(selected_now)
-            });
+            let is_icon = is_icon_glyph(label);
             if resp.clicked && *selected != i {
                 *selected = i;
                 changed = true;
@@ -393,10 +388,24 @@ impl Ui {
             }
             self.focus_ring(seg, *cell, t.radius_s);
         }
-        if let Some(next) = refocus {
-            *selected = next;
-            changed = true;
-            self.set_kb_focus(Some(id.with(next)));
+        // The focus stop follows the selection, however it changed.
+        if *selected != old_sel && self.kb_focus == Some(id.with(old_sel)) {
+            self.set_kb_focus(Some(id.with(*selected)));
+        }
+        if let Some(cell) = cells.get(*selected) {
+            self.focusable(id.with(*selected), *cell, FocusKind::Choice);
+        }
+        // Describe the options last, from the final selection.
+        for (i, (cell, label)) in cells.iter().zip(options).enumerate() {
+            let on = *selected == i;
+            self.a11y_node(id.with(i), *cell, RANK_TEXT, || {
+                let name: &str = if is_icon_glyph(label) {
+                    icons::name(label).unwrap_or("")
+                } else {
+                    label
+                };
+                Semantics::new(Role::RadioButton).label(name).toggled(on)
+            });
         }
         self.a11y_pop(id);
         changed
@@ -680,11 +689,29 @@ impl Ui {
         // Enter types a value.
         let step = (per_px * 5.0).max(f64::EPSILON);
         self.focusable(id, r, FocusKind::Spin);
+        let resp =
+            self.drag_number_inner(id, r, value, (min, max), (per_px, step), style, color, &fmt);
+        // Described last, from the value as it ended up this frame.
         self.a11y_node(id, r, 0, || {
             Semantics::new(Role::SpinButton)
                 .numeric(*value, min, max, step)
                 .value(fmt(*value))
         });
+        resp
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn drag_number_inner(
+        &mut self,
+        id: Id,
+        r: Rect,
+        value: &mut f64,
+        (min, max): (f64, f64),
+        (per_px, step): (f64, f64),
+        style: TextStyle,
+        color: Color,
+        fmt: &impl Fn(f64) -> String,
+    ) -> Response {
         if self.state::<TextEditState>(id.with("edit")).editing {
             let mut s = std::mem::take(&mut self.state::<TextEditState>(id.with("edit")).buffer);
             let resp = self.text_edit_inner(id.with("edit"), id, r, &mut s, style);
@@ -776,13 +803,6 @@ impl Ui {
         let style = self.theme.body;
         let t = self.theme.clone();
         self.focusable(id, r, FocusKind::Text);
-        self.a11y_node(id, r, RANK_ICON, || {
-            let mut s = Semantics::new(Role::TextInput).value(text.as_str());
-            if !placeholder.is_empty() {
-                s = s.placeholder(placeholder).label(placeholder);
-            }
-            s
-        });
         // Tabbing (or an assistive technology) onto the field, or Enter on
         // it, starts editing.
         let entered = self.take_kb_entered(id);
@@ -844,6 +864,14 @@ impl Ui {
         if !focused {
             self.focus_ring(id, r, t.radius_m);
         }
+        // Described last, from the text as it ended up this frame.
+        self.a11y_node(id, r, RANK_ICON, || {
+            let mut s = Semantics::new(Role::TextInput).value(text.as_str());
+            if !placeholder.is_empty() {
+                s = s.placeholder(placeholder).label(placeholder);
+            }
+            s
+        });
         resp
     }
 
@@ -1214,7 +1242,11 @@ impl Ui {
             self.scene.rect(
                 line,
                 0.0,
-                t.focus.alpha(if resp.active || resp.focused { 0.8 } else { 0.4 }),
+                t.focus.alpha(if resp.active || resp.focused {
+                    0.8
+                } else {
+                    0.4
+                }),
             );
         }
         let dragged = if resp.dragging {
