@@ -29,7 +29,7 @@ processing, persistence and tests all exist.
 | Automation | Clips for device parameters, track volume and pan | Done |
 | Mixer routing | Bus outputs, post-fader sends, loop-free validation | Done |
 | Audio recording | Input devices, armed lanes, durable takes | In progress |
-| CLAP plugins | Scanning, hosting as native devices, state | In progress |
+| CLAP plugins | Isolated scanning, hosting as native devices, saved state, offline export | Done |
 
 ## Phase 2: recording and deeper editing
 
@@ -39,8 +39,8 @@ WASAPI / ASIO backends, engine process isolation.
 
 ## Phase 3: plugins
 
-Plugin windows for CLAP, VST3 hosting, isolated plugin workers and an
-out-of-process scanner, Audio Units on macOS, plugin delay compensation
+Plugin windows for CLAP, a scan cache and quarantine, VST3 hosting,
+isolated plugin workers, Audio Units on macOS, plugin delay compensation
 across the graph.
 
 ## Phase 4: the rest of the specification

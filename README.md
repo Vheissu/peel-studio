@@ -23,7 +23,7 @@ effects. There is no web view.
   mono bass, an FM electric piano, a modelled piano and a sampler) and nine
   effects (EQ with an interactive curve, compressor, limiter, delay, reverb,
   drive, filter, chorus, utility), with over a hundred factory presets in
-  the Browser.
+  the Browser. Installed CLAP plugins show up next to them.
 - Arrangement: pattern, audio and automation clips; trims, fades, marquee
   selection, Alt-drag copies, loop range, lane management.
 - Mixing: console-style strips with inserts, bus routing, post-fader sends,
