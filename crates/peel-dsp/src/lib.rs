@@ -14,6 +14,7 @@
 
 pub mod device;
 pub mod param;
+pub mod preset;
 pub mod sample;
 pub mod util;
 
@@ -32,4 +33,5 @@ pub mod reverb;
 
 pub use device::{Device, DeviceDescriptor, DeviceEvent, DeviceKind, EventKind, ProcessContext};
 pub use param::{ParamDescriptor, ParamId, Taper, Unit};
+pub use preset::Preset;
 pub use sample::SampleBuffer;

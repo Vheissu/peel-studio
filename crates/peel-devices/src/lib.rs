@@ -1,6 +1,6 @@
 //! Registry of every native device type.
 
-use peel_dsp::{Device, DeviceDescriptor, DeviceKind};
+use peel_dsp::{Device, DeviceDescriptor, DeviceKind, Preset};
 
 /// All native device descriptors: instruments first, then effects.
 pub fn all() -> impl Iterator<Item = &'static DeviceDescriptor> {
@@ -28,4 +28,24 @@ pub fn create(type_id: &str) -> Option<Box<dyn Device>> {
     let mut device = peel_instruments::create(type_id).or_else(|| peel_effects::create(type_id))?;
     peel_dsp::device::apply_defaults(device.as_mut());
     Some(device)
+}
+
+/// Factory presets for a device type.
+pub fn presets(type_id: &str) -> &'static [Preset] {
+    let p = peel_instruments::presets(type_id);
+    if p.is_empty() {
+        peel_effects::presets(type_id)
+    } else {
+        p
+    }
+}
+
+/// Applies a preset's values to a device (control thread).
+pub fn apply_preset(device: &mut dyn Device, preset: &Preset) {
+    let desc = device.descriptor();
+    for (key, value) in preset.params {
+        if let Some(p) = desc.param_by_key(key) {
+            device.set_param(p.id, *value);
+        }
+    }
 }
