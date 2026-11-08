@@ -1,0 +1,24 @@
+[package]
+name = "peel-host-clap"
+description = "CLAP plugin host for Peel Studio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+peel-dsp.workspace = true
+clap-sys = "0.5"
+libloading = "0.8"
+log.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+# The out-of-process scanner. The application runs this once per plugin file
+# so a plugin that crashes or hangs while loading cannot take it down.
+[[bin]]
+name = "peel-clap-scan"
+path = "src/bin/peel-clap-scan.rs"
