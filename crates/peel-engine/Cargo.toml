@@ -15,3 +15,11 @@ rtrb.workspace = true
 cpal.workspace = true
 log.workspace = true
 thiserror.workspace = true
+assert_no_alloc = { version = "1.1.2", optional = true }
+
+[features]
+default = []
+# Wraps the realtime callback in `assert_no_alloc`. The final binary must also
+# install `assert_no_alloc::AllocDisabler` as its global allocator (see the
+# crate documentation of `peel_engine::rt`).
+rt-check = ["dep:assert_no_alloc"]

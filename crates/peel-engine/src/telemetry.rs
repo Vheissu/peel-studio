@@ -29,6 +29,18 @@ pub struct Telemetry {
     master: [AtomicU32; 2],
     /// Number of non-finite samples contained at graph boundaries.
     pub non_finite: AtomicU64,
+    /// Note-ons dropped because a per-block event buffer or the active-note
+    /// table was full. Note-offs are never dropped for this reason.
+    pub dropped_notes: AtomicU64,
+    /// Times a channel's note-offs overflowed the reserved capacity and were
+    /// replaced by a single `AllNotesOff` (note integrity fallback).
+    pub note_overflows: AtomicU64,
+    /// Plans refused by the engine because they exceed its fixed capacities
+    /// or contain invalid indices.
+    pub plans_rejected: AtomicU64,
+    /// Retired objects that could neither be queued nor parked and were
+    /// leaked rather than freed on the audio thread. Should always be zero.
+    pub retire_leaks: AtomicU64,
 }
 
 fn zeros(n: usize) -> Box<[AtomicU32]> {
@@ -60,6 +72,10 @@ impl Telemetry {
             slots: zeros(MAX_SLOTS),
             master: [AtomicU32::new(0), AtomicU32::new(0)],
             non_finite: AtomicU64::new(0),
+            dropped_notes: AtomicU64::new(0),
+            note_overflows: AtomicU64::new(0),
+            plans_rejected: AtomicU64::new(0),
+            retire_leaks: AtomicU64::new(0),
         }
     }
 
