@@ -41,6 +41,10 @@ pub struct Telemetry {
     /// Retired objects that could neither be queued nor parked and were
     /// leaked rather than freed on the audio thread. Should always be zero.
     pub retire_leaks: AtomicU64,
+    /// Audio regions that were sounding when the transport was cut (stop,
+    /// seek, loop wrap, plan swap) but could not get a declick tail because
+    /// every tail voice was busy. They end abruptly instead.
+    pub audio_tail_overflows: AtomicU64,
 }
 
 fn zeros(n: usize) -> Box<[AtomicU32]> {
@@ -76,6 +80,7 @@ impl Telemetry {
             note_overflows: AtomicU64::new(0),
             plans_rejected: AtomicU64::new(0),
             retire_leaks: AtomicU64::new(0),
+            audio_tail_overflows: AtomicU64::new(0),
         }
     }
 

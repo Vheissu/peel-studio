@@ -35,6 +35,7 @@ use std::time::Instant;
 use peel_dsp::{Device, EventKind, ProcessContext};
 use rtrb::{Consumer, Producer};
 
+use crate::audio::AudioState;
 use crate::clock::{Origin, loop_samples};
 use crate::command::{EngineCommand, Retired};
 use crate::events::{ActiveNote, ActiveNotes, OffResult, Staging};
@@ -63,6 +64,9 @@ struct Transport {
     position: f64,
     /// Engine sample at which musical time zero falls (while playing).
     origin: Origin,
+    /// Engine sample of the last discontinuity (play, seek, loop wrap, plan
+    /// swap). Audio regions already running at that point fade in.
+    entry: i64,
     /// Index of the next sequence event to deliver.
     cursor: usize,
     /// The loop applies: the playhead was inside the loop when anchored.
@@ -113,6 +117,7 @@ pub struct Engine {
     engine_sample: i64,
 
     mixer: Mixer,
+    audio: AudioState,
     metronome: Metronome,
     preview: Preview,
     /// Metronome and preview are audible (off for exports).
@@ -173,6 +178,7 @@ impl Engine {
                 playing: false,
                 position: 0.0,
                 origin: Origin::ZERO,
+                entry: 0,
                 cursor: 0,
                 loop_armed: false,
                 end_armed: false,
@@ -180,6 +186,7 @@ impl Engine {
             },
             engine_sample: 0,
             mixer: Mixer::new(max_block, device_slots),
+            audio: AudioState::new(sample_rate),
             metronome: Metronome::new(sample_rate),
             preview: Preview::new(sample_rate),
             monitoring: true,
@@ -416,15 +423,24 @@ impl Engine {
             }
             EngineCommand::Pause => {
                 self.release_sequence_notes(0);
+                if self.transport.playing {
+                    self.cut_audio(self.engine_sample);
+                }
                 self.transport.playing = false;
             }
             EngineCommand::Stop { return_to } => {
                 self.release_sequence_notes(0);
+                if self.transport.playing {
+                    self.cut_audio(self.engine_sample);
+                }
                 self.transport.playing = false;
                 self.transport.position = sane_beat(return_to);
             }
             EngineCommand::Seek { beat } => {
                 self.release_sequence_notes(0);
+                if self.transport.playing {
+                    self.cut_audio(self.engine_sample);
+                }
                 let beat = sane_beat(beat);
                 self.transport.position = beat;
                 if self.transport.playing {
@@ -536,6 +552,12 @@ impl Engine {
             self.retirer.retire(Retired::Plan(new));
             return;
         }
+        if self.transport.playing {
+            // Regions of the old plan fade out as the new plan's fade in, so
+            // a region that survives the swap is unchanged and one that does
+            // not leaves without a click.
+            self.cut_audio(self.engine_sample);
+        }
         let old_channels = self.plan.channels.len();
         let old_tracks = self.plan.tracks.len();
         let old = std::mem::replace(&mut self.plan, new);
@@ -635,9 +657,23 @@ impl Engine {
         let plan = &*self.plan;
         let t = &mut self.transport;
         t.origin = Origin::anchored(&plan.tempo, beat, self.engine_sample, sr);
+        t.entry = self.engine_sample;
         t.cursor = cursor_at(plan, &t.origin, self.engine_sample, sr);
         t.loop_armed = valid_loop(plan, sr).is_some_and(|(_, end)| beat < end);
         t.end_armed = plan.length_beats.is_finite() && beat < plan.length_beats;
+    }
+
+    /// The transport is about to jump or stop at engine sample `at`: let the
+    /// audio regions sounding there fade out instead of ending abruptly.
+    fn cut_audio(&mut self, at: i64) {
+        self.audio.cut(
+            &self.plan,
+            &self.transport.origin,
+            self.transport.entry,
+            at,
+            self.sr64,
+            &self.telemetry,
+        );
     }
 
     /// Stages the release of a tracked note. If the slot has no room left,
@@ -685,6 +721,7 @@ impl Engine {
         let beat_start = self.transport.position;
         let was_playing = self.transport.playing;
 
+        self.audio.begin_chunk();
         if was_playing {
             self.schedule(block_start, block_end);
         }
@@ -739,14 +776,22 @@ impl Engine {
 
             self.emit_events(block_start, seg_end);
             self.emit_clicks(block_start, seg_end);
+            self.audio.push_segment(
+                seg_start,
+                seg_end,
+                self.transport.origin,
+                self.transport.entry,
+            );
 
             match boundary {
                 Boundary::None => break,
                 Boundary::Loop(start, end) => {
                     let offset = (seg_end - block_start) as u32;
                     self.release_sequence_notes(offset);
+                    self.cut_audio(seg_end);
                     let plan = &*self.plan;
                     let t = &mut self.transport;
+                    t.entry = seg_end;
                     t.origin.wrap(&plan.tempo, start, end, sr);
                     t.cursor = cursor_at(plan, &t.origin, seg_end, sr);
                     t.next_click = ceil_beat(start);
@@ -755,6 +800,7 @@ impl Engine {
                 Boundary::End => {
                     let offset = (seg_end - block_start) as u32;
                     self.release_sequence_notes(offset);
+                    self.cut_audio(seg_end);
                     self.transport.playing = false;
                     self.transport.position = self.plan.length_beats;
                     break;
@@ -923,6 +969,7 @@ impl Engine {
             self.stamp = 1;
         }
         let step = self.ramp_step;
+        let block_start = self.engine_sample;
         let Engine {
             plan,
             slots,
@@ -933,6 +980,9 @@ impl Engine {
             mixer,
             telemetry,
             sample_rate,
+            audio,
+            retirer,
+            sr64,
             ..
         } = self;
         let ctx = ProcessContext {
@@ -943,6 +993,9 @@ impl Engine {
         };
         let n_tracks = plan.tracks.len();
         mixer.dirty[..n_tracks].fill(false);
+
+        // ---- audio regions and declick tails -> tracks ----
+        audio.render(plan, mixer, retirer, block_start, frames, *sr64);
 
         // ---- instrument channels -> tracks ----
         for (ci, ch) in plan.channels.iter().enumerate() {

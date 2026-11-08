@@ -17,7 +17,27 @@ use peel_time::TempoMap;
 #[global_allocator]
 static ALLOC: AllocDisabler = AllocDisabler;
 
-fn song(revision: u64) -> Box<peel_engine::RenderPlan> {
+fn region(
+    sample: &Arc<SampleBuffer>,
+    track: u16,
+    start: f64,
+    end: f64,
+    reversed: bool,
+) -> peel_engine::AudioRegion {
+    peel_engine::AudioRegion {
+        track,
+        sample: sample.clone(),
+        start_beat: start,
+        end_beat: end,
+        source_start_seconds: 0.01,
+        gain: 0.5,
+        reversed,
+        fade_in_beats: 0.25,
+        fade_out_beats: 0.5,
+    }
+}
+
+fn song(revision: u64, audio: &Arc<SampleBuffer>) -> Box<peel_engine::RenderPlan> {
     let mut notes = Vec::new();
     for i in 0..64u32 {
         notes.push(Note {
@@ -36,6 +56,28 @@ fn song(revision: u64) -> Box<peel_engine::RenderPlan> {
     ];
     p.tracks[0].inserts = vec![10];
     p.master = 2;
+    // Regions that cross the loop end and the seek targets, one reversed,
+    // one at another sample rate, plus many short ones.
+    p.audio = vec![
+        region(audio, 0, 1.0, 12.0, false),
+        region(audio, 1, 3.0, 9.0, true),
+        region(audio, 0, 6.5, 7.0, false),
+    ];
+    let slow = Arc::new(SampleBuffer::new(
+        "slow",
+        SR / 2.0,
+        vec![vec![0.3; audio.frames() / 2]],
+    ));
+    p.audio.push(region(&slow, 1, 2.0, 7.5, false));
+    for i in 0..40 {
+        p.audio.push(region(
+            audio,
+            (i % 2) as u16,
+            i as f64 * 0.2,
+            i as f64 * 0.2 + 0.3,
+            false,
+        ));
+    }
     Box::new(p)
 }
 
@@ -65,17 +107,41 @@ fn the_realtime_path_never_allocates() {
         slot: 10,
         device: Box::new(Half),
     });
-    send(EngineCommand::SetPlan(song(1)));
     let sample = Arc::new(SampleBuffer::new("click", SR, vec![vec![0.25; 9_600]]));
+    let audio = Arc::new(SampleBuffer::new(
+        "audio",
+        SR,
+        vec![
+            (0..200_000)
+                .map(|i| (i as f32 * 0.01).sin() * 0.4)
+                .collect(),
+            (0..200_000)
+                .map(|i| (i as f32 * 0.013).sin() * 0.4)
+                .collect(),
+        ],
+    ));
+    send(EngineCommand::SetPlan(song(1, &audio)));
 
     let mut left = vec![0.0f32; 256];
     let mut right = vec![0.0f32; 256];
     let mut peak = 0.0f32;
+    let mut tails_retired = 0;
     for block in 0..600u32 {
         match block {
             1 => send(EngineCommand::Play),
             2 => send(EngineCommand::Metronome { enabled: true }),
-            40 => send(EngineCommand::SetPlan(song(2))),
+            40 => send(EngineCommand::SetPlan(song(2, &audio))),
+            160 => send(EngineCommand::Seek { beat: 4.2 }),
+            170 => send(EngineCommand::Seek { beat: 10.5 }),
+            180 => send(EngineCommand::SetPlan(song(3, &audio))),
+            190 => send(EngineCommand::SetTrackMute {
+                track: 1,
+                muted: true,
+            }),
+            195 => send(EngineCommand::SetTrackMute {
+                track: 1,
+                muted: false,
+            }),
             50 => send(EngineCommand::SetChannelMute {
                 channel: 0,
                 muted: true,
@@ -124,6 +190,10 @@ fn the_realtime_path_never_allocates() {
             }),
             300 => send(EngineCommand::Pause),
             310 => send(EngineCommand::Play),
+            330 => send(EngineCommand::SetPlan(Box::new(
+                peel_engine::RenderPlan::empty(),
+            ))),
+            340 => send(EngineCommand::SetPlan(song(4, &audio))),
             400 => send(EngineCommand::InstallDevice {
                 slot: 0,
                 device: Box::new(Gate::new()),
@@ -135,6 +205,7 @@ fn the_realtime_path_never_allocates() {
             }),
             500 => send(EngineCommand::Panic),
             520 => send(EngineCommand::Stop { return_to: 0.0 }),
+            530 => send(EngineCommand::Play),
             _ => {}
         }
         assert_no_alloc(|| engine.process(&mut left, &mut right));
@@ -144,10 +215,19 @@ fn the_realtime_path_never_allocates() {
             .fold(peak, |p, x| p.max(x.abs()));
         // The control thread frees what the engine retired.
         while let Ok(item) = retire_rx.pop() {
+            if let Retired::Sample(s) = &item
+                && Arc::ptr_eq(s, &audio)
+            {
+                tails_retired += 1;
+            }
             drop(item);
         }
     }
     assert!(peak > 0.0, "the song produced sound");
+    assert!(
+        tails_retired > 10,
+        "audio regions were cut and their tails retired ({tails_retired})"
+    );
     assert!(
         telemetry
             .non_finite

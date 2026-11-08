@@ -200,6 +200,7 @@ pub fn compile(p: &Project, ctx: &CompileContext) -> (RenderPlan, PlanIndex) {
         length_beats: length,
         loop_range,
         channels,
+        audio: Vec::new(),
         tracks,
         master: (order.len() - 1) as u16,
         beats_per_bar: (p.time_signature.bar_length().as_f64()
