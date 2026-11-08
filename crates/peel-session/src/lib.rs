@@ -21,7 +21,9 @@ use peel_dsp::SampleBuffer;
 use peel_dsp::util::db_to_gain;
 use peel_engine::{EngineCommand, EngineConfig, EngineHandle, RenderPlan, Slot, Telemetry};
 
-pub use compile::{CompileContext, PlanIndex, PlayMode, compile, same_structure};
+pub use compile::{
+    CompileContext, PlanIndex, PlayMode, clip_source_start_seconds, compile, same_structure,
+};
 pub use export::{ExportJob, ExportSettings, render as render_to_wav};
 pub use samples::SampleLoader;
 
@@ -677,6 +679,9 @@ impl Session {
         self.synced = None;
         self.plan = None;
         self.audio.failed.clear();
+        let keep: std::collections::HashSet<Id> =
+            self.doc.project().assets.iter().map(|a| a.id).collect();
+        self.samples.retain_assets(&keep);
         self.sync();
     }
 

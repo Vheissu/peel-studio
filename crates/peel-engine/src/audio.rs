@@ -65,6 +65,10 @@ pub(crate) const MAX_TAILS: usize = 256;
 pub(crate) const MAX_SEGMENTS: usize = 16;
 /// Upper bound for a region's linear gain (+30 dB), as for mixer gains.
 const MAX_GAIN: f32 = 32.0;
+/// Positions beyond these (a few decades of audio) are not real: regions
+/// that far out are ignored, which keeps every index calculation in range.
+const MAX_SAMPLE: i64 = 1 << 37;
+const MAX_POSITION: f64 = (1u64 << 37) as f64;
 /// Slack in quarter notes for the cheap overlap test before a region is
 /// resolved exactly in samples.
 const BEAT_SLACK: f64 = 0.01;
@@ -124,12 +128,12 @@ impl Placement {
             return None;
         }
         let source_start = r.source_start_seconds * rate;
-        if !source_start.is_finite() {
+        if !(source_start.is_finite() && source_start.abs() < MAX_POSITION) {
             return None;
         }
         let start = origin.sample_of(tempo, r.start_beat, sr);
         let end = origin.sample_of(tempo, r.end_beat, sr);
-        if end <= start {
+        if end <= start || start.abs() > MAX_SAMPLE || end.abs() > MAX_SAMPLE {
             return None;
         }
         let len_beats = r.end_beat - r.start_beat;
@@ -191,9 +195,79 @@ impl Placement {
         declick: i64,
         tail: Option<(i64, i64)>,
     ) {
-        let src_l = buf.left();
-        let src_r = buf.right();
-        let n = src_l.len().min(src_r.len()) as i64;
+        let src = Source::new(buf);
+        let mut out = Out {
+            l: out_l,
+            r: out_r,
+            block_start,
+        };
+        if tail.is_some() {
+            return self.render_shaped(&src, from, to, &mut out, declick, tail);
+        }
+        // Between the fades the gain is constant: skip the envelope there.
+        let mut flat_from = self.start + self.edge.max(self.fade_in_end - self.start);
+        if self.start < self.entry {
+            flat_from = flat_from.max(self.entry + declick);
+        }
+        let flat_to = (self.end - self.edge).min(self.fade_out_start);
+        let a = flat_from.clamp(from, to);
+        let b = flat_to.clamp(a, to);
+        self.render_shaped(&src, from, a, &mut out, declick, None);
+        self.render_flat(&src, a, b, &mut out);
+        self.render_shaped(&src, b, to, &mut out, declick, None);
+    }
+
+    /// One frame of source audio for the `k`-th frame of the region.
+    #[inline(always)]
+    fn read(&self, src: &Source, len: i64, k: i64) -> (f32, f32) {
+        let (l, r) = if self.unit {
+            let idx = if self.reversed {
+                self.src0 as i64 + (len - 1 - k)
+            } else {
+                self.src0 as i64 + k
+            };
+            if idx >= 0 && idx < src.n {
+                (src.l[idx as usize], src.r[idx as usize])
+            } else {
+                (0.0, 0.0)
+            }
+        } else {
+            let pos = if self.reversed {
+                self.src0 + (len - 1 - k) as f64 * self.ratio
+            } else {
+                self.src0 + k as f64 * self.ratio
+            };
+            lerp(src.l, src.r, pos)
+        };
+        // Decoders only produce finite samples; a damaged buffer must not
+        // poison the track.
+        (
+            if l.is_finite() { l } else { 0.0 },
+            if r.is_finite() { r } else { 0.0 },
+        )
+    }
+
+    /// Frames where only the region gain applies.
+    fn render_flat(&self, src: &Source, from: i64, to: i64, out: &mut Out) {
+        let len = self.end - self.start;
+        for s in from..to {
+            let (l, r) = self.read(src, len, s - self.start);
+            let i = (s - out.block_start) as usize;
+            out.l[i] += l * self.gain;
+            out.r[i] += r * self.gain;
+        }
+    }
+
+    /// Frames with the full envelope.
+    fn render_shaped(
+        &self,
+        src: &Source,
+        from: i64,
+        to: i64,
+        out: &mut Out,
+        declick: i64,
+        tail: Option<(i64, i64)>,
+    ) {
         let len = self.end - self.start;
         let inv_edge = 1.0 / (self.edge + 1) as f32;
         let fade_in_len = self.fade_in_end - self.start;
@@ -203,7 +277,6 @@ impl Placement {
         let inv_entry = 1.0 / (declick + 1) as f32;
         let inv_tail = tail.map_or(0.0, |(_, length)| 1.0 / (length + 1) as f32);
         let entering = self.start < self.entry;
-        let src0_int = self.src0 as i64;
 
         for s in from..to {
             let k = s - self.start;
@@ -233,35 +306,38 @@ impl Placement {
                 g *= (length - t).max(0) as f32 * inv_tail;
             }
 
-            let (l, r) = if self.unit {
-                let idx = if self.reversed {
-                    src0_int + (len - 1 - k)
-                } else {
-                    src0_int + k
-                };
-                if idx >= 0 && idx < n {
-                    (src_l[idx as usize], src_r[idx as usize])
-                } else {
-                    (0.0, 0.0)
-                }
-            } else {
-                let pos = if self.reversed {
-                    self.src0 + (len - 1 - k) as f64 * self.ratio
-                } else {
-                    self.src0 + k as f64 * self.ratio
-                };
-                lerp(src_l, src_r, pos)
-            };
-            // Decoders only produce finite samples; a damaged buffer must
-            // not poison the track.
-            let l = if l.is_finite() { l } else { 0.0 };
-            let r = if r.is_finite() { r } else { 0.0 };
-
-            let i = (s - block_start) as usize;
-            out_l[i] += l * g;
-            out_r[i] += r * g;
+            let (l, r) = self.read(src, len, k);
+            let i = (s - out.block_start) as usize;
+            out.l[i] += l * g;
+            out.r[i] += r * g;
         }
     }
+}
+
+/// Borrowed view of a sample's two output channels (mono repeats).
+struct Source<'a> {
+    l: &'a [f32],
+    r: &'a [f32],
+    /// Frames available in both channels.
+    n: i64,
+}
+
+impl<'a> Source<'a> {
+    fn new(buf: &'a SampleBuffer) -> Source<'a> {
+        let (l, r) = (buf.left(), buf.right());
+        Source {
+            l,
+            r,
+            n: l.len().min(r.len()) as i64,
+        }
+    }
+}
+
+/// A track block being mixed into, starting at engine sample `block_start`.
+struct Out<'a> {
+    l: &'a mut [f32],
+    r: &'a mut [f32],
+    block_start: i64,
 }
 
 /// Linear interpolation of both channels at a fractional frame position.

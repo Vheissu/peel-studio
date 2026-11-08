@@ -229,13 +229,19 @@ pub fn compile(p: &Project, ctx: &CompileContext) -> (RenderPlan, PlanIndex) {
     (plan, index)
 }
 
+/// Seconds into its file at which an audio clip starts sounding.
+///
+/// The clip's `offset` is in quarter notes of the tempo at the clip start, so
+/// with a constant tempo it is exactly `offset * 60 / bpm`. The audio plays at
+/// its native speed from there, so frame `n` of the file (at sample rate `r`)
+/// sounds `n / r - source_start` seconds after the clip start, whatever the
+/// tempo does afterwards.
+pub fn clip_source_start_seconds(tempo: &TempoMap, clip: &Clip) -> f64 {
+    clip.offset.as_f64() * 60.0 / tempo.bpm_at(clip.start.as_f64())
+}
+
 /// The region an audio clip plays as, or `None` if the clip cannot sound yet
 /// (its audio is not decoded) or at all (empty).
-///
-/// The clip's `offset` is in quarter notes of the tempo at the clip start,
-/// so with a constant tempo it is exactly `offset * 60 / bpm` seconds into
-/// the file. The audio then plays at its native speed whatever the tempo
-/// does afterwards.
 fn audio_region(
     clip: &Clip,
     tempo: &TempoMap,
@@ -269,7 +275,7 @@ fn audio_region(
         sample: sample.clone(),
         start_beat: start,
         end_beat: (clip.start + clip.length).as_f64(),
-        source_start_seconds: clip.offset.as_f64() * 60.0 / tempo.bpm_at(start),
+        source_start_seconds: clip_source_start_seconds(tempo, clip),
         gain: db_to_gain(*gain_db),
         reversed: *reversed,
         fade_in_beats: fade_in,

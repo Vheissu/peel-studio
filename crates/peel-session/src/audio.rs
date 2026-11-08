@@ -190,6 +190,8 @@ impl Session {
 
         let clip_id = Id::new();
         let asset_id = asset.id;
+        // Adding a file again is an explicit retry for one that failed before.
+        self.audio.failed.remove(&asset_id);
         self.doc.edit("Add audio clip", |p| {
             if !known {
                 p.assets.push(asset);
@@ -295,3 +297,7 @@ impl Session {
         self.audio.failed.insert(asset);
     }
 }
+
+#[cfg(test)]
+#[path = "audio_tests.rs"]
+mod tests;

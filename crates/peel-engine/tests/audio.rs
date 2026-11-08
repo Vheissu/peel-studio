@@ -297,6 +297,32 @@ fn muting_a_track_during_playback_ramps_without_a_step() {
     );
 }
 
+#[test]
+fn regions_shorter_than_their_fades_stay_sound() {
+    let sample = mono(100_000, 1.0);
+    let tiny = |frames: usize| {
+        let mut r = region(&sample, 1.0, 1.0 + frames as f64 / BEAT as f64);
+        r.fade_in_beats = 5.0;
+        r.fade_out_beats = 5.0;
+        r
+    };
+    for frames in [1usize, 2, 10, 70, 500] {
+        let mut off = play(audio_plan(constant(120.0), None, 8.0, vec![tiny(frames)]));
+        let out = render(&mut off, 2 * BEAT);
+        assert_eq!(rising_edges(&out), vec![BEAT], "{frames} frames");
+        assert_eq!(falling_edges(&out), vec![BEAT + frames], "{frames} frames");
+        let peak = out.iter().fold(0.0f32, |p, x| p.max(*x));
+        assert!(peak > 0.0 && peak <= 1.0, "{frames} frames: peak {peak}");
+        // Symmetric overlapping fades give a symmetric shape.
+        for k in 0..frames / 2 {
+            assert!(
+                near(out[BEAT + k], out[BEAT + frames - 1 - k]),
+                "{frames}/{k}"
+            );
+        }
+    }
+}
+
 // ---------------------------------------------------------------------
 // Chase, loops and cuts
 // ---------------------------------------------------------------------

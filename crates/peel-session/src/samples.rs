@@ -90,6 +90,13 @@ impl SampleLoader {
         self.cache.get(&id).cloned()
     }
 
+    /// Forgets decoded assets that are not in `keep` (after a project is
+    /// replaced). The engine keeps whatever it is still playing.
+    pub fn retain_assets(&mut self, keep: &HashSet<Id>) {
+        self.cache.retain(|id, _| keep.contains(id));
+        self.peaks.retain(|id, _| keep.contains(id));
+    }
+
     /// Waveform summary of a decoded asset.
     pub fn peaks(&self, id: Id) -> Option<Arc<Peaks>> {
         self.peaks.get(&id).cloned()

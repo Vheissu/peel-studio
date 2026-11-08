@@ -79,6 +79,25 @@ absolute anchors every block, so a looping pattern cannot drift. Tempo
 ramps are linear in BPM against beats, integrated exactly
 (`60/k * ln((B0 + kq)/B0)`).
 
+## Audio clips
+
+A Playlist clip with `ClipContent::Audio` plays an asset's file at its
+native speed. `offset` is the position inside the file in quarter notes at
+the tempo where the clip starts, `length` trims the end, and the clip has a
+gain, a reverse switch and fade in and out lengths. A tempo change moves
+the clip but never stretches the audio.
+
+The sample loader thread decodes each asset to the engine rate and builds
+its waveform peaks (`Session::audio_peaks`). The compiler turns each
+audible clip whose audio is decoded into an `AudioRegion` in the plan; a
+clip that is still loading is silent, and its arrival recompiles the plan.
+The engine places every region from the transport's absolute sample anchor
+on each block, so seeking or looping into the middle of a clip starts at
+the right frame. Regions fade over about a millisecond at their edges, and a
+cut by stop, seek, loop wrap or plan swap fades the sounding regions out
+over a few milliseconds. Export renders the same plan offline. Pattern mode
+plays no audio clips.
+
 ## Process model
 
 The specification calls for the engine in its own process. Today the engine
