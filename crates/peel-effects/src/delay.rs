@@ -4,10 +4,12 @@
 //! * **Time**: free in milliseconds, or synced to the host tempo with the
 //!   note value snapped to a musical division (1/32 up to two bars, straight,
 //!   triplet and dotted). Left and right are independent.
-//! * **Time changes** glide. The read position slews toward its target with a
-//!   rate cap, so the repeats bend in pitch (like a tape delay) rather than
-//!   clicking or jumping. Large jumps are bounded to roughly a 0.6x to 1.4x
-//!   read speed. Cubic Hermite interpolation keeps the glide clean.
+//! * **Time changes** are smooth in one of two selectable ways. *Glide* slews
+//!   the read position toward its target with a rate cap, so the repeats bend
+//!   in pitch like a tape delay (large jumps are bounded to roughly a 0.6x to
+//!   1.4x read speed). *Crossfade* keeps the pitch steady: a second read head
+//!   jumps to the new time and the two are blended over 50 ms. Either way
+//!   there is no click, and cubic Hermite interpolation keeps reads clean.
 //! * **Feedback** is below 100%, filtered by a high-pass and a low-pass that
 //!   sit in the loop (so every repeat is a little thinner and darker), and
 //!   soft-limited above 0 dBFS so it cannot run away.
@@ -40,19 +42,27 @@ pub const ID_FB_LP: ParamId = 8;
 pub const ID_MIX: ParamId = 9;
 pub const ID_MOD_RATE: ParamId = 10;
 pub const ID_MOD_DEPTH: ParamId = 11;
+pub const ID_TIME_CHANGE: ParamId = 12;
 
 pub const MODE_STEREO: u32 = 0;
 pub const MODE_PING_PONG: u32 = 1;
 pub const MODE_MONO: u32 = 2;
 
 const MODES: &[&str] = &["Stereo", "Ping-Pong", "Mono"];
+const TIME_CHANGE: &[&str] = &["Glide", "Crossfade"];
+
+pub const TIME_GLIDE: u32 = 0;
+pub const TIME_CROSSFADE: u32 = 1;
+
+/// Length of a crossfade between read heads, in seconds.
+const CROSSFADE_SECONDS: f32 = 0.05;
 
 /// Longest delay in seconds. Synced times beyond it are clamped.
 const MAX_SECONDS: f32 = 4.0;
 /// Peak modulation excursion at full depth, in seconds.
 const MOD_SECONDS: f32 = 0.003;
 
-static PARAMS: [ParamDescriptor; 12] = [
+static PARAMS: [ParamDescriptor; 13] = [
     ParamDescriptor::choice(ID_MODE, "mode", "Mode", "Time", MODES, 0),
     ParamDescriptor::toggle(ID_SYNC, "sync", "Sync", "Time", true),
     ParamDescriptor::log(
@@ -94,6 +104,14 @@ static PARAMS: [ParamDescriptor; 12] = [
         8.0,
         0.5,
         Unit::Beats,
+    ),
+    ParamDescriptor::choice(
+        ID_TIME_CHANGE,
+        "time_change",
+        "Time Change",
+        "Time",
+        TIME_CHANGE,
+        0,
     ),
     ParamDescriptor::linear(
         ID_FEEDBACK,
@@ -224,12 +242,60 @@ pub static PRESETS: [Preset; 6] = [
     },
 ];
 
+/// Two read positions with a blend between them, for pitch-stable time
+/// changes. `a` is the audible head; when the wanted time differs, `b` jumps
+/// to it and the output fades from `a` to `b`, after which `b` becomes `a`.
+#[derive(Clone, Copy, Debug)]
+struct CrossfadeTap {
+    a: f32,
+    b: f32,
+    blend: f32,
+    fading: bool,
+}
+
+impl CrossfadeTap {
+    fn new(time: f32) -> CrossfadeTap {
+        CrossfadeTap {
+            a: time,
+            b: time,
+            blend: 0.0,
+            fading: false,
+        }
+    }
+
+    fn set_immediate(&mut self, time: f32) {
+        *self = CrossfadeTap::new(time);
+    }
+
+    /// Advances one sample toward `target`; returns `(a, b, blend)`.
+    #[inline]
+    fn advance(&mut self, target: f32, step: f32) -> (f32, f32, f32) {
+        if !self.fading && (target - self.a).abs() > 0.25 {
+            self.b = target;
+            self.blend = 0.0;
+            self.fading = true;
+        }
+        if self.fading {
+            self.blend += step;
+            if self.blend >= 1.0 {
+                self.a = self.b;
+                self.blend = 0.0;
+                self.fading = false;
+            }
+        }
+        (self.a, self.b, if self.fading { self.blend } else { 0.0 })
+    }
+}
+
 /// Delay effect. See the module docs.
 pub struct Delay {
     store: ParamStore,
     sample_rate: f32,
     lines: [DelayLine; 2],
     glide: [TimeGlide; 2],
+    fade: [CrossfadeTap; 2],
+    fade_step: f32,
+    crossfade: bool,
     hp: StereoBiquad,
     lp: StereoBiquad,
     feedback: Smoothed,
@@ -256,6 +322,9 @@ impl Delay {
             sample_rate: 48_000.0,
             lines: [DelayLine::new(16), DelayLine::new(16)],
             glide: [TimeGlide::new(0.0); 2],
+            fade: [CrossfadeTap::new(0.0); 2],
+            fade_step: 0.0,
+            crossfade: false,
             hp: StereoBiquad::default(),
             lp: StereoBiquad::default(),
             feedback: Smoothed::new(0.0),
@@ -287,6 +356,25 @@ impl Delay {
         samples.clamp(2.0 + self.mod_samples, (self.max_delay - margin).max(8.0))
     }
 
+    /// Reads channel `ch`'s line at its current time plus `modulation`.
+    #[inline]
+    fn read_tap(&mut self, ch: usize, modulation: f32) -> f32 {
+        if self.crossfade {
+            let target = self.glide[ch].target();
+            let (a, b, blend) = self.fade[ch].advance(target, self.fade_step);
+            let line = &self.lines[ch];
+            let first = line.read_hermite(a + modulation);
+            if blend > 0.0 {
+                first + (line.read_hermite(b + modulation) - first) * blend
+            } else {
+                first
+            }
+        } else {
+            let t = self.glide[ch].next();
+            self.lines[ch].read_hermite(t + modulation)
+        }
+    }
+
     fn retarget(&mut self, spb: f32) {
         self.spb = spb;
         let mode = self.store.get(ID_MODE) as u32;
@@ -301,6 +389,8 @@ impl Delay {
         if self.fresh {
             self.glide[0].set_immediate(left);
             self.glide[1].set_immediate(right);
+            self.fade[0].set_immediate(left);
+            self.fade[1].set_immediate(right);
             self.fresh = false;
         }
     }
@@ -360,6 +450,7 @@ impl Fx for Delay {
         for g in &mut self.glide {
             g.configure(sr, 0.12, 0.4);
         }
+        self.fade_step = 1.0 / (CROSSFADE_SECONDS * sr);
         for l in &mut self.lfo {
             l.set_rate(self.store.get(ID_MOD_RATE), sr);
         }
@@ -395,6 +486,24 @@ impl Fx for Delay {
                 let spb = self.spb;
                 self.retarget(spb);
             }
+            ID_TIME_CHANGE => {
+                let crossfade = value as u32 == TIME_CROSSFADE;
+                if crossfade != self.crossfade {
+                    // Hand the current read position to the other scheme.
+                    for ch in 0..2 {
+                        if crossfade {
+                            let t = self.glide[ch].current();
+                            self.fade[ch].set_immediate(t);
+                        } else {
+                            let t = self.fade[ch].a;
+                            let target = self.glide[ch].target();
+                            self.glide[ch].set_immediate(t);
+                            self.glide[ch].set_target(target);
+                        }
+                    }
+                    self.crossfade = crossfade;
+                }
+            }
             ID_SYNC | ID_TIME_L | ID_TIME_R | ID_BEATS_L | ID_BEATS_R | ID_MODE => {
                 let spb = self.spb;
                 self.retarget(spb);
@@ -429,13 +538,11 @@ impl Fx for Delay {
             } else {
                 (0.0, 0.0)
             };
-            let t_l = self.glide[0].next();
-            let t_r = self.glide[1].next();
-            let d_l = self.lines[0].read_hermite(t_l + m_l);
+            let d_l = self.read_tap(0, m_l);
             let d_r = if mode == MODE_MONO {
                 d_l
             } else {
-                self.lines[1].read_hermite(t_r + m_r)
+                self.read_tap(1, m_r)
             };
 
             let fb = self.feedback.next();
@@ -604,6 +711,86 @@ mod tests {
         // A 220 Hz sine at 0.5 changes at most ~0.03 per sample; glide may
         // raise the pitch by up to 1.4x but must not jump.
         assert!(worst < 0.2, "{worst}");
+    }
+
+    /// Estimated frequency of the left output in Hz from upward zero
+    /// crossings in successive windows after the time change.
+    fn pitch_track(mode: u32) -> Vec<f32> {
+        let mut d = free_delay(60.0, 60.0, 0.0, MODE_STEREO);
+        d.set_param(ID_TIME_CHANGE, mode as f32);
+        d.prepare(SR, 256);
+        let ctx = ProcessContext::new(SR);
+        let freq = 220.0f64;
+        let mut out = Vec::new();
+        for block in 0..400 {
+            let mut l: Vec<f32> = (0..256)
+                .map(|i| {
+                    let idx = (block * 256 + i) as f64;
+                    (std::f64::consts::TAU * (idx * freq / f64::from(SR)).fract()).sin() as f32
+                })
+                .collect();
+            let mut r = l.clone();
+            if block == 40 {
+                d.set_param(ID_TIME_L, 400.0);
+            }
+            d.process(&ctx, &[], &mut l, &mut r);
+            out.extend(l);
+        }
+        // 2400-sample windows (50 ms) starting at the change.
+        out[40 * 256..]
+            .chunks(2400)
+            .filter(|c| c.len() == 2400)
+            .map(|c| {
+                let crossings = c.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count();
+                crossings as f32 / 0.05
+            })
+            .collect()
+    }
+
+    #[test]
+    fn glide_bends_pitch_but_crossfade_keeps_it() {
+        let glide = pitch_track(TIME_GLIDE);
+        let fade = pitch_track(TIME_CROSSFADE);
+        let dev = |track: &[f32]| track.iter().fold(0.0f32, |m, f| m.max((f - 220.0).abs()));
+        // Glide: the read head moves, so pitch is audibly off for a while.
+        assert!(dev(&glide) > 30.0, "glide deviation {}", dev(&glide));
+        // Crossfade: only the 50 ms blend window can disturb the count.
+        assert!(
+            fade[1..].iter().all(|f| (f - 220.0).abs() <= 25.0),
+            "crossfade drifted: {fade:?}"
+        );
+    }
+
+    #[test]
+    fn crossfade_mode_lands_on_the_new_time_exactly() {
+        let mut d = free_delay(100.0, 100.0, 0.0, MODE_STEREO);
+        d.set_param(ID_TIME_CHANGE, TIME_CROSSFADE as f32);
+        d.prepare(SR, 256);
+        let ctx = ProcessContext::new(SR);
+        let (mut l, mut r) = (vec![0.0; 256], vec![0.0; 256]);
+        d.process(&ctx, &[], &mut l, &mut r);
+        d.set_param(ID_TIME_L, 250.0);
+        d.set_param(ID_TIME_R, 250.0);
+        // Let the 50 ms fade finish, then fire an impulse.
+        for _ in 0..20 {
+            let (mut l, mut r) = (vec![0.0; 256], vec![0.0; 256]);
+            d.process(&ctx, &[], &mut l, &mut r);
+        }
+        let mut found = Vec::new();
+        for block in 0..60 {
+            let mut l = vec![0.0; 256];
+            let mut r = vec![0.0; 256];
+            if block == 0 {
+                l[0] = 1.0;
+            }
+            d.process(&ctx, &[], &mut l, &mut r);
+            for (i, v) in l.iter().enumerate() {
+                if v.abs() > 0.5 {
+                    found.push(block * 256 + i);
+                }
+            }
+        }
+        assert_eq!(found, vec![(0.25 * SR) as usize]);
     }
 
     #[test]

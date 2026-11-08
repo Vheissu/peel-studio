@@ -7,7 +7,11 @@
 //! * **Oversampling**: Off, 2x or 4x with linear-phase half-band filters
 //!   (75 dB or better rejection above 0.58 of the base Nyquist), so
 //!   harmonics created above Nyquist are filtered out before they can fold
-//!   back as aliasing.
+//!   back as aliasing. At 2x and 4x each curve also runs through first-order
+//!   antiderivative anti-aliasing (ADAA), which smooths the corners of the
+//!   hard clip and the folds of the wavefolder before the filters see them.
+//!   "Off" is the raw curve and will alias; it exists for CPU savings and
+//!   deliberately lo-fi use.
 //! * **Latency** is fixed at [`LATENCY`] samples in every oversampling mode
 //!   (shorter filters are padded), so switching quality never changes the
 //!   delay the host compensates. The dry signal in the mix is delayed to
@@ -67,14 +71,19 @@ static PARAMS: [ParamDescriptor; 6] = [
     ),
     ParamDescriptor::choice(ID_TYPE, "type", "Curve", "Drive", TYPES, 0),
     ParamDescriptor::linear(ID_TONE, "tone", "Tone", "Tone", -1.0, 1.0, 0.0, Unit::None),
-    ParamDescriptor::choice(
-        ID_OVERSAMPLING,
-        "oversampling",
-        "Oversampling",
-        "Quality",
-        OVERSAMPLING,
-        1,
-    ),
+    // A quality setting, not a performance control: switching clears the
+    // oversampling filters, so it is not offered for automation.
+    ParamDescriptor {
+        automatable: false,
+        ..ParamDescriptor::choice(
+            ID_OVERSAMPLING,
+            "oversampling",
+            "Oversampling",
+            "Quality",
+            OVERSAMPLING,
+            1,
+        )
+    },
     ParamDescriptor::linear(ID_MIX, "mix", "Mix", "Output", 0.0, 1.0, 1.0, Unit::Percent),
     ParamDescriptor::linear(
         ID_OUTPUT,

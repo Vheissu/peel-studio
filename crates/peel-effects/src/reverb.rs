@@ -266,8 +266,9 @@ const INJECT: [f32; 8] = [1.0, 1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 1.0];
 const TAP_L: [f32; 8] = [1.0, 1.0, -1.0, -1.0, 1.0, 1.0, -1.0, -1.0];
 const TAP_R: [f32; 8] = [1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0];
 
-/// 1/sqrt(8): keeps the tap sum at unity RMS for uncorrelated lines.
-const TAP_NORM: f32 = 0.353_553_4;
+/// 1/sqrt(8) keeps the tap sum at unity RMS for uncorrelated lines; the extra
+/// 3 dB puts a sustained wet signal at a useful level next to the dry one.
+const TAP_NORM: f32 = 0.353_553_4 * 1.41;
 
 /// Reverb effect. See the module docs.
 pub struct Reverb {
