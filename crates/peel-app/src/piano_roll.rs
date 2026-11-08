@@ -982,6 +982,7 @@ fn velocity_lane(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn keyboard_shortcuts(
     ui: &mut Ui,
     s: &mut Session,
