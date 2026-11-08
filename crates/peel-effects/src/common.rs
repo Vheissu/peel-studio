@@ -111,7 +111,19 @@ pub(crate) fn run_events<F: Fx>(
             *s = 0.0;
         }
     }
-    let beats_per_frame = ctx.tempo_bpm / (60.0 * f64::from(ctx.sample_rate.max(1.0)));
+    // Garbage transport values must not reach tempo-synced oscillators.
+    let mut clean = *ctx;
+    if !(clean.tempo_bpm.is_finite() && clean.tempo_bpm >= 1.0) {
+        clean.tempo_bpm = 120.0;
+    }
+    if !clean.beat_position.is_finite() {
+        clean.beat_position = 0.0;
+    }
+    if !(clean.sample_rate.is_finite() && clean.sample_rate >= 1_000.0) {
+        clean.sample_rate = 48_000.0;
+    }
+    let ctx = &clean;
+    let beats_per_frame = ctx.tempo_bpm / (60.0 * f64::from(ctx.sample_rate));
     let mut pos = 0usize;
 
     let segment = |fx: &mut F, from: usize, to: usize, left: &mut [f32], right: &mut [f32]| {

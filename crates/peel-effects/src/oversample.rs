@@ -13,8 +13,6 @@
 //! filter, see [`stage_latency`]: for a 2x stage pair it is `c` samples at the
 //! base rate, for the inner stage of 4x it is `c_b / 2` more.
 
-use peel_dsp::delay::DelayLine;
-
 /// Kaiser window shape for about 80 dB of stopband rejection.
 const KAISER_BETA: f64 = 8.0;
 
@@ -71,32 +69,97 @@ pub(crate) const fn stage_latency(taps: usize) -> usize {
     (taps - 1) / 2
 }
 
+/// The last `n` samples in a doubled buffer, so any window of `n` samples is
+/// one contiguous slice and reads need no wrap-around arithmetic.
+struct History {
+    buf: Vec<f32>,
+    n: usize,
+    write: usize,
+}
+
+impl History {
+    fn new(n: usize) -> History {
+        History {
+            buf: vec![0.0; 2 * n],
+            n,
+            write: 0,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.buf.fill(0.0);
+        self.write = 0;
+    }
+
+    #[inline]
+    fn push(&mut self, x: f32) {
+        self.buf[self.write] = x;
+        self.buf[self.write + self.n] = x;
+        self.write += 1;
+        if self.write == self.n {
+            self.write = 0;
+        }
+    }
+
+    /// The window, oldest sample first; `window[len - 1 - k]` is `k` samples
+    /// before the newest.
+    #[inline]
+    fn window(&self) -> &[f32] {
+        &self.buf[self.write..self.write + self.n]
+    }
+}
+
+/// A symmetric filter folded into `h * (x[a] + x[b])` terms, where `a` and
+/// `b` count samples back from the newest. Taps that are their own mirror
+/// (the center) have `a == b` and half weight.
+fn fold_symmetric(
+    taps: &[(usize, f32)],
+    c: usize,
+    keep: impl Fn(usize) -> bool,
+) -> Vec<(usize, usize, f32)> {
+    let mut out = Vec::new();
+    for &(k, v) in taps {
+        if !keep(k) {
+            continue;
+        }
+        if k == c {
+            out.push((k, k, v * 0.5));
+        } else if k < c {
+            out.push((k, 2 * c - k, v));
+        }
+    }
+    out
+}
+
 /// Zero-stuffing 2x upsampler with the half-band filter folded in.
 pub(crate) struct Interpolator2 {
-    even: Vec<(usize, f32)>,
-    odd: Vec<(usize, f32)>,
-    hist: DelayLine,
+    even: Vec<(usize, usize, f32)>,
+    odd: Vec<(usize, usize, f32)>,
+    hist: History,
 }
 
 impl Interpolator2 {
     pub fn new(taps: usize) -> Interpolator2 {
         let h = design_halfband(taps);
-        // y[2m] uses even k at x[m - k/2]; y[2m+1] uses odd k at x[m - (k-1)/2].
-        // The filter has gain 2 here, which compensates the zero-stuffing.
-        let even = h
-            .iter()
-            .filter(|(k, _)| k % 2 == 0)
-            .map(|(k, v)| (k / 2, v * 2.0))
-            .collect();
-        let odd = h
-            .iter()
-            .filter(|(k, _)| k % 2 == 1)
-            .map(|(k, v)| ((k - 1) / 2, v * 2.0))
-            .collect();
+        let c = stage_latency(taps);
+        // y[2m] uses even k at x[m - k/2]; y[2m+1] uses odd k at
+        // x[m - (k-1)/2]. The gain of 2 compensates the zero-stuffing.
+        let doubled: Vec<(usize, f32)> = h.iter().map(|&(k, v)| (k, v * 2.0)).collect();
+        let mut even = fold_symmetric(&doubled, c, |k| k % 2 == 0);
+        let mut odd = fold_symmetric(&doubled, c, |k| k % 2 == 1);
+        // Convert tap distances at the high rate into low-rate sample counts.
+        for t in &mut even {
+            t.0 /= 2;
+            t.1 /= 2;
+        }
+        for t in &mut odd {
+            t.0 = (t.0 - 1) / 2;
+            t.1 = (t.1 - 1) / 2;
+        }
         Interpolator2 {
             even,
             odd,
-            hist: DelayLine::new(taps / 2 + 4),
+            hist: History::new(c + 2),
         }
     }
 
@@ -108,16 +171,17 @@ impl Interpolator2 {
     #[inline]
     pub fn process(&mut self, x: f32) -> (f32, f32) {
         self.hist.push(x);
-        // After the push, read(1) is x[m], read(1 + j) is x[m - j].
+        let w = self.hist.window();
+        let last = w.len() - 1;
         let a: f32 = self
             .even
             .iter()
-            .map(|(j, v)| v * self.hist.read(1 + j))
+            .map(|&(ja, jb, v)| v * (w[last - ja] + w[last - jb]))
             .sum();
         let b: f32 = self
             .odd
             .iter()
-            .map(|(j, v)| v * self.hist.read(1 + j))
+            .map(|&(ja, jb, v)| v * (w[last - ja] + w[last - jb]))
             .sum();
         (a, b)
     }
@@ -125,15 +189,16 @@ impl Interpolator2 {
 
 /// Half-band low-pass followed by dropping every second sample.
 pub(crate) struct Decimator2 {
-    taps: Vec<(usize, f32)>,
-    hist: DelayLine,
+    terms: Vec<(usize, usize, f32)>,
+    hist: History,
 }
 
 impl Decimator2 {
     pub fn new(taps: usize) -> Decimator2 {
+        let c = stage_latency(taps);
         Decimator2 {
-            taps: design_halfband(taps),
-            hist: DelayLine::new(taps + 4),
+            terms: fold_symmetric(&design_halfband(taps), c, |_| true),
+            hist: History::new(taps),
         }
     }
 
@@ -144,12 +209,14 @@ impl Decimator2 {
     /// Takes two input samples in time order, returns one output sample.
     #[inline]
     pub fn process(&mut self, first: f32, second: f32) -> f32 {
+        // The output is aligned to `first` (the newest sample when computed).
         self.hist.push(first);
-        // Newest sample is `first` (read(1)); read(1 + k) is k samples older.
+        let w = self.hist.window();
+        let last = w.len() - 1;
         let y: f32 = self
-            .taps
+            .terms
             .iter()
-            .map(|(k, v)| v * self.hist.read(1 + k))
+            .map(|&(ja, jb, v)| v * (w[last - ja] + w[last - jb]))
             .sum();
         self.hist.push(second);
         y

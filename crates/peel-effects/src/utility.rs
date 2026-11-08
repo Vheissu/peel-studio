@@ -59,7 +59,7 @@ static PARAMS: [ParamDescriptor; 8] = [
     ParamDescriptor::toggle(ID_SWAP, "swap", "Swap L/R", "Stereo", false),
     ParamDescriptor::toggle(ID_PHASE_L, "phase_l", "Invert L", "Polarity", false),
     ParamDescriptor::toggle(ID_PHASE_R, "phase_r", "Invert R", "Polarity", false),
-    ParamDescriptor::toggle(ID_DC_BLOCK, "dc_block", "DC Block", "Filter", false),
+    ParamDescriptor::toggle(ID_DC_BLOCK, "dc_block", "DC Block", "DC", false),
 ];
 
 pub static DESCRIPTOR: DeviceDescriptor = DeviceDescriptor {

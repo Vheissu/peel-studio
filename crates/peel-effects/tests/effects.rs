@@ -312,6 +312,49 @@ fn nan_and_infinity_in_the_input_do_not_poison_state() {
 }
 
 #[test]
+fn garbage_transport_values_are_harmless() {
+    for id in TYPE_IDS {
+        let mut d = make(id, None, SR, 256);
+        let desc = d.descriptor();
+        // Turn on every tempo-synced path that exists.
+        for key in ["sync", "lfo.sync"] {
+            if let Some(p) = desc.param_by_key(key) {
+                d.set_param(p.id, 1.0);
+            }
+        }
+        for (tempo, beat) in [
+            (f64::NAN, f64::NAN),
+            (0.0, -5.0),
+            (f64::INFINITY, f64::INFINITY),
+            (-120.0, 1e300),
+        ] {
+            let mut ctx = peel_dsp::ProcessContext::new(SR);
+            ctx.tempo_bpm = tempo;
+            ctx.beat_position = beat;
+            ctx.playing = true;
+            let (mut l, mut r) = program(4_096, 12);
+            for (cl, cr) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+                d.process(&ctx, &[], cl, cr);
+            }
+            assert!(
+                l.iter().chain(r.iter()).all(|v| v.is_finite()),
+                "{id} with tempo {tempo}"
+            );
+        }
+        // And it recovers once the transport is sane again.
+        let ctx = peel_dsp::ProcessContext::new(SR);
+        let (mut l, mut r) = program(SR as usize, 13);
+        for (cl, cr) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+            d.process(&ctx, &[], cl, cr);
+        }
+        assert!(
+            l.iter().chain(r.iter()).all(|v| v.is_finite()),
+            "{id} did not recover"
+        );
+    }
+}
+
+#[test]
 fn processing_is_deterministic() {
     for id in TYPE_IDS {
         for preset in peel_effects::presets(id) {

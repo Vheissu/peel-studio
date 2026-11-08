@@ -88,7 +88,7 @@ static PARAMS: [ParamDescriptor; 13] = [
     ParamDescriptor::log(
         ID_BEATS_L,
         "beats.left",
-        "Left",
+        "Left Note",
         "Time",
         0.125,
         8.0,
@@ -98,7 +98,7 @@ static PARAMS: [ParamDescriptor; 13] = [
     ParamDescriptor::log(
         ID_BEATS_R,
         "beats.right",
-        "Right",
+        "Right Note",
         "Time",
         0.125,
         8.0,
