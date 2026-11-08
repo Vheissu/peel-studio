@@ -375,6 +375,13 @@ impl Session {
         })
     }
 
+    /// Remembers which input to open when one is next needed (arming a
+    /// lane), without opening it now, so no permission prompt appears at
+    /// launch.
+    pub fn prefer_input_device(&mut self, device: Option<String>) {
+        self.io.config.input_device = device.filter(|d| !d.trim().is_empty());
+    }
+
     /// Closes the input (meter, monitoring and arming stop working until one
     /// is opened again). Refused while recording.
     pub fn close_input(&mut self) {

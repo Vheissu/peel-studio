@@ -209,6 +209,12 @@ impl Studio {
                 self.session.doc.end_gesture();
             }
         }
+        if std::env::var_os("PEEL_ARM").is_some() {
+            for k in [3, 4] {
+                let lane = self.session.project().arrangement().tracks[k].id;
+                self.session.arm_lane(lane, true);
+            }
+        }
         if std::env::var_os("PEEL_GRAPH").is_some() {
             self.ws.rack_graph = true;
         }
@@ -581,6 +587,29 @@ impl Studio {
     fn status_bar(&mut self, ui: &mut Ui, r: Rect) {
         let t = ui.theme.clone();
         let mut row = r.shrink2(12.0, 0.0);
+        if let Some(rec) = self.session.recording_status() {
+            let mut cell = row.cut_left(118.0);
+            let pulse = 0.6 + 0.4 * (ui.time() as f32 * 4.0).sin().abs();
+            ui.scene.circle(
+                peel_ui::vec2(cell.x + 5.0, cell.center().y),
+                4.5,
+                t.record.alpha(pulse),
+            );
+            cell.cut_left(16.0);
+            let secs = rec.seconds as u64;
+            let label = if rec.waiting_for_transport {
+                "REC ready".to_string()
+            } else {
+                format!("REC {}:{:02}", secs / 60, secs % 60)
+            };
+            ui.text(cell, &label, t.caption, t.record, Align::Start);
+            if let Some(e) = rec.error.as_deref() {
+                let er = row.cut_left(320.0);
+                let e = ui.fit_text(e, t.caption, er.w);
+                ui.text(er, &e, t.caption, t.warn, Align::Start);
+            }
+            row.cut_left(8.0);
+        }
         if let Some(job) = &self.ws.export {
             job.idle();
             if let Some(result) = job.take_result() {
@@ -769,6 +798,11 @@ impl App for Studio {
 impl Studio {
     fn update_inner(&mut self, ui: &mut Ui, win: &WindowControl) {
         self.session.tick();
+        // Input meter: peak hold with a fall of about 20 dB a second.
+        let (l, r) = self.session.input_level();
+        let fall = 0.1f32.powf(ui.dt().clamp(0.0, 0.1));
+        let m = &mut self.ws.input_meter;
+        *m = ((m.0 * fall).max(l), (m.1 * fall).max(r));
         if let Some(type_id) = &self.debug_plugin
             && let Some(name) = self
                 .session
@@ -832,7 +866,7 @@ impl Studio {
         {
             ui.open_popup(W::new("settings-panel"), Rect::ZERO);
         }
-        crate::settings::panel(ui, &mut self.session, &mut self.prefs);
+        crate::settings::panel(ui, &mut self.session, &mut self.prefs, self.ws.input_meter);
         if self.welcome {
             self.welcome(ui);
         } else if self.show_keys && crate::keys::overlay(ui) {

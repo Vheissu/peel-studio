@@ -38,11 +38,15 @@ fn main() {
     .init();
     let open: Option<PathBuf> = std::env::args_os().nth(1).map(PathBuf::from);
     let prefs = prefs::Prefs::load();
-    let session = Session::new_with_audio(
+    let mut session = Session::new_with_audio(
         template::beat_and_melody(),
         prefs.audio_device.clone(),
         prefs.buffer_frames,
     );
+    session.prefer_input_device(prefs.input_device.clone());
+    if let Some(c) = prefs.input_channels() {
+        session.set_input_channels(c);
+    }
     let options = WindowOptions {
         title: "Peel Studio".into(),
         ..Default::default()

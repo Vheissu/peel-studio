@@ -98,12 +98,14 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
         t.record,
         15.0,
     );
+    let song = studio.session.mode() == peel_session::PlayMode::Song;
     ui.tooltip(
         &rec,
-        if armed {
-            "Recording notes into the pattern"
-        } else {
-            "Record notes into the pattern"
+        match (armed, song) {
+            (true, true) => "Recording audio onto armed lanes",
+            (false, true) => "Record audio onto armed lanes",
+            (true, false) => "Recording notes into the pattern",
+            (false, false) => "Record notes into the pattern",
         },
     );
     if rec.clicked {

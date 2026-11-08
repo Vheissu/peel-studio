@@ -163,6 +163,7 @@ pub fn draw(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) {
     markers(ui, top, &v, s);
     track_heads(ui, heads, &v, &arr.tracks, s);
     clips(ui, &v, &arr.tracks, &arr.clips, s, ws);
+    take_preview(ui, &v, &arr.tracks, s);
 
     // Patterns and samples dragged from the browser, and files from the OS.
     let accepts = |i: &BrowserItem| matches!(i, BrowserItem::Pattern(_) | BrowserItem::Sample(_));
@@ -711,6 +712,40 @@ fn track_heads(ui: &mut Ui, r: Rect, v: &View, tracks: &[Track], s: &mut Session
         );
         let mut inner = row.shrink2(10.0, 0.0);
         let led_r = inner.cut_right(20.0);
+        // Record arm, shown on hover or while armed.
+        let arm_r = inner.cut_right(24.0);
+        let armed = s.is_lane_armed(tr.id);
+        if armed || ui.pointer_in(row) {
+            let id = W::new(("pl-arm", tr.id));
+            let resp = ui.interact_button(id, arm_r, &format!("Arm {} for recording", tr.name));
+            let c = arm_r.center();
+            if armed {
+                let pulse = if s.is_recording() {
+                    0.75 + 0.25 * (ui.time() as f32 * 5.0).sin()
+                } else {
+                    1.0
+                };
+                ui.scene.circle(c, 6.5, t.record.alpha(pulse));
+            } else {
+                let fill = if resp.hovered {
+                    t.record.alpha(0.35)
+                } else {
+                    t.control
+                };
+                ui.scene.circle_stroke(c, 6.5, fill, 1.2, t.text_faint);
+            }
+            ui.tooltip(
+                &resp,
+                if armed {
+                    "Disarm"
+                } else {
+                    "Arm for audio recording"
+                },
+            );
+            if resp.clicked {
+                s.arm_lane(tr.id, !armed);
+            }
+        }
         let led = ui.led(W::new(("pl-led", tr.id)), led_r, !tr.muted, t.play);
         ui.tooltip(&led, if tr.muted { "Unmute lane" } else { "Mute lane" });
         if led.clicked {
@@ -2328,4 +2363,51 @@ fn arrangement_menu(ui: &mut Ui, anchor: Rect, s: &mut Session) {
         s.doc
             .edit("Rename arrangement", |p| p.arrangement_mut().name = name);
     }
+}
+
+/// The take being recorded, growing from where it started to the playhead
+/// on every armed lane.
+fn take_preview(ui: &mut Ui, v: &View, tracks: &[Track], s: &Session) {
+    let st = W::new("take-start");
+    let status = s.recording_status().filter(|r| !r.waiting_for_transport);
+    let Some(status) = status else {
+        *ui.state::<Option<f64>>(st) = None;
+        return;
+    };
+    let now = s.position();
+    let start = *ui.state::<Option<f64>>(st).get_or_insert(now);
+    if now <= start {
+        return;
+    }
+    let t = ui.theme.clone();
+    ui.scene.push_clip(v.lanes);
+    for lane in &status.lanes {
+        let Some(i) = tracks.iter().position(|x| x.id == *lane) else {
+            continue;
+        };
+        let (x0, x1) = (v.x(start), v.x(now));
+        let r = Rect {
+            x: x0,
+            y: v.lane_y(i) + 2.0,
+            w: x1 - x0,
+            h: v.lane_h - 4.0,
+        };
+        ui.scene.rect(r, t.radius_s, t.record.alpha(0.18));
+        ui.scene.outline(r, t.radius_s, 1.0, t.record.alpha(0.7));
+        ui.scene
+            .rect(Rect { h: 18.0, ..r }, t.radius_s, t.record.alpha(0.85));
+        ui.text(
+            Rect {
+                x: r.x + 6.0,
+                w: (r.w - 6.0).max(0.0),
+                h: 18.0,
+                ..r
+            },
+            "Recording",
+            t.caption,
+            ink_on(t.record),
+            Align::Start,
+        );
+    }
+    ui.scene.pop_clip();
 }

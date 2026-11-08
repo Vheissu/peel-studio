@@ -30,7 +30,8 @@ effects. There is no web view.
   pan, faders, meters, mute and solo; automation of any device parameter,
   track volume or pan.
 - Playing and recording: computer keyboard and hardware MIDI keyboards with
-  sustain, note recording into patterns, scales and chord stamping,
+  sustain, note recording into patterns, audio recording onto armed
+  Playlist lanes with input monitoring, scales and chord stamping,
   quantize, swing, tap tempo.
 - Exact rational musical time, sample-accurate playback that cannot drift,
   and a realtime audio path verified to make no allocations.

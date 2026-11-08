@@ -19,6 +19,8 @@ pub struct Recorder {
     gesture: Option<u64>,
     takes: u64,
     warned: bool,
+    /// An audio take was attempted during this run of the transport.
+    audio_tried: bool,
 }
 
 impl Recorder {
@@ -35,7 +37,8 @@ impl Recorder {
         match s.mode() {
             PlayMode::Pattern(p) => Some(p),
             PlayMode::Song => {
-                if !self.warned {
+                // Armed lanes mean audio recording; nothing to warn about.
+                if !self.warned && s.armed_lanes().is_empty() {
                     s.notify(
                         "Switch to Pattern mode to record notes into a pattern",
                         true,
@@ -86,6 +89,22 @@ impl Recorder {
     /// Per-frame upkeep: records MIDI keyboard notes and closes the take
     /// when playback stops.
     pub fn frame(&mut self, s: &mut Session) {
+        // Audio takes: Record armed, Song mode, at least one armed lane.
+        // Starts with the transport (or on arming while it plays) and ends
+        // with Stop or by disarming Record.
+        if self.armed && s.is_playing() && s.mode() == PlayMode::Song && !s.armed_lanes().is_empty()
+        {
+            if !s.is_recording() && !self.audio_tried {
+                self.audio_tried = true;
+                // A refusal is posted as a notice by the session.
+                let _ = s.start_recording();
+            }
+        } else if s.is_recording() && !self.armed {
+            s.stop_recording();
+        }
+        if !s.is_playing() {
+            self.audio_tried = false;
+        }
         let notes = s.take_recorded_midi();
         if self.active(s).is_some() {
             for n in notes {

@@ -1061,3 +1061,51 @@ fn markers_jump_move_and_get_added() {
     );
     assert_eq!(all[1].position, Time::beats(8));
 }
+
+#[test]
+fn recording_audio_onto_an_armed_lane() {
+    use peel_document::ClipContent;
+    let mut h = Harness::new();
+    let dir = std::env::temp_dir().join(format!("peel-app-rec-{}", peel_document::Id::new()));
+    h.studio.session.set_recordings_dir(Some(dir.clone()));
+    let mut input = h.studio.session.open_injected_input(48_000, 1);
+    let lane = h.session().project().arrangement().tracks[4].id;
+    // The arm button shows on hover.
+    let head = h.rect(W::new(("pl-lane-name", lane)));
+    h.move_to(head.center());
+    h.click(W::new(("pl-arm", lane)));
+    assert!(h.session().is_lane_armed(lane));
+    h.studio.session.set_mode(PlayMode::Song);
+    h.click(W::new("rec"));
+    h.studio.session.play();
+    h.frame();
+    assert!(
+        h.session().is_recording(),
+        "Record + Play in Song mode starts a take"
+    );
+    let tone: Vec<f32> = (0..24_000).map(|i| (i as f32 * 0.05).sin() * 0.5).collect();
+    for chunk in tone.chunks(512) {
+        input.push(chunk);
+        std::thread::sleep(std::time::Duration::from_millis(4));
+        h.frame();
+    }
+    h.studio.session.stop();
+    let start = std::time::Instant::now();
+    let on_lane = |h: &Harness| {
+        h.session()
+            .project()
+            .arrangement()
+            .clips
+            .iter()
+            .filter(|c| c.track == lane && matches!(c.content, ClipContent::Audio { .. }))
+            .count()
+    };
+    while on_lane(&h) == 0 {
+        assert!(start.elapsed().as_secs() < 10, "the take became a clip");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        h.frame();
+    }
+    assert_eq!(on_lane(&h), 1);
+    assert_eq!(h.session().doc.undo_label(), Some("Record audio"));
+    std::fs::remove_dir_all(&dir).ok();
+}

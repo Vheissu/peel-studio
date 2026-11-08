@@ -69,6 +69,8 @@ pub struct PlaylistView {
 }
 
 pub struct Workspace {
+    /// Input peak with decay (left, right), read once per frame.
+    pub input_meter: (f32, f32),
     pub dock: DockTab,
     pub dock_h: f32,
     pub browser_w: f32,
@@ -99,6 +101,7 @@ pub struct Workspace {
 impl Default for Workspace {
     fn default() -> Self {
         Workspace {
+            input_meter: (0.0, 0.0),
             dock: DockTab::Rack,
             dock_h: 400.0,
             browser_w: 236.0,

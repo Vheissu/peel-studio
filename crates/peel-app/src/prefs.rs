@@ -16,6 +16,10 @@ pub struct Prefs {
     pub buffer_frames: Option<u32>,
     pub octave: i32,
     pub sample_dir: Option<PathBuf>,
+    /// Audio input to record from (`None` is the system default).
+    pub input_device: Option<String>,
+    /// Device channels recorded: one (mono) or two (stereo), zero-based.
+    pub input_channels: Vec<u16>,
 }
 
 impl Default for Prefs {
@@ -27,6 +31,8 @@ impl Default for Prefs {
             buffer_frames: None,
             octave: 4,
             sample_dir: None,
+            input_device: None,
+            input_channels: Vec::new(),
         }
     }
 }
@@ -86,5 +92,23 @@ impl Prefs {
     /// Recent projects that still exist on disk.
     pub fn existing_recent(&self) -> Vec<PathBuf> {
         self.recent.iter().filter(|p| p.exists()).cloned().collect()
+    }
+}
+
+impl Prefs {
+    /// The saved channel choice as the session's type.
+    pub fn input_channels(&self) -> Option<peel_session::InputChannels> {
+        match self.input_channels.as_slice() {
+            [a] => Some(peel_session::InputChannels::Mono(*a)),
+            [a, b] => Some(peel_session::InputChannels::Stereo(*a, *b)),
+            _ => None,
+        }
+    }
+
+    pub fn set_input_channels(&mut self, c: peel_session::InputChannels) {
+        self.input_channels = match c {
+            peel_session::InputChannels::Mono(a) => vec![a],
+            peel_session::InputChannels::Stereo(a, b) => vec![a, b],
+        };
     }
 }
