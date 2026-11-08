@@ -7,6 +7,7 @@ use rtrb::{Consumer, RingBuffer};
 use crate::EngineConfig;
 use crate::command::{EngineCommand, Retired};
 use crate::engine::Engine;
+use crate::live::{LiveInput, LiveTiming, RecordedReceiver};
 use crate::telemetry::Telemetry;
 
 /// Renders audio faster (or slower) than realtime for export and tests.
@@ -54,6 +55,22 @@ impl OfflineEngine {
             out.push(item);
         }
         out
+    }
+
+    /// Takes the producer end of the live input queue (once). Events are
+    /// applied at the start of the next `render`, at sample offset zero (an
+    /// offline engine has no device callbacks to time them against).
+    pub fn take_live_input(&mut self) -> Option<LiveInput> {
+        self.engine.take_live_input()
+    }
+
+    /// Takes the ring of recorded live notes (once).
+    pub fn take_recorded(&mut self) -> Option<RecordedReceiver> {
+        self.engine.take_recorded()
+    }
+
+    pub fn set_live_timing(&mut self, timing: LiveTiming) {
+        self.engine.set_live_timing(timing);
     }
 
     /// Includes the metronome and preview voice in the output (off by

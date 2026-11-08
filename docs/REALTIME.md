@@ -18,6 +18,12 @@ ENG-RT-010 of the specification.
 ## How work crosses the boundary
 
 - Control to engine: `EngineCommand` through a bounded `rtrb` SPSC queue.
+- Live performance input (MIDI keyboards): `LiveInput` through a second
+  bounded `rtrb` ring that only MIDI callback threads write (they share the
+  producer behind a mutex the audio thread never takes). The engine drains at
+  most 512 events per block, applies the sustain pedal from fixed arrays and
+  reports each note to a third ring for recording. Note-ons stop being
+  accepted before the ring is full, so note-offs always fit.
 - Engine to control: `Retired` objects (old plans, devices, samples) through a
   second bounded queue. The control thread drops them.
 - Telemetry: plain atomics in `Telemetry` (`Relaxed`; peaks are a running

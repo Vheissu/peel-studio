@@ -59,6 +59,24 @@
 //! own reference and returns it as [`Retired::Sample`], so nothing is freed
 //! on the audio thread.
 //!
+//! # Live input
+//!
+//! Hardware MIDI does not go through the command queue. [`EngineHandle::take_live_input`]
+//! hands out a [`LiveInput`] whose notes travel through a queue of their own to
+//! the instrument chosen with [`EngineHandle::live_target`]. The sustain pedal
+//! is applied by the engine (see [`live`]), live notes are staged with the
+//! same voice ids as `EngineCommand::LiveNote` (`LIVE_VOICE_BASE + key`), and
+//! every note that arrives is also copied, with the transport position, into a
+//! ring the control thread drains with [`EngineHandle::drain_recorded`].
+//!
+//! # Audio devices
+//!
+//! [`list_output_devices`] enumerates what the system offers and
+//! [`EngineConfig::device`] picks one. To switch, drop or
+//! [`stop_audio`](EngineHandle::stop_audio) the handle and start a new one;
+//! the new engine begins empty, so the caller resends devices, samples and the
+//! plan (`peel-session` does this in `restart_audio`).
+//!
 //! # Realtime allocation checking
 //!
 //! With the `rt-check` feature the cpal callback runs inside
@@ -80,6 +98,7 @@ pub mod command;
 mod engine;
 mod events;
 mod handle;
+pub mod live;
 mod mixer;
 mod monitor;
 mod offline;
@@ -90,7 +109,10 @@ pub mod telemetry;
 
 pub use command::{EngineCommand, Retired};
 pub use engine::Engine;
-pub use handle::{EngineError, EngineHandle};
+pub use handle::{EngineError, EngineHandle, OutputDeviceInfo, list_output_devices};
+pub use live::{
+    LIVE_TARGET_NONE, LiveInput, LiveStats, LiveTarget, LiveTiming, RecordedNote, RecordedReceiver,
+};
 pub use offline::OfflineEngine;
 pub use plan::{
     AudioRegion, ChannelIndex, ChannelRoute, RenderPlan, SeqEvent, SeqKind, Slot, TrackIndex,
@@ -114,6 +136,10 @@ pub struct EngineConfig {
     pub sample_rate: Option<u32>,
     /// Preferred device buffer size in frames.
     pub buffer_frames: Option<u32>,
+    /// Output device to open, by the name or id from
+    /// [`list_output_devices`]. `None`, or a device that is not found, uses
+    /// the system default (the latter with a logged warning).
+    pub device: Option<String>,
     /// Largest block the engine processes at once; device callbacks larger
     /// than this are split.
     pub max_block: usize,
@@ -130,6 +156,7 @@ impl Default for EngineConfig {
         EngineConfig {
             sample_rate: None,
             buffer_frames: Some(256),
+            device: None,
             max_block: 256,
             device_slots: telemetry::MAX_SLOTS,
             command_capacity: 8192,
