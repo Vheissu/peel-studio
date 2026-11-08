@@ -148,6 +148,10 @@ struct MeterState {
     spoken_at: f64,
 }
 
+/// Whether an icon button has ever been on, which marks it as a toggle.
+#[derive(Default)]
+struct ToggleSeen(bool);
+
 /// Keyboard step of a splitter, in logical pixels.
 const SPLITTER_STEP: f32 = 16.0;
 
@@ -288,12 +292,20 @@ impl Ui {
     }
 
     /// An icon button is named after its icon until a tooltip or an explicit
-    /// name says better. It reads as pressed when `on`.
+    /// name says better. A button that has been `on` is a toggle from then
+    /// on; one that never was cannot be told from a plain button (say
+    /// `Semantics::patch().toggled(false)` to declare a toggle early).
     fn describe_icon_button(&mut self, id: Id, r: Rect, icon: &str, on: bool) {
+        if !self.accessibility_active() {
+            return;
+        }
+        let seen = &mut self.state::<ToggleSeen>(id.with("a11y-toggle")).0;
+        *seen |= on;
+        let toggle = *seen;
         self.a11y_node(id, r, RANK_ICON, || {
             let mut s = Semantics::new(Role::Button);
-            if on {
-                s = s.toggled(true);
+            if toggle {
+                s = s.toggled(on);
             }
             match icons::name(icon) {
                 Some(n) => s.label(n),
@@ -1148,9 +1160,17 @@ impl Ui {
                 self.input.scroll = Vec2::ZERO;
             }
         }
+        self.take_scroll_requests(id, view, offset);
         let max = vec2((content.x - view.w).max(0.0), (content.y - view.h).max(0.0));
         offset.x = offset.x.clamp(0.0, max.x);
         offset.y = offset.y.clamp(0.0, max.y);
+        let (ox, oy) = (f64::from(offset.x), f64::from(offset.y));
+        self.a11y_node(id, view, 0, || {
+            Semantics::new(Role::ScrollView).scroll(
+                (max.x > 0.0).then_some((ox, f64::from(max.x))),
+                (max.y > 0.0).then_some((oy, f64::from(max.y))),
+            )
+        });
         let t = self.theme.clone();
         if max.y > 0.0 {
             let track = Rect {
@@ -1203,6 +1223,29 @@ impl Ui {
             );
             self.scene
                 .rect(thumb, 2.0, t.text_faint.alpha(0.25 + hot * 0.35));
+        }
+    }
+
+    /// Scroll requests from assistive technology: by a line or a page, or to
+    /// an offset.
+    fn take_scroll_requests(&mut self, id: Id, view: Rect, offset: &mut Vec2) {
+        use accesskit::{ActionData, ScrollUnit};
+        for (action, dx, dy) in [
+            (Action::ScrollDown, 0.0, 1.0),
+            (Action::ScrollUp, 0.0, -1.0),
+            (Action::ScrollRight, 1.0, 0.0),
+            (Action::ScrollLeft, -1.0, 0.0),
+        ] {
+            while let Some(req) = self.take_action(id, action) {
+                let page = matches!(req.data, Some(ActionData::ScrollUnit(ScrollUnit::Page)));
+                offset.x += dx * if page { view.w * 0.9 } else { 36.0 };
+                offset.y += dy * if page { view.h * 0.9 } else { 36.0 };
+            }
+        }
+        if let Some(req) = self.take_action(id, Action::SetScrollOffset)
+            && let Some(ActionData::SetScrollOffset(p)) = req.data
+        {
+            *offset = vec2(p.x as f32, p.y as f32);
         }
     }
 

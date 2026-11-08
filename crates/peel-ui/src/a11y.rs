@@ -142,6 +142,9 @@ pub struct Semantics {
     pub(crate) actions: Vec<Action>,
     pub(crate) rect: Option<Rect>,
     pub(crate) vertical: Option<bool>,
+    /// Scroll position and its maximum, per axis.
+    pub(crate) scroll_x: Option<(f64, f64)>,
+    pub(crate) scroll_y: Option<(f64, f64)>,
     pub(crate) live: bool,
 }
 
@@ -281,6 +284,24 @@ impl Semantics {
         self
     }
 
+    /// Scroll position (`offset`) and extent (`max` offset) of a scrolling
+    /// view, per axis; an axis with nothing to scroll is `None`. Advertises
+    /// the scroll actions for the axes that can move.
+    pub fn scroll(mut self, x: Option<(f64, f64)>, y: Option<(f64, f64)>) -> Semantics {
+        self.scroll_x = x;
+        self.scroll_y = y;
+        if x.is_some() || y.is_some() {
+            self = self.action(Action::SetScrollOffset);
+        }
+        if x.is_some() {
+            self = self.action(Action::ScrollLeft).action(Action::ScrollRight);
+        }
+        if y.is_some() {
+            self = self.action(Action::ScrollUp).action(Action::ScrollDown);
+        }
+        self
+    }
+
     /// A polite live region: changes to its label are announced.
     pub fn live(mut self) -> Semantics {
         self.live = true;
@@ -306,7 +327,9 @@ impl Semantics {
             disabled,
             focusable,
             rect,
-            vertical
+            vertical,
+            scroll_x,
+            scroll_y
         );
         for a in o.actions {
             if !self.actions.contains(&a) {
@@ -356,6 +379,16 @@ impl Semantics {
             } else {
                 Orientation::Horizontal
             });
+        }
+        if let Some((v, max)) = self.scroll_x {
+            n.set_scroll_x(v);
+            n.set_scroll_x_min(0.0);
+            n.set_scroll_x_max(max);
+        }
+        if let Some((v, max)) = self.scroll_y {
+            n.set_scroll_y(v);
+            n.set_scroll_y_min(0.0);
+            n.set_scroll_y_max(max);
         }
         if self.live {
             n.set_live(Live::Polite);
@@ -568,6 +601,14 @@ impl Ui {
     pub fn value_text(&mut self, r: &Response, text: &str) {
         if self.a11y.on {
             self.describe_node(r.id, Semantics::patch().value(text));
+        }
+    }
+
+    /// Describes a piece of visible text (a heading, a channel name) so
+    /// screen readers can find it. `ui.text` itself is not described.
+    pub fn describe_label(&mut self, id: Id, rect: Rect, text: &str) {
+        if self.a11y.on {
+            self.describe_node(id, Semantics::new(Role::Label).label(text).rect(rect));
         }
     }
 

@@ -309,6 +309,11 @@ fn updates_carry_only_what_changed() {
 
     h.frame(|ui| draw(ui, on));
     assert_eq!(h.updates.len(), 1, "an unchanged frame sends nothing");
+    assert_eq!(
+        h.ui.accessibility_node(b).unwrap().toggled(),
+        None,
+        "a button that was never on looks like a plain button"
+    );
 
     on = true;
     h.frame(|ui| draw(ui, on));
@@ -316,6 +321,18 @@ fn updates_carry_only_what_changed() {
     let ids: Vec<NodeId> = h.updates[1].nodes.iter().map(|(id, _)| *id).collect();
     assert_eq!(ids, vec![Ui::accessibility_node_id(b)]);
     assert!(h.updates[1].tree.is_none());
+    assert_eq!(
+        h.ui.accessibility_node(b).unwrap().toggled(),
+        Some(Toggled::True)
+    );
+    on = false;
+    h.frame(|ui| draw(ui, on));
+    assert_eq!(
+        h.ui.accessibility_node(b).unwrap().toggled(),
+        Some(Toggled::False),
+        "once seen on, a button stays a toggle"
+    );
+    h.updates.truncate(2);
 
     // Reconnecting a screen reader starts over with the whole tree.
     h.ui.set_accessibility_active(false);
@@ -1473,4 +1490,88 @@ fn the_consumer_accepts_a_long_sequence_of_changing_trees() {
         }
     }
     assert!(h.updates.len() > 3);
+}
+
+#[test]
+fn scroll_areas_scroll_for_assistive_technology() {
+    use crate::vec2;
+    let mut h = Harness::new();
+    let id = Id::new("list");
+    let view = rect(0.0, 0.0, 200.0, 300.0);
+    let mut offset = vec2(0.0, 0.0);
+    let content = vec2(200.0, 1000.0);
+    h.frame(|ui| ui.scroll_area(id, view, content, &mut offset));
+    let n = h.ui.accessibility_node(id).unwrap();
+    assert_eq!(n.role(), Role::ScrollView);
+    assert_eq!(n.scroll_y(), Some(0.0));
+    assert_eq!(n.scroll_y_max(), Some(700.0));
+    assert!(n.supports_action(Action::ScrollDown));
+    assert!(
+        !n.supports_action(Action::ScrollRight),
+        "nothing to scroll sideways"
+    );
+
+    h.action(
+        Action::ScrollDown,
+        id,
+        Some(ActionData::ScrollUnit(accesskit::ScrollUnit::Item)),
+    );
+    h.frame(|ui| ui.scroll_area(id, view, content, &mut offset));
+    assert_eq!(offset.y, 36.0);
+    h.action(
+        Action::ScrollDown,
+        id,
+        Some(ActionData::ScrollUnit(accesskit::ScrollUnit::Page)),
+    );
+    h.frame(|ui| ui.scroll_area(id, view, content, &mut offset));
+    assert_eq!(offset.y, 36.0 + 270.0);
+    h.action(Action::ScrollUp, id, None);
+    h.frame(|ui| ui.scroll_area(id, view, content, &mut offset));
+    assert_eq!(offset.y, 270.0);
+    h.action(
+        Action::SetScrollOffset,
+        id,
+        Some(ActionData::SetScrollOffset(accesskit::Point::new(
+            0.0, 5000.0,
+        ))),
+    );
+    h.frame(|ui| ui.scroll_area(id, view, content, &mut offset));
+    assert_eq!(offset.y, 700.0, "clamped to the content");
+    assert_eq!(h.ui.accessibility_node(id).unwrap().scroll_y(), Some(700.0));
+}
+
+#[test]
+fn visible_text_can_be_described() {
+    let mut h = Harness::new();
+    let id = Id::new("heading");
+    h.frame(|ui| ui.describe_label(id, rect(10.0, 10.0, 100.0, 20.0), "Mixer"));
+    let n = h.ui.accessibility_node(id).unwrap();
+    assert_eq!(n.role(), Role::Label);
+    assert_eq!(n.label(), Some("Mixer"));
+}
+
+#[test]
+fn pointer_use_never_shows_a_focus_ring_or_takes_keys() {
+    // Clicking around with the mouse leaves keyboard focus alone, so the
+    // app's shortcuts keep working afterwards.
+    let mut h = Harness::new();
+    let id = Id::new("b");
+    let draw = |ui: &mut Ui| ui.button(id, cell(0), "Go");
+    h.frame(draw);
+    let p = cell(0).center();
+    h.ui.input.pointer = Some(p);
+    h.frame(draw);
+    h.ui.input.pressed[0] = true;
+    h.ui.input.down[0] = true;
+    h.frame(draw);
+    h.ui.input.released[0] = true;
+    h.ui.input.down[0] = false;
+    let r = h.frame(draw);
+    assert!(r.clicked);
+    assert_eq!(h.ui.kb_focus(), None);
+    h.press(named(NamedKey::Space));
+    h.frame(|ui| {
+        assert!(app_sees(ui, NamedKey::Space));
+        draw(ui);
+    });
 }
