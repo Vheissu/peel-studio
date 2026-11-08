@@ -126,6 +126,7 @@ pub fn install(dir: &Path, stem: &str) -> PathBuf {
         )
         .expect("write Info.plist");
     } else {
+        std::fs::create_dir_all(dir).expect("create plugin folder");
         std::fs::copy(library(), &clap).expect("copy library");
     }
     clap

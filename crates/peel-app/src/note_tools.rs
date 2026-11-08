@@ -237,11 +237,15 @@ fn preview(ui: &mut Ui, s: &mut Session, ws: &mut Workspace) {
 }
 
 fn finish(ui: &mut Ui, s: &mut Session, ws: &mut Workspace, keep: bool) {
+    let name = ui.state::<State>(PANEL).settings.tool().name();
     let Some(a) = ui.state::<State>(PANEL).active.take() else {
         return;
     };
     if a.applied {
         s.doc.end_gesture();
+        // The step is named after the tool that was applied, not the one
+        // the preview started with.
+        s.doc.relabel_last(name);
         if !keep {
             s.doc.undo();
             ws.roll.selection = a.original.iter().map(|n| n.id).collect();

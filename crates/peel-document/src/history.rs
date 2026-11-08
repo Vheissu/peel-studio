@@ -78,13 +78,6 @@ impl Document {
         if self.gesture != Some(gesture) {
             self.gesture = Some(gesture);
             self.push_checkpoint(label.into());
-        } else if let Some(last) = self.undo.last_mut() {
-            // A gesture's step is named by its latest edit (a previewed
-            // tool can change while it is being shaped).
-            let label = label.into();
-            if last.label != label {
-                last.label = label;
-            }
         }
         self.apply(f)
     }
@@ -93,6 +86,14 @@ impl Document {
     /// plugin state captured on save): no undo entry, no revision change.
     pub fn patch(&mut self, f: impl FnOnce(&mut Project)) {
         f(&mut self.project);
+    }
+
+    /// Renames the most recent undo step (a previewed tool whose choice
+    /// changed while it was shaped).
+    pub fn relabel_last(&mut self, label: impl Into<String>) {
+        if let Some(last) = self.undo.last_mut() {
+            last.label = label.into();
+        }
     }
 
     /// Closes the current gesture so the next edit starts a new entry.
