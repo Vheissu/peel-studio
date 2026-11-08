@@ -599,3 +599,27 @@ fn dropping_a_sample_on_a_lane_adds_an_audio_clip() {
     assert!(ok, "peaks computed");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn dragging_a_clip_left_edge_trims_its_start() {
+    let mut h = Harness::new();
+    let beat_clip = h.session().project().arrangement().clips[0].clone();
+    let canvas = h.rect(W::new("pl-canvas"));
+    let zoom = h.studio.ws.playlist.zoom_x;
+    let lane_h = h.studio.ws.playlist.lane_h;
+    let from = vec2(canvas.x + 3.0, canvas.y + lane_h * 0.6);
+    h.drag(from, from + vec2(zoom * 4.0, 0.0), 8);
+    let c = h
+        .session()
+        .project()
+        .arrangement()
+        .clips
+        .iter()
+        .find(|c| c.id == beat_clip.id)
+        .cloned()
+        .unwrap();
+    assert_eq!(c.start, Time::beats(4));
+    assert_eq!(c.offset, Time::beats(4));
+    assert_eq!(c.length, beat_clip.length - Time::beats(4));
+    assert_eq!(c.end(), beat_clip.end(), "the end stays put");
+}

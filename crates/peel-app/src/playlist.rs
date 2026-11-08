@@ -27,6 +27,19 @@ enum Drag {
     Erase,
     Seek,
     Marquee,
+    TrimStart,
+    FadeIn,
+    FadeOut,
+}
+
+/// Which part of a clip the pointer is over.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Part {
+    Body,
+    Left,
+    Right,
+    FadeIn,
+    FadeOut,
 }
 
 #[derive(Clone, Default)]
@@ -613,15 +626,35 @@ fn clips(
         clips.iter().rev().find_map(|c| {
             let lane = *lane_of.get(&c.track)?;
             let cr = clip_rect(v, lane, c);
-            cr.contains(p)
-                .then(|| (c.clone(), p.x > cr.right() - EDGE.min(cr.w * 0.3)))
+            if !cr.contains(p) {
+                return None;
+            }
+            let edge = EDGE.min(cr.w * 0.3);
+            let in_header = p.y < cr.y + 16.0;
+            let part = match (&c.content, in_header) {
+                (
+                    ClipContent::Audio {
+                        fade_in, fade_out, ..
+                    },
+                    true,
+                ) if (p.x - (v.x((c.start + *fade_in).as_f64()))).abs() <= 6.0 => Part::FadeIn,
+                (ClipContent::Audio { fade_out, .. }, true)
+                    if (p.x - (v.x((c.end() - *fade_out).as_f64()))).abs() <= 6.0 =>
+                {
+                    Part::FadeOut
+                }
+                _ if p.x > cr.right() - edge => Part::Right,
+                _ if p.x < cr.x + edge => Part::Left,
+                _ => Part::Body,
+            };
+            Some((c.clone(), part))
         })
     });
     if resp.hovered && ui.state::<DragState>(drag_id).kind == Drag::None {
         match (ws.playlist.tool, &hit) {
             (Tool::Erase, _) => ui.set_cursor(CursorIcon::Crosshair),
-            (_, Some((_, true))) => ui.set_cursor(CursorIcon::EwResize),
-            (_, Some(_)) => ui.set_cursor(CursorIcon::Grab),
+            (_, Some((_, Part::Body))) => ui.set_cursor(CursorIcon::Grab),
+            (_, Some(_)) => ui.set_cursor(CursorIcon::EwResize),
             _ => {}
         }
     }
@@ -641,7 +674,8 @@ fn clips(
         };
         match (ws.playlist.tool, hit.clone()) {
             (Tool::Erase, _) => st.kind = Drag::Erase,
-            (_, Some((c, edge))) => {
+            (_, Some((c, part))) => {
+                let edge = part != Part::Body;
                 if !ws.playlist.selection.contains(&c.id) {
                     if !ui.input.modifiers.shift {
                         ws.playlist.selection.clear();
@@ -692,7 +726,13 @@ fn clips(
                     if let ClipContent::Pattern { pattern } = c.content {
                         s.select_pattern(pattern);
                     }
-                    st.kind = if edge { Drag::Resize } else { Drag::Move };
+                    st.kind = match part {
+                        Part::Body => Drag::Move,
+                        Part::Right => Drag::Resize,
+                        Part::Left => Drag::TrimStart,
+                        Part::FadeIn => Drag::FadeIn,
+                        Part::FadeOut => Drag::FadeOut,
+                    };
                     st.clip = Some(c);
                 }
             }
@@ -901,6 +941,74 @@ fn clips(
                             }
                         });
                         ui.set_cursor(CursorIcon::Grabbing);
+                    }
+                }
+                Drag::TrimStart => {
+                    if let Some(orig) = &st.clip {
+                        let raw = orig.start.as_f64() + (beat - st.start_beat);
+                        let lo = orig.start - orig.offset;
+                        let hi = orig.end() - snap;
+                        let new_start = Time::from_f64(raw.max(0.0), 960)
+                            .round_to(snap)
+                            .clamp(lo.max(Time::ZERO), hi);
+                        let d = new_start - orig.start;
+                        let cid = orig.id;
+                        let (o_off, o_len) = (orig.offset, orig.length);
+                        s.doc.edit_gesture(st.gesture, "Trim clip", |p| {
+                            if let Some(c) =
+                                p.arrangement_mut().clips.iter_mut().find(|c| c.id == cid)
+                            {
+                                c.start = new_start;
+                                c.offset = o_off + d;
+                                c.length = o_len - d;
+                            }
+                        });
+                        ui.set_cursor(CursorIcon::EwResize);
+                    }
+                }
+                Drag::FadeIn | Drag::FadeOut => {
+                    if let Some(orig) = &st.clip {
+                        let fine = if ui.input.modifiers.alt {
+                            Time::new(1, 64)
+                        } else {
+                            Time::new(1, 16)
+                        };
+                        let cid = orig.id;
+                        let fade_in_kind = st.kind == Drag::FadeIn;
+                        let raw = if fade_in_kind {
+                            beat - orig.start.as_f64()
+                        } else {
+                            orig.end().as_f64() - beat
+                        };
+                        let value = Time::from_f64(raw.max(0.0), 960)
+                            .round_to(fine)
+                            .max(Time::ZERO);
+                        s.doc.edit_gesture(
+                            st.gesture,
+                            if fade_in_kind {
+                                "Change fade in"
+                            } else {
+                                "Change fade out"
+                            },
+                            |p| {
+                                if let Some(c) =
+                                    p.arrangement_mut().clips.iter_mut().find(|c| c.id == cid)
+                                {
+                                    let len = c.length;
+                                    if let ClipContent::Audio {
+                                        fade_in, fade_out, ..
+                                    } = &mut c.content
+                                    {
+                                        if fade_in_kind {
+                                            *fade_in = value.min(len - *fade_out).max(Time::ZERO);
+                                        } else {
+                                            *fade_out = value.min(len - *fade_in).max(Time::ZERO);
+                                        }
+                                    }
+                                }
+                            },
+                        );
+                        ui.set_cursor(CursorIcon::EwResize);
                     }
                 }
                 Drag::Marquee => {
@@ -1370,6 +1478,70 @@ fn draw_audio_clip(
                 0.0,
                 color,
             );
+        }
+    }
+    // Fades: shade the attenuated part, draw the ramp and its handle.
+    if let ClipContent::Audio {
+        fade_in, fade_out, ..
+    } = c.content
+    {
+        let fi = v.x((c.start + fade_in).as_f64()) - cr.x;
+        let fo = cr.right() - v.x((c.end() - fade_out).as_f64());
+        let shade = t.bg.alpha(0.55);
+        if fi > 1.0 {
+            for i in 0..fi as usize {
+                let g = i as f32 / fi;
+                ui.scene.rect(
+                    Rect {
+                        x: cr.x + i as f32,
+                        y: body_r.y,
+                        w: 1.0,
+                        h: body_r.h,
+                    },
+                    0.0,
+                    shade.alpha(0.55 * (1.0 - g)),
+                );
+            }
+            ui.scene.line(
+                vec2(cr.x, body_r.bottom()),
+                vec2(cr.x + fi, body_r.y),
+                1.5,
+                Color::WHITE.alpha(0.7),
+            );
+        }
+        if fo > 1.0 {
+            for i in 0..fo as usize {
+                let g = i as f32 / fo;
+                ui.scene.rect(
+                    Rect {
+                        x: cr.right() - i as f32 - 1.0,
+                        y: body_r.y,
+                        w: 1.0,
+                        h: body_r.h,
+                    },
+                    0.0,
+                    shade.alpha(0.55 * (1.0 - g)),
+                );
+            }
+            ui.scene.line(
+                vec2(cr.right() - fo, body_r.y),
+                vec2(cr.right(), body_r.bottom()),
+                1.5,
+                Color::WHITE.alpha(0.7),
+            );
+        }
+        if hovered || sel || fi > 1.0 || fo > 1.0 {
+            for x in [cr.x + fi, cr.right() - fo] {
+                ui.scene.rect(
+                    Rect::from_center(
+                        vec2(x.clamp(cr.x + 4.0, cr.right() - 4.0), header.bottom() - 1.0),
+                        7.0,
+                        7.0,
+                    ),
+                    1.5,
+                    Color::WHITE.alpha(0.9),
+                );
+            }
         }
     }
     ui.scene.pop_clip();
