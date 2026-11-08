@@ -14,3 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 peel-document.workspace = true
+peel-session.workspace = true
+peel-project.workspace = true
+peel-media.workspace = true
+peel-devices.workspace = true

@@ -1,0 +1,927 @@
+//! Playlist: the arrangement. Pattern clips are linked instances; editing
+//! the pattern changes every instance.
+
+use std::collections::HashMap;
+
+use peel_document::{Clip, ClipContent, Id, Pattern, Time, Track};
+use peel_session::{PlayMode, Session};
+use peel_ui::Id as W;
+use peel_ui::{Align, Button, Color, CursorIcon, MenuItem, Rect, Ui, icons, vec2};
+
+use crate::browser::BrowserItem;
+use crate::studio::current_pattern;
+use crate::util::{col, format_length, ink_on};
+use crate::workspace::{DockTab, Tool, Workspace};
+
+const HEAD_W: f32 = 150.0;
+const RULER_H: f32 = 26.0;
+const EDGE: f32 = 8.0;
+
+#[derive(Clone, Copy, PartialEq, Default)]
+enum Drag {
+    #[default]
+    None,
+    Move,
+    Resize,
+    Paint,
+    Erase,
+    Seek,
+}
+
+#[derive(Clone, Default)]
+struct DragState {
+    kind: Drag,
+    clip: Option<Clip>,
+    start_beat: f64,
+    gesture: u64,
+    last_paint: Option<(Id, Time)>,
+}
+
+struct View {
+    lanes: Rect,
+    zoom_x: f32,
+    scroll: f32,
+    lane_h: f32,
+    scroll_y: f32,
+}
+
+impl View {
+    fn x(&self, beat: f64) -> f32 {
+        self.lanes.x + (beat as f32 - self.scroll) * self.zoom_x
+    }
+
+    fn beat(&self, x: f32) -> f64 {
+        ((x - self.lanes.x) / self.zoom_x + self.scroll) as f64
+    }
+
+    fn lane_y(&self, i: usize) -> f32 {
+        self.lanes.y + i as f32 * self.lane_h - self.scroll_y
+    }
+
+    fn lane_at(&self, y: f32) -> i32 {
+        ((y - self.lanes.y + self.scroll_y) / self.lane_h).floor() as i32
+    }
+}
+
+pub fn draw(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) {
+    let t = ui.theme.clone();
+    ui.scene.rect(r, t.radius_l, t.panel);
+    let mut body = r;
+    let head = body.cut_top(38.0);
+    header(ui, head, s, ws);
+    body = body.shrink2(8.0, 0.0);
+    body.cut_bottom(8.0);
+
+    let arr = s.project().arrangement().clone();
+    let mut top = body.cut_top(RULER_H);
+    let heads = body.cut_left(HEAD_W);
+    top.cut_left(HEAD_W);
+    let lanes_r = body;
+
+    // Navigation.
+    let nav = Rect {
+        x: heads.x,
+        y: top.y,
+        w: lanes_r.right() - heads.x,
+        h: lanes_r.bottom() - top.y,
+    };
+    if ui.pointer_in(nav) {
+        let sc = ui.input.scroll;
+        let m = ui.input.modifiers;
+        if sc != peel_ui::Vec2::ZERO || ui.input.zoom != 0.0 {
+            if m.command() || ui.input.zoom != 0.0 {
+                let p = ui.pointer().unwrap_or_default();
+                let before = (p.x - lanes_r.x) / ws.playlist.zoom_x + ws.playlist.scroll_beats;
+                let f = if ui.input.zoom != 0.0 {
+                    1.0 + ui.input.zoom
+                } else {
+                    (1.0f32 + sc.y * 0.004).clamp(0.5, 2.0)
+                };
+                ws.playlist.zoom_x = (ws.playlist.zoom_x * f).clamp(3.0, 200.0);
+                ws.playlist.scroll_beats = before - (p.x - lanes_r.x) / ws.playlist.zoom_x;
+            } else if m.alt {
+                ws.playlist.lane_h = (ws.playlist.lane_h * (1.0 + sc.y * 0.004)).clamp(28.0, 140.0);
+            } else {
+                let (dx, dy) = if m.shift && sc.x == 0.0 {
+                    (sc.y, 0.0)
+                } else {
+                    (sc.x, sc.y)
+                };
+                ws.playlist.scroll_beats -= dx / ws.playlist.zoom_x;
+                ws.playlist.scroll_y -= dy;
+            }
+            ui.input.scroll = peel_ui::Vec2::ZERO;
+            ui.input.zoom = 0.0;
+        }
+    }
+    ws.playlist.scroll_beats = ws.playlist.scroll_beats.max(0.0);
+    let content_h = (arr.tracks.len() as f32 + 1.0) * ws.playlist.lane_h;
+    ws.playlist.scroll_y = ws
+        .playlist
+        .scroll_y
+        .clamp(0.0, (content_h - lanes_r.h).max(0.0));
+    let v = View {
+        lanes: lanes_r,
+        zoom_x: ws.playlist.zoom_x,
+        scroll: ws.playlist.scroll_beats,
+        lane_h: ws.playlist.lane_h,
+        scroll_y: ws.playlist.scroll_y,
+    };
+
+    lanes_bg(ui, &v, &arr.tracks, s);
+    ruler(ui, top, &v, s);
+    track_heads(ui, heads, &v, &arr.tracks, s);
+    clips(ui, &v, &arr.tracks, &arr.clips, s, ws);
+
+    // Patterns dragged from the browser.
+    if let Some((BrowserItem::Pattern(pid), p)) = ui.take_drop::<BrowserItem>(lanes_r) {
+        let lane = v.lane_at(p.y);
+        if let Some(track) = arr.tracks.get(lane.max(0) as usize).map(|t| t.id) {
+            let beat = Time::from_f64(v.beat(p.x).max(0.0), 960).floor_to(ws.playlist.snap);
+            place_clip(s, track, beat, pid);
+        }
+    }
+
+    if arr.clips.is_empty() {
+        let hint = Rect {
+            x: lanes_r.x,
+            y: lanes_r.y + 4.0,
+            w: lanes_r.w,
+            h: ws.playlist.lane_h * 2.0,
+        };
+        ui.text(
+            hint,
+            "Click a lane to paint the selected pattern",
+            t.body,
+            t.text_faint,
+            Align::Center,
+        );
+    }
+
+    // Playhead.
+    if s.mode() == PlayMode::Song {
+        let x = v.x(s.position());
+        if x >= lanes_r.x && x <= lanes_r.right() {
+            let full = Rect {
+                y: top.y,
+                h: lanes_r.bottom() - top.y,
+                ..lanes_r
+            };
+            let c = if s.is_playing() {
+                t.accent
+            } else {
+                t.accent.alpha(0.55)
+            };
+            ui.with_layer(peel_ui::LayerId::ABOVE, |ui| {
+                ui.scene.push_clip(full);
+                ui.scene.rect(
+                    Rect {
+                        x: x - 1.0,
+                        y: top.y,
+                        w: 2.0,
+                        h: full.h,
+                    },
+                    1.0,
+                    c,
+                );
+                ui.scene.triangle(
+                    Rect {
+                        x: x - 7.0,
+                        y: top.y + RULER_H - 10.0,
+                        w: 14.0,
+                        h: 10.0,
+                    },
+                    peel_ui::Dir::Down,
+                    0.5,
+                    c,
+                );
+                ui.scene.pop_clip();
+            });
+            // Follow playback.
+            if s.is_playing() && x > lanes_r.right() - 40.0 {
+                ws.playlist.scroll_beats = s.position() as f32 - 4.0;
+            }
+        }
+    }
+}
+
+fn header(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) {
+    let t = ui.theme.clone();
+    let mut row = r.shrink2(14.0, 6.0);
+    let mut title = row.cut_left(110.0);
+    ui.icon(title.cut_left(18.0), icons::COLUMNS, 15.0, t.accent);
+    title.cut_left(6.0);
+    ui.text(title, "Playlist", t.label, t.text, Align::Start);
+    for (tool, icon, tip) in [
+        (Tool::Draw, icons::PENCIL, "Draw"),
+        (Tool::Paint, icons::BRUSH, "Paint"),
+        (Tool::Select, icons::CURSOR, "Select"),
+        (Tool::Erase, icons::ERASER, "Erase"),
+    ] {
+        let b = ui.icon_button(
+            W::new(("pl-tool", tip)),
+            row.cut_left(30.0),
+            icon,
+            ws.playlist.tool == tool,
+            None,
+        );
+        ui.tooltip(&b, tip);
+        if b.clicked {
+            ws.playlist.tool = tool;
+        }
+        row.cut_left(2.0);
+    }
+    row.cut_left(10.0);
+    let snap_r = row.cut_left(78.0);
+    let sresp = ui.interact(W::new("pl-snap"), snap_r);
+    ui.scene.rect(
+        snap_r,
+        t.radius_m,
+        if sresp.hovered {
+            t.control_hover
+        } else {
+            t.control
+        },
+    );
+    let mut sr = snap_r.shrink2(8.0, 0.0);
+    ui.icon(sr.cut_left(14.0), icons::MAGNET, 13.0, t.text_dim);
+    ui.text(
+        sr,
+        &format_length(ws.playlist.snap),
+        t.label,
+        t.text,
+        Align::Center,
+    );
+    ui.tooltip(&sresp, "Grid");
+    if sresp.clicked {
+        ui.open_popup(W::new("pl-snap-menu"), snap_r);
+    }
+    let snaps = [
+        Time::beats(4),
+        Time::beats(1),
+        Time::new(1, 2),
+        Time::new(1, 4),
+    ];
+    let items: Vec<MenuItem> = snaps
+        .iter()
+        .map(|x| MenuItem::new(format_length(*x)).checked(*x == ws.playlist.snap))
+        .collect();
+    if let Some(i) = ui.menu(
+        W::new("pl-snap-menu"),
+        vec2(snap_r.x, snap_r.bottom() + 4.0),
+        &items,
+    ) {
+        ws.playlist.snap = snaps[i];
+    }
+    // Selected pattern chip (what painting places).
+    let pid = current_pattern(s);
+    if let Some(p) = s.project().pattern(pid).cloned() {
+        let w = ui.measure(&p.name, t.label).x + 46.0;
+        let chip = row.cut_right(w.min(220.0));
+        ui.scene.rect(chip, t.radius_m, col(p.color).alpha(0.18));
+        let mut cr = chip.shrink2(10.0, 0.0);
+        ui.icon(cr.cut_left(16.0), icons::BRUSH, 13.0, col(p.color));
+        cr.cut_left(6.0);
+        let name = ui.fit_text(&p.name, t.label, cr.w);
+        ui.text(cr, &name, t.label, t.text, Align::Start);
+    }
+}
+
+fn lanes_bg(ui: &mut Ui, v: &View, tracks: &[Track], s: &Session) {
+    let t = ui.theme.clone();
+    let c = v.lanes;
+    ui.scene.push_clip(c);
+    ui.scene.rect(c, 0.0, t.panel_alt);
+    for (i, _) in tracks.iter().enumerate() {
+        let y = v.lane_y(i);
+        if i % 2 == 1 {
+            ui.scene.rect(
+                Rect {
+                    x: c.x,
+                    y,
+                    w: c.w,
+                    h: v.lane_h,
+                },
+                0.0,
+                Color::WHITE.alpha(0.012),
+            );
+        }
+        ui.scene.hline(c.x, c.right(), y + v.lane_h, t.line);
+    }
+    let sig = s.project().time_signature;
+    let bar = sig.bar_length().as_f64();
+    let step = if v.zoom_x >= 14.0 { 1.0 } else { bar };
+    let mut b = (v.scroll as f64 / step).floor() * step;
+    while v.x(b) <= c.right() {
+        let x = v.x(b);
+        let is_bar = (b / bar).fract().abs() < 1e-6;
+        let bar_idx = (b / bar).round() as i64;
+        let color = if is_bar && bar_idx % 4 == 0 {
+            t.grid_bar.alpha(1.6)
+        } else if is_bar {
+            t.grid_bar
+        } else {
+            t.grid_step
+        };
+        ui.scene.vline(x, c.y, c.bottom(), color);
+        b += step;
+    }
+    if let Some((a, e)) = s.project().arrangement().loop_range {
+        let (x0, x1) = (v.x(a.as_f64()), v.x(e.as_f64()));
+        ui.scene.rect(
+            Rect {
+                x: x0,
+                y: c.y,
+                w: x1 - x0,
+                h: c.h,
+            },
+            0.0,
+            t.accent.alpha(0.03),
+        );
+    }
+    ui.scene.pop_clip();
+}
+
+fn ruler(ui: &mut Ui, r: Rect, v: &View, s: &mut Session) {
+    let t = ui.theme.clone();
+    ui.scene.push_clip(r);
+    ui.scene.rect(r, 0.0, t.panel);
+    let bar = s.project().time_signature.bar_length().as_f64();
+    let every = if v.zoom_x * bar as f32 >= 36.0 {
+        1.0
+    } else if v.zoom_x * bar as f32 >= 12.0 {
+        4.0
+    } else {
+        8.0
+    };
+    let mut b = (v.scroll as f64 / (bar * every)).floor() * bar * every;
+    while v.x(b) < r.right() {
+        let x = v.x(b);
+        ui.scene
+            .vline(x, r.y + 12.0, r.bottom(), t.text_faint.alpha(0.5));
+        ui.text_at(
+            vec2(x + 4.0, r.y + 3.0),
+            &format!("{}", (b / bar).round() as i64 + 1),
+            t.caption,
+            t.text_dim,
+        );
+        b += bar * every;
+    }
+    if let Some((a, e)) = s.project().arrangement().loop_range {
+        let (x0, x1) = (v.x(a.as_f64()), v.x(e.as_f64()));
+        ui.scene.rect(
+            Rect {
+                x: x0,
+                y: r.bottom() - 4.0,
+                w: x1 - x0,
+                h: 4.0,
+            },
+            2.0,
+            t.accent.alpha(0.7),
+        );
+    }
+    ui.scene.pop_clip();
+    let id = W::new("pl-ruler");
+    let resp = ui.interact(id, r);
+    if resp.hovered {
+        ui.set_cursor(CursorIcon::Pointer);
+    }
+    ui.tooltip(&resp, "Click to move the playhead. Drag to set the loop.");
+    let st_id = W::new("pl-ruler-drag");
+    if resp.pressed
+        && let Some(p) = ui.pointer()
+    {
+        let beat = Time::from_f64(v.beat(p.x).max(0.0), 960).floor_to(Time::beats(1));
+        ui.state::<DragState>(st_id).start_beat = beat.as_f64();
+        ui.state::<DragState>(st_id).kind = Drag::Seek;
+        if s.mode() != PlayMode::Song {
+            s.set_mode(PlayMode::Song);
+        }
+        s.seek(beat.as_f64());
+    }
+    if resp.dragging
+        && let Some(p) = ui.pointer()
+        && ui.state::<DragState>(st_id).kind == Drag::Seek
+    {
+        let a = ui.state::<DragState>(st_id).start_beat;
+        let b = Time::from_f64(v.beat(p.x).max(0.0), 960)
+            .round_to(bar_time(s))
+            .as_f64();
+        if (b - a).abs() >= bar_time(s).as_f64() {
+            let (lo, hi) = (a.min(b), a.max(b));
+            let lo_t = Time::from_f64(lo, 960).floor_to(bar_time(s));
+            let hi_t = Time::from_f64(hi, 960).round_to(bar_time(s));
+            if hi_t > lo_t {
+                s.doc.edit_gesture(id.0, "Set loop", |p| {
+                    p.arrangement_mut().loop_range = Some((lo_t, hi_t))
+                });
+            }
+        }
+    }
+    if resp.released {
+        s.doc.end_gesture();
+    }
+    if resp.double_clicked {
+        s.doc
+            .edit("Clear loop", |p| p.arrangement_mut().loop_range = None);
+    }
+}
+
+fn bar_time(s: &Session) -> Time {
+    s.project().time_signature.bar_length()
+}
+
+fn track_heads(ui: &mut Ui, r: Rect, v: &View, tracks: &[Track], s: &mut Session) {
+    let t = ui.theme.clone();
+    ui.scene.push_clip(r);
+    for (i, tr) in tracks.iter().enumerate() {
+        let y = v.lane_y(i);
+        let row = Rect {
+            x: r.x,
+            y: y + 2.0,
+            w: r.w - 6.0,
+            h: v.lane_h - 4.0,
+        };
+        if row.bottom() < r.y || row.y > r.bottom() {
+            continue;
+        }
+        ui.scene.rect(row, t.radius_m, t.raised.alpha(0.55));
+        let stripe = tr.color.map(col).unwrap_or_else(|| {
+            let first = s
+                .project()
+                .arrangement()
+                .clips
+                .iter()
+                .find(|c| c.track == tr.id)
+                .and_then(|c| match c.content {
+                    ClipContent::Pattern { pattern } => {
+                        s.project().pattern(pattern).map(|p| col(p.color))
+                    }
+                    _ => None,
+                });
+            first.unwrap_or(t.text_faint)
+        });
+        ui.scene.rect_ex(
+            Rect { w: 3.0, ..row },
+            [t.radius_m, 0.0, 0.0, t.radius_m],
+            stripe,
+            0.0,
+            Color::TRANSPARENT,
+        );
+        let mut inner = row.shrink2(10.0, 0.0);
+        let led_r = inner.cut_right(20.0);
+        let led = ui.led(W::new(("pl-led", tr.id)), led_r, !tr.muted, t.play);
+        ui.tooltip(&led, if tr.muted { "Unmute lane" } else { "Mute lane" });
+        if led.clicked {
+            let tid = tr.id;
+            s.doc
+                .edit(if tr.muted { "Unmute lane" } else { "Mute lane" }, |p| {
+                    if let Some(x) = p.arrangement_mut().tracks.iter_mut().find(|x| x.id == tid) {
+                        x.muted = !x.muted;
+                    }
+                });
+        }
+        let name = ui.fit_text(&tr.name, t.label, inner.w - 4.0);
+        ui.text(
+            inner,
+            &name,
+            t.label,
+            if tr.muted {
+                t.text_faint
+            } else {
+                t.text.mix(t.text_dim, 0.2)
+            },
+            Align::Start,
+        );
+    }
+    // Add lane.
+    let y = v.lane_y(tracks.len());
+    let add = Rect {
+        x: r.x,
+        y: y + 6.0,
+        w: 36.0,
+        h: 28.0,
+    };
+    let b = ui.icon_button(W::new("pl-add-lane"), add, icons::PLUS, false, None);
+    ui.tooltip(&b, "Add lane");
+    if b.clicked {
+        let n = tracks.len() + 1;
+        s.doc.edit("Add lane", |p| {
+            p.arrangement_mut().tracks.push(Track {
+                id: Id::new(),
+                name: format!("Track {n}"),
+                color: None,
+                muted: false,
+            })
+        });
+    }
+    ui.scene.pop_clip();
+}
+
+fn clip_rect(v: &View, lane: usize, c: &Clip) -> Rect {
+    let x0 = v.x(c.start.as_f64());
+    let x1 = v.x(c.end().as_f64());
+    Rect {
+        x: x0 + 1.0,
+        y: v.lane_y(lane) + 2.0,
+        w: (x1 - x0 - 2.0).max(4.0),
+        h: v.lane_h - 4.0,
+    }
+}
+
+fn clips(
+    ui: &mut Ui,
+    v: &View,
+    tracks: &[Track],
+    clips: &[Clip],
+    s: &mut Session,
+    ws: &mut Workspace,
+) {
+    let t = ui.theme.clone();
+    let lanes = v.lanes;
+    let lane_of: HashMap<Id, usize> = tracks
+        .iter()
+        .enumerate()
+        .map(|(i, tr)| (tr.id, i))
+        .collect();
+    let patterns: HashMap<Id, Pattern> = s
+        .project()
+        .patterns
+        .iter()
+        .map(|p| (p.id, (**p).clone()))
+        .collect();
+    let channel_order: HashMap<Id, usize> = s
+        .project()
+        .channels
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.id, i))
+        .collect();
+    let id = W::new("pl-canvas");
+    let resp = ui.interact(id, lanes);
+    let drag_id = W::new("pl-drag");
+    let pointer = ui.pointer();
+
+    let hit = pointer.filter(|p| lanes.contains(*p)).and_then(|p| {
+        clips.iter().rev().find_map(|c| {
+            let lane = *lane_of.get(&c.track)?;
+            let cr = clip_rect(v, lane, c);
+            cr.contains(p)
+                .then(|| (c.clone(), p.x > cr.right() - EDGE.min(cr.w * 0.3)))
+        })
+    });
+    if resp.hovered && ui.state::<DragState>(drag_id).kind == Drag::None {
+        match (ws.playlist.tool, &hit) {
+            (Tool::Erase, _) => ui.set_cursor(CursorIcon::Crosshair),
+            (_, Some((_, true))) => ui.set_cursor(CursorIcon::EwResize),
+            (_, Some(_)) => ui.set_cursor(CursorIcon::Grab),
+            _ => {}
+        }
+    }
+
+    let snap = ws.playlist.snap;
+    let pid = current_pattern(s);
+    if resp.pressed
+        && let Some(p) = pointer
+    {
+        let beat = v.beat(p.x).max(0.0);
+        let lane = v.lane_at(p.y);
+        let mut st = DragState {
+            start_beat: beat,
+            gesture: id.0 ^ (ui.time() * 1000.0) as u64,
+            ..Default::default()
+        };
+        match (ws.playlist.tool, hit.clone()) {
+            (Tool::Erase, _) => st.kind = Drag::Erase,
+            (_, Some((c, edge))) => {
+                ws.playlist.selection.clear();
+                ws.playlist.selection.insert(c.id);
+                if resp.double_clicked {
+                    if let ClipContent::Pattern { pattern } = c.content {
+                        s.select_pattern(pattern);
+                        ws.dock = DockTab::Rack;
+                    }
+                } else {
+                    if let ClipContent::Pattern { pattern } = c.content {
+                        s.select_pattern(pattern);
+                    }
+                    st.kind = if edge { Drag::Resize } else { Drag::Move };
+                    st.clip = Some(c);
+                }
+            }
+            (tool, None) if tool != Tool::Select => {
+                if let Some(track) = tracks.get(lane.max(0) as usize)
+                    && s.project().pattern(pid).is_some()
+                {
+                    let start = Time::from_f64(beat, 960).floor_to(snap);
+                    let new = place_clip_gesture(s, track.id, start, pid, st.gesture);
+                    if tool == Tool::Paint {
+                        st.kind = Drag::Paint;
+                        st.last_paint = Some((track.id, start));
+                    } else {
+                        st.kind = Drag::Move;
+                        st.clip = new;
+                    }
+                }
+            }
+            _ => ws.playlist.selection.clear(),
+        }
+        *ui.state::<DragState>(drag_id) = st;
+    }
+
+    // Right button deletes clips under the pointer.
+    if ui.input.down[Button::Right as usize]
+        && resp.hovered
+        && let Some((c, _)) = &hit
+    {
+        let cid = c.id;
+        s.doc.edit_gesture(id.0 ^ 0xe7a5e, "Delete clips", |p| {
+            p.arrangement_mut().clips.retain(|x| x.id != cid)
+        });
+    }
+    if ui.input.released(Button::Right) {
+        s.doc.end_gesture();
+    }
+
+    let st = ui.state::<DragState>(drag_id).clone();
+    if st.kind != Drag::None && ui.input.down[0] {
+        if let Some(p) = pointer {
+            let beat = v.beat(p.x);
+            match st.kind {
+                Drag::Move => {
+                    if let Some(orig) = &st.clip {
+                        let raw = orig.start.as_f64() + (beat - st.start_beat);
+                        let start = Time::from_f64(raw.max(0.0), 960)
+                            .round_to(snap)
+                            .max(Time::ZERO);
+                        let lane = (v.lane_at(p.y)).clamp(0, tracks.len() as i32 - 1) as usize;
+                        let track = tracks[lane].id;
+                        let cid = orig.id;
+                        if start != orig.start || track != orig.track {
+                            s.doc.edit_gesture(st.gesture, "Move clip", |p| {
+                                if let Some(c) =
+                                    p.arrangement_mut().clips.iter_mut().find(|c| c.id == cid)
+                                {
+                                    c.start = start;
+                                    c.track = track;
+                                }
+                            });
+                        }
+                        ui.set_cursor(CursorIcon::Grabbing);
+                    }
+                }
+                Drag::Resize => {
+                    if let Some(orig) = &st.clip {
+                        let raw_end = orig.end().as_f64() + (beat - st.start_beat);
+                        let end = Time::from_f64(raw_end, 960).round_to(snap);
+                        let len = (end - orig.start).max(snap);
+                        let cid = orig.id;
+                        s.doc.edit_gesture(st.gesture, "Resize clip", |p| {
+                            if let Some(c) =
+                                p.arrangement_mut().clips.iter_mut().find(|c| c.id == cid)
+                            {
+                                c.length = len;
+                            }
+                        });
+                        ui.set_cursor(CursorIcon::EwResize);
+                    }
+                }
+                Drag::Paint => {
+                    let lane = v.lane_at(p.y);
+                    if let (Some(track), Some(pat)) = (
+                        tracks.get(lane.max(0) as usize),
+                        s.project().pattern(pid).cloned(),
+                    ) {
+                        let len = pat.length;
+                        let start = Time::from_f64(beat.max(0.0), 960).floor_to(len.max(snap));
+                        let occupied = s.project().arrangement().clips.iter().any(|c| {
+                            c.track == track.id && c.start < start + len && c.end() > start
+                        });
+                        if !occupied && st.last_paint != Some((track.id, start)) {
+                            place_clip_gesture(s, track.id, start, pid, st.gesture);
+                            ui.state::<DragState>(drag_id).last_paint = Some((track.id, start));
+                        }
+                    }
+                }
+                Drag::Erase => {
+                    if let Some((c, _)) = &hit {
+                        let cid = c.id;
+                        s.doc.edit_gesture(st.gesture, "Delete clips", |p| {
+                            p.arrangement_mut().clips.retain(|x| x.id != cid)
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+    } else if st.kind != Drag::None {
+        ui.state::<DragState>(drag_id).kind = Drag::None;
+        s.doc.end_gesture();
+    }
+
+    // Keyboard: delete selected clips.
+    if !ui.text_focus() && !ws.playlist.selection.is_empty() && ui.pointer_in(lanes) {
+        if ui.input.take_named(peel_ui::NamedKey::Delete)
+            || ui.input.take_named(peel_ui::NamedKey::Backspace)
+        {
+            let sel = ws.playlist.selection.clone();
+            s.doc.edit("Delete clips", |p| {
+                p.arrangement_mut().clips.retain(|c| !sel.contains(&c.id))
+            });
+            ws.playlist.selection.clear();
+        }
+        if ui.input.take_command("d", false) {
+            let sel = ws.playlist.selection.clone();
+            let copies: Vec<Clip> = s
+                .project()
+                .arrangement()
+                .clips
+                .iter()
+                .filter(|c| sel.contains(&c.id))
+                .map(|c| Clip {
+                    id: Id::new(),
+                    start: c.end(),
+                    ..c.clone()
+                })
+                .collect();
+            ws.playlist.selection = copies.iter().map(|c| c.id).collect();
+            s.doc.edit("Duplicate clips", |p| {
+                p.arrangement_mut().clips.extend(copies)
+            });
+        }
+    }
+
+    // Draw clips.
+    let fresh = s.project().arrangement().clips.clone();
+    ui.scene.push_clip(lanes);
+    for c in &fresh {
+        let Some(&lane) = lane_of.get(&c.track) else {
+            continue;
+        };
+        let cr = clip_rect(v, lane, c);
+        if !cr.intersects(&lanes) {
+            continue;
+        }
+        let ClipContent::Pattern { pattern } = c.content else {
+            continue;
+        };
+        let Some(pat) = patterns.get(&pattern) else {
+            continue;
+        };
+        let pc = col(pat.color);
+        let sel = ws.playlist.selection.contains(&c.id);
+        let hovered = hit.as_ref().is_some_and(|(h, _)| h.id == c.id);
+        let lane_muted = tracks.get(lane).is_some_and(|t| t.muted) || c.muted;
+        let body = t.panel.mix(pc, if lane_muted { 0.12 } else { 0.30 });
+        ui.scene.rect(
+            cr,
+            t.radius_s,
+            if hovered { body.lighten(0.04) } else { body },
+        );
+        let header = Rect {
+            h: 16.0f32.min(cr.h * 0.4),
+            ..cr
+        };
+        ui.scene.rect_ex(
+            header,
+            [t.radius_s, t.radius_s, 0.0, 0.0],
+            pc.alpha(if lane_muted { 0.35 } else { 0.85 }),
+            0.0,
+            Color::TRANSPARENT,
+        );
+        if cr.w > 26.0 {
+            ui.with_clip(header, |ui| {
+                ui.text(
+                    header.shrink2(6.0, 0.0),
+                    &pat.name,
+                    t.caption.weight(peel_ui::FontWeight::SemiBold),
+                    ink_on(pc),
+                    Align::Start,
+                );
+            });
+        }
+        // Notes preview from real pattern data, repeated per loop.
+        let notes_r = Rect {
+            y: header.bottom() + 3.0,
+            h: cr.bottom() - header.bottom() - 6.0,
+            ..cr.shrink2(3.0, 0.0)
+        };
+        if notes_r.h > 6.0 && !pat.notes.is_empty() {
+            // One preview row per (channel, key): melodic parts read as
+            // pitch, drum parts as separate lanes.
+            let mut rows: Vec<(usize, u8)> = pat
+                .notes
+                .iter()
+                .map(|n| {
+                    (
+                        channel_order.get(&n.channel).copied().unwrap_or(usize::MAX),
+                        n.key,
+                    )
+                })
+                .collect();
+            rows.sort_unstable();
+            rows.dedup();
+            let melodic = rows.len() > 12 || rows.windows(2).all(|w| w[0].0 == w[1].0);
+            let (lo, hi) = pat
+                .notes
+                .iter()
+                .fold((127u8, 0u8), |(lo, hi), n| (lo.min(n.key), hi.max(n.key)));
+            let span = if melodic {
+                (hi as f32 - lo as f32 + 1.0).max(6.0)
+            } else {
+                rows.len() as f32
+            };
+            let row_of = |n: &peel_document::Note| -> f32 {
+                if melodic {
+                    (n.key - lo) as f32
+                } else {
+                    let key = (
+                        channel_order.get(&n.channel).copied().unwrap_or(usize::MAX),
+                        n.key,
+                    );
+                    (rows.len() - 1 - rows.binary_search(&key).unwrap_or(0)) as f32
+                }
+            };
+            let l = pat.length.as_f64();
+            ui.scene.push_clip(cr);
+            let mut k = 0i64;
+            loop {
+                let origin = c.start.as_f64() - c.offset.as_f64() + k as f64 * l;
+                if origin >= c.end().as_f64() || k > 512 {
+                    break;
+                }
+                if k > 0 {
+                    let x = v.x(origin);
+                    ui.scene
+                        .vline(x, notes_r.y, notes_r.bottom(), Color::WHITE.alpha(0.08));
+                }
+                for n in &pat.notes {
+                    let b0 = origin + n.start.as_f64();
+                    if b0 < c.start.as_f64() || b0 >= c.end().as_f64() {
+                        continue;
+                    }
+                    let x0 = v.x(b0);
+                    let x1 = v.x((b0 + n.length.as_f64()).min(c.end().as_f64()));
+                    let y = notes_r.bottom() - notes_r.h * (row_of(n) + 0.5) / span;
+                    let nh = (notes_r.h / span * 0.7).clamp(1.5, 5.0);
+                    let alpha = if lane_muted {
+                        0.3
+                    } else {
+                        0.55 + 0.4 * n.velocity
+                    };
+                    ui.scene.rect(
+                        Rect {
+                            x: x0,
+                            y: y - nh * 0.5,
+                            w: (x1 - x0 - 1.0).max(1.5),
+                            h: nh,
+                        },
+                        1.0,
+                        pc.lighten(0.3).alpha(alpha),
+                    );
+                }
+                k += 1;
+            }
+            ui.scene.pop_clip();
+        }
+        if sel {
+            ui.scene
+                .outline(cr, t.radius_s, 1.5, Color::WHITE.alpha(0.85));
+        }
+        if hovered && !sel {
+            ui.scene
+                .outline(cr, t.radius_s, 1.0, pc.lighten(0.3).alpha(0.6));
+        }
+    }
+    ui.scene.pop_clip();
+}
+
+fn place_clip(s: &mut Session, track: Id, start: Time, pattern: Id) {
+    let gesture = W::new(("place", track, start.as_f64().to_bits())).0;
+    place_clip_gesture(s, track, start, pattern, gesture);
+    s.doc.end_gesture();
+}
+
+fn place_clip_gesture(
+    s: &mut Session,
+    track: Id,
+    start: Time,
+    pattern: Id,
+    gesture: u64,
+) -> Option<Clip> {
+    let len = s.project().pattern(pattern)?.length;
+    let clip = Clip {
+        id: Id::new(),
+        track,
+        start,
+        length: len,
+        offset: Time::ZERO,
+        muted: false,
+        content: ClipContent::Pattern { pattern },
+    };
+    let out = clip.clone();
+    s.doc.edit_gesture(gesture, "Place pattern", |p| {
+        p.arrangement_mut().clips.push(clip)
+    });
+    Some(out)
+}

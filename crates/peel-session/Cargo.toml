@@ -17,3 +17,4 @@ peel-engine.workspace = true
 peel-media.workspace = true
 peel-project.workspace = true
 log.workspace = true
+blake3.workspace = true
