@@ -472,11 +472,7 @@ impl Studio {
 
     pub fn save_as(&mut self) {
         let name = format!("{}.peelproj", self.session.project().meta.title);
-        if let Some(path) = rfd::FileDialog::new()
-            .set_file_name(&name)
-            .add_filter("Peel project", &["peelproj"])
-            .save_file()
-        {
+        if let Some(path) = crate::dialogs::save(&name, "Peel project", &["peelproj"]) {
             match self.session.save(Some(path)) {
                 Ok(p) => self.saved(&p),
                 Err(e) => self.session.notify(format!("Save failed: {e}"), true),
@@ -485,11 +481,10 @@ impl Studio {
     }
 
     pub fn open(&mut self) {
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter("Peel project", &["peelproj"])
-            .add_filter("MIDI file", &["mid", "midi"])
-            .pick_file()
-        else {
+        let Some(path) = crate::dialogs::open(&[
+            ("Peel project", &["peelproj"]),
+            ("MIDI file", &["mid", "midi"]),
+        ]) else {
             return;
         };
         self.open_path(path);
@@ -532,11 +527,7 @@ impl Studio {
             return;
         }
         let name = format!("{}.wav", self.session.project().meta.title);
-        let Some(path) = rfd::FileDialog::new()
-            .set_file_name(&name)
-            .add_filter("WAV audio", &["wav"])
-            .save_file()
-        else {
+        let Some(path) = crate::dialogs::save(&name, "WAV audio", &["wav"]) else {
             return;
         };
         let settings = ExportSettings {
@@ -551,11 +542,7 @@ impl Studio {
     /// Writes the arrangement as a Standard MIDI File.
     pub fn export_midi(&mut self) {
         let name = format!("{}.mid", self.session.project().meta.title);
-        let Some(path) = rfd::FileDialog::new()
-            .set_file_name(&name)
-            .add_filter("MIDI file", &["mid"])
-            .save_file()
-        else {
+        let Some(path) = crate::dialogs::save(&name, "MIDI file", &["mid"]) else {
             return;
         };
         match peel_midi::export_arrangement(

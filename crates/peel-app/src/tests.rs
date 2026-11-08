@@ -848,3 +848,78 @@ fn lane_menu_inserts_and_deletes_lanes() {
         "its clips went with it"
     );
 }
+
+/// Random input across the whole window must never panic or leave the
+/// project invalid. Seeded so failures reproduce.
+#[test]
+fn monkey_input_keeps_the_project_valid() {
+    for seed in [1u64, 7, 42] {
+        let mut h = Harness::new();
+        let mut state = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        let mut rnd = move || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (state >> 33) as f32 / (1u64 << 31) as f32
+        };
+        let keys = [
+            peel_ui::NamedKey::Delete,
+            peel_ui::NamedKey::ArrowUp,
+            peel_ui::NamedKey::ArrowDown,
+            peel_ui::NamedKey::Escape,
+            peel_ui::NamedKey::F6,
+            peel_ui::NamedKey::F7,
+            peel_ui::NamedKey::F9,
+        ];
+        for step in 0..600 {
+            let p = vec2(rnd() * 1440.0, rnd() * 900.0);
+            match (rnd() * 10.0) as u32 {
+                0..=3 => h.click_at(p),
+                4 => {
+                    let to = vec2(rnd() * 1440.0, rnd() * 900.0);
+                    h.drag(p, to, 4);
+                }
+                5 => {
+                    h.move_to(p);
+                    h.press(1);
+                    h.release(1);
+                }
+                6 => {
+                    h.move_to(p);
+                    h.ui.input.scroll = vec2(0.0, (rnd() - 0.5) * 200.0);
+                    h.frame();
+                }
+                7 => {
+                    let k = keys[(rnd() * keys.len() as f32) as usize % keys.len()];
+                    h.ui.input.keys.push(peel_ui::input::KeyPress {
+                        key: peel_ui::Key::Named(k),
+                        code: None,
+                        repeat: false,
+                        modifiers: Default::default(),
+                        consumed: false,
+                    });
+                    h.frame();
+                }
+                8 => {
+                    h.studio.session.doc.undo();
+                    h.frame();
+                }
+                _ => h.frames(2),
+            }
+            if step % 100 == 0 {
+                let issues = peel_document::validate(h.session().project());
+                assert!(
+                    issues.iter().all(|i| !i.is_error()),
+                    "seed {seed} step {step}: {issues:?}"
+                );
+            }
+        }
+        let issues = peel_document::validate(h.session().project());
+        assert!(
+            issues.iter().all(|i| !i.is_error()),
+            "seed {seed}: {issues:?}"
+        );
+    }
+}

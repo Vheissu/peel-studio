@@ -421,7 +421,7 @@ fn samples(ui: &mut Ui, r: Rect, query: &str, s: &mut Session, ws: &mut Workspac
     );
     ui.tooltip(&pick, "Choose a folder");
     if pick.clicked
-        && let Some(p) = rfd::FileDialog::new().set_directory(&dir).pick_folder()
+        && let Some(p) = crate::dialogs::folder(&dir)
     {
         ws.sample_dir = Some(p);
         ws.browser_scroll = 0.0;

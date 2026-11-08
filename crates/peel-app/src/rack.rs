@@ -311,9 +311,8 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
             if let Some(id) = add_instrument(s, instruments[i].0) {
                 select(ws, id);
             }
-        } else if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Audio", &["wav", "aif", "aiff", "flac", "mp3", "ogg"])
-            .pick_file()
+        } else if let Some(path) =
+            crate::dialogs::open(&[("Audio", &["wav", "aif", "aiff", "flac", "mp3", "ogg"])])
             && let Some(id) = add_sample_channel(s, &path)
         {
             select(ws, id);
