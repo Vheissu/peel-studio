@@ -8,9 +8,32 @@ Peel Studio is native Rust end to end: a `wgpu` interface (Metal, D3D12,
 Vulkan), a lock-free realtime engine and project-owned instruments and
 effects. There is no web view.
 
-> Early development. The foundation (document model, engine, native devices,
-> UI toolkit and the core editors) is being built now. See
-> [docs/ROADMAP.md](docs/ROADMAP.md).
+![The Peel Studio workspace: browser, playlist, channel rack and device panel](docs/images/studio.png)
+
+> Early development. The foundation (document model, realtime engine,
+> native instruments and effects, UI toolkit and the core editors) works
+> today; see [docs/ROADMAP.md](docs/ROADMAP.md) for what is next.
+
+## What works today
+
+- Pattern workflow: a Channel Rack step sequencer and a Piano Roll edit the
+  same notes; patterns are painted into the Playlist as linked clips, and
+  Make unique splits one off.
+- Ten native instruments (five synthesized drums, a polyphonic synth, a
+  mono bass, an FM electric piano, a modelled piano and a sampler) and nine
+  effects (EQ, compressor, limiter, delay, reverb, drive, filter, chorus,
+  utility), with over a hundred factory presets.
+- A console-style mixer with inserts, bus routing, pan, faders, meters,
+  mute and solo.
+- Scales and chord stamping, clipboard, quantize, swing, per-step velocity.
+- Exact rational musical time, sample-accurate playback that cannot drift,
+  and a realtime audio path verified to make no allocations.
+- Open project files with atomic saves, autosave and crash recovery,
+  Standard MIDI File import and export, WAV export.
+
+| Piano Roll with a scale | Mixer and EQ |
+| --- | --- |
+| ![Piano Roll](docs/images/piano-roll.png) | ![Mixer](docs/images/mixer.png) |
 
 ## Build
 

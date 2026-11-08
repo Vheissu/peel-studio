@@ -20,15 +20,21 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
     }
 
     let mut row = r.shrink2(12.0, 9.0);
+    // Narrow windows trade labels and width for room.
+    let compact = r.w < 1560.0;
+    let tight = r.w < 1340.0;
     row.cut_left(win.titlebar_inset());
     logo(ui, row.cut_left(30.0));
     row.cut_left(10.0);
-    let title = studio.session.project().meta.title.clone();
-    let tw = ui.measure(&title, t.label).x.min(180.0);
-    let title_r = row.cut_left(tw + 4.0);
-    let fitted = ui.fit_text(&title, t.label, 180.0);
-    ui.text(title_r, &fitted, t.label, t.text_dim, Align::Start);
-    row.cut_left(18.0);
+    if !tight {
+        let max_title = if compact { 110.0 } else { 180.0 };
+        let title = studio.session.project().meta.title.clone();
+        let tw = ui.measure(&title, t.label).x.min(max_title);
+        let title_r = row.cut_left(tw + 4.0);
+        let fitted = ui.fit_text(&title, t.label, max_title);
+        ui.text(title_r, &fitted, t.label, t.text_dim, Align::Start);
+    }
+    row.cut_left(if compact { 12.0 } else { 18.0 });
 
     // Pattern / Song.
     let mut mode_idx = if studio.session.mode() == PlayMode::Song {
@@ -38,7 +44,7 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
     };
     if ui.segmented(
         W::new("mode"),
-        row.cut_left(150.0),
+        row.cut_left(if compact { 136.0 } else { 150.0 }),
         &["Pattern", "Song"],
         &mut mode_idx,
     ) {
@@ -95,7 +101,13 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
     row.cut_left(12.0);
 
     // Position readout.
-    let pos_r = row.cut_left(132.0);
+    let pos_r = row.cut_left(if tight {
+        84.0
+    } else if compact {
+        124.0
+    } else {
+        132.0
+    });
     ui.scene.rect(pos_r, t.radius_m, t.panel);
     let beat = studio.session.position();
     let sig = studio.session.project().time_signature;
@@ -115,7 +127,9 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
         t.text,
         Align::Start,
     );
-    ui.text(pr, &time, t.readout_small, t.text_faint, Align::End);
+    if !tight {
+        ui.text(pr, &time, t.readout_small, t.text_faint, Align::End);
+    }
     row.cut_left(8.0);
 
     // Tempo.
@@ -201,18 +215,36 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
     }
     row.cut_left(14.0);
 
-    pattern_picker(ui, &mut row, studio);
+    pattern_picker(
+        ui,
+        &mut row,
+        studio,
+        if tight {
+            120.0
+        } else if compact {
+            150.0
+        } else {
+            190.0
+        },
+    );
 
     // Right side: export, save, undo/redo, load, master meter.
     let mut right = row;
-    let export = ui.interact(W::new("export"), right.cut_right(96.0));
+    let export = ui.interact(
+        W::new("export"),
+        right.cut_right(if tight { 40.0 } else { 96.0 }),
+    );
     {
         let er = export.rect;
         let hot = ui.animate_bool(W::new("export-hot"), export.hovered);
         ui.scene.rect(er, t.radius_m, t.accent.lighten(hot * 0.08));
-        let mut inner = er.shrink2(12.0, 0.0);
-        ui.icon(inner.cut_left(16.0), icons::EXPORT, 15.0, t.text_on_accent);
-        ui.text(inner, "Export", t.label, t.text_on_accent, Align::Center);
+        if tight {
+            ui.icon(er, icons::EXPORT, 16.0, t.text_on_accent);
+        } else {
+            let mut inner = er.shrink2(12.0, 0.0);
+            ui.icon(inner.cut_left(16.0), icons::EXPORT, 15.0, t.text_on_accent);
+            ui.text(inner, "Export", t.label, t.text_on_accent, Align::Center);
+        }
         if export.hovered {
             ui.set_cursor(peel_ui::CursorIcon::Pointer);
         }
@@ -283,13 +315,18 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
     right.cut_right(14.0);
 
     // Master meter + load.
-    let meter_r = right.cut_right(130.0).shrink2(0.0, 7.0);
+    if tight {
+        return;
+    }
+    let meter_r = right
+        .cut_right(if compact { 90.0 } else { 130.0 })
+        .shrink2(0.0, 7.0);
     let master = studio.session.project().mixer.tracks[0].id;
     let peaks = studio.session.take_track_meter(master);
     horizontal_meter(ui, W::new("master-meter"), meter_r, peaks);
     right.cut_right(12.0);
     let load = studio.session.cpu_load();
-    let load_r = right.cut_right(54.0);
+    let load_r = right.cut_right(if compact { 18.0 } else { 54.0 });
     let lc = if load > 0.85 {
         t.record
     } else if load > 0.6 {
@@ -298,16 +335,21 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
         t.text_faint
     };
     let lresp = ui.interact(W::new("load"), load_r);
-    ui.tooltip(&lresp, "Audio processing load");
+    ui.tooltip(
+        &lresp,
+        &format!("Audio processing load {:.0}%", load * 100.0),
+    );
     let mut lr = load_r;
     ui.icon(lr.cut_left(16.0), icons::CPU, 14.0, lc);
-    ui.text(
-        lr,
-        &format!("{:.0}%", load * 100.0),
-        t.readout_small,
-        lc,
-        Align::End,
-    );
+    if !compact {
+        ui.text(
+            lr,
+            &format!("{:.0}%", load * 100.0),
+            t.readout_small,
+            lc,
+            Align::End,
+        );
+    }
 }
 
 fn logo(ui: &mut Ui, r: Rect) {
@@ -393,13 +435,13 @@ fn horizontal_meter(ui: &mut Ui, id: W, r: Rect, peaks: (f32, f32)) {
         .vline(x, r.y - 2.0, r.bottom() + 2.0, t.text_faint.alpha(0.6));
 }
 
-fn pattern_picker(ui: &mut Ui, row: &mut Rect, studio: &mut Studio) {
+fn pattern_picker(ui: &mut Ui, row: &mut Rect, studio: &mut Studio, width: f32) {
     let t = ui.theme.clone();
     let pid = studio.current_pattern();
     let Some(pat) = studio.session.project().pattern(pid).cloned() else {
         return;
     };
-    let r = row.cut_left(190.0);
+    let r = row.cut_left(width);
     let id = W::new("pattern-picker");
     let resp = ui.interact(id, r);
     let hot = ui.animate_bool(id, resp.hovered);
