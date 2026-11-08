@@ -24,15 +24,18 @@ mod common;
 
 mod bass;
 mod clap;
+mod grand;
 mod hat;
 mod kick;
 mod poly;
+mod sampler;
 mod snare;
+mod tine;
 mod tom;
 
 use peel_dsp::{Device, DeviceDescriptor, Preset};
 
-static ALL: [&DeviceDescriptor; 7] = [
+static ALL: [&DeviceDescriptor; 10] = [
     &kick::DESC,
     &snare::DESC,
     &hat::DESC,
@@ -40,6 +43,9 @@ static ALL: [&DeviceDescriptor; 7] = [
     &tom::DESC,
     &poly::DESC,
     &bass::DESC,
+    &tine::DESC,
+    &grand::DESC,
+    &sampler::DESC,
 ];
 
 /// Every instrument descriptor, in browser order.
@@ -57,6 +63,9 @@ pub fn create(type_id: &str) -> Option<Box<dyn Device>> {
         "peel.drum.tom" => Some(tom::create()),
         "peel.synth.poly" => Some(poly::create()),
         "peel.synth.bass" => Some(bass::create()),
+        "peel.keys.tine" => Some(tine::create()),
+        "peel.keys.grand" => Some(grand::create()),
+        "peel.sampler" => Some(sampler::create()),
         _ => None,
     }
 }
@@ -72,6 +81,9 @@ pub fn presets(type_id: &str) -> &'static [Preset] {
         "peel.drum.tom" => &tom::PRESETS,
         "peel.synth.poly" => &poly::PRESETS,
         "peel.synth.bass" => &bass::PRESETS,
+        "peel.keys.tine" => &tine::PRESETS,
+        "peel.keys.grand" => &grand::PRESETS,
+        "peel.sampler" => &sampler::PRESETS,
         _ => &[],
     }
 }

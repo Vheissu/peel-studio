@@ -6,7 +6,7 @@
 //! amplifier and the filter, and one LFO (free or tempo synced) can modulate
 //! pitch, filter, amplitude or pulse width.
 
-use peel_dsp::envelope::Adsr;
+use peel_dsp::envelope::{Adsr, Stage};
 use peel_dsp::filter::{Ladder, Svf, SvfMode};
 use peel_dsp::noise::Noise;
 use peel_dsp::osc::{Lfo, LfoShape, Osc, Waveform};
@@ -680,7 +680,10 @@ impl PolyVoice {
             }
         };
         let g = amp * self.vel_gain * self.fade.tick();
-        if self.amp_env.is_idle() || self.fade.is_done() {
+        // A note decayed to nothing at zero sustain is finished even though
+        // the key is still down.
+        let dead = self.amp_env.stage() == Stage::Sustain && self.amp_env.level() < 1.0e-4;
+        if self.amp_env.is_idle() || self.fade.is_done() || dead {
             self.active = false;
         }
         (fl * g, fr * g)

@@ -97,6 +97,13 @@ impl Adsr {
         self.sustain_coef = 1.0 - (-1.0 / (0.01 * sr)).exp();
     }
 
+    /// Changes only the release time (seconds).
+    pub fn set_release(&mut self, release: f32) {
+        let r = release.max(MIN_TIME) * self.sample_rate;
+        self.release_coef = exp_coef(r, DECAY_RATIO);
+        self.release_base = -DECAY_RATIO * (1.0 - self.release_coef);
+    }
+
     /// Starts (or restarts) the attack from the current level.
     pub fn note_on(&mut self) {
         self.stage = Stage::Attack;

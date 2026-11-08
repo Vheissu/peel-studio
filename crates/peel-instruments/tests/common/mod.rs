@@ -121,25 +121,39 @@ pub fn max_diff(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).fold(0.0, |m, (x, y)| m.max((x - y).abs()))
 }
 
-/// Estimates the fundamental of `buf` by counting rising zero crossings.
-pub fn crossing_freq(buf: &[f32], sample_rate: f32) -> f32 {
-    let mut first = None;
-    let mut last = 0;
-    let mut count = 0usize;
-    for i in 1..buf.len() {
-        if buf[i - 1] < 0.0 && buf[i] >= 0.0 {
-            if first.is_none() {
-                first = Some(i);
+/// Estimates the fundamental frequency of `buf` from its autocorrelation,
+/// preferring the shortest lag that is nearly as strong as the best one.
+pub fn detect_pitch(buf: &[f32], sample_rate: f32) -> f32 {
+    let n = buf.len().min(8_192);
+    let min_lag = (sample_rate / 2_500.0) as usize;
+    let max_lag = ((sample_rate / 40.0) as usize).min(n / 2);
+    let energy: f32 = buf[..n].iter().map(|x| x * x).sum();
+    if energy <= 1e-12 || max_lag <= min_lag + 2 {
+        return 0.0;
+    }
+    let mut nac = vec![0.0f32; max_lag + 2];
+    for (lag, slot) in nac.iter_mut().enumerate().take(max_lag + 1).skip(min_lag) {
+        let mut sum = 0.0;
+        for i in 0..n - lag {
+            sum += buf[i] * buf[i + lag];
+        }
+        *slot = sum / energy;
+    }
+    let best = nac.iter().cloned().fold(0.0f32, f32::max);
+    for lag in min_lag + 1..max_lag {
+        if nac[lag] >= 0.85 * best && nac[lag] >= nac[lag - 1] && nac[lag] >= nac[lag + 1] {
+            // Parabolic refinement around the peak.
+            let (a, b, c) = (nac[lag - 1], nac[lag], nac[lag + 1]);
+            let denom = a - 2.0 * b + c;
+            let shift = if denom.abs() > 1e-9 {
+                0.5 * (a - c) / denom
             } else {
-                count += 1;
-            }
-            last = i;
+                0.0
+            };
+            return sample_rate / (lag as f32 + shift);
         }
     }
-    match first {
-        Some(f) if count > 0 => count as f32 * sample_rate / (last - f) as f32,
-        _ => 0.0,
-    }
+    0.0
 }
 
 /// Deterministic pseudo-random generator for property-style tests.

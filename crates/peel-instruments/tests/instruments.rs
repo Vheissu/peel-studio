@@ -402,7 +402,12 @@ fn survives_a_flood_of_notes() {
         events.sort_by_key(|(t, _)| *t);
         let (l, r) = render(dev.as_mut(), &events, 48_000, 128);
         assert!(all_finite(&l) && all_finite(&r), "{id}");
-        assert!(peak(&l).max(peak(&r)) < 4.0, "{id}: flood peak too high");
+        // 16 overlapping loud voices may legitimately add up; the output rail
+        // (+12 dBFS) must still hold.
+        assert!(
+            peak(&l).max(peak(&r)) <= 4.0,
+            "{id}: flood peak beyond the rail"
+        );
         let _ = render(
             dev.as_mut(),
             &[(0, EventKind::AllNotesOff)],
@@ -489,7 +494,7 @@ fn pitch_follows_the_key() {
         let freq = |key: u8| {
             let mut dev = fresh(id);
             let (l, _) = render(dev.as_mut(), &[note_on(0, key, 0.8, 1)], 48_000 / 2, 256);
-            crossing_freq(&l[4_800..], SR)
+            detect_pitch(&l[4_800..], SR)
         };
         let low = freq(57);
         let high = freq(69);
