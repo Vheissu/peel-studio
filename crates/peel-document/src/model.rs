@@ -316,6 +316,40 @@ pub enum AutomationTarget {
 pub struct AutomationPoint {
     pub position: Time,
     pub value: f32,
+    /// Bend of the segment to the next point, -1..=1 (0 is a straight
+    /// line); see [`automation_curve`].
+    #[serde(default, skip_serializing_if = "f32_is_zero")]
+    pub tension: f32,
+}
+
+impl AutomationPoint {
+    pub fn new(position: Time, value: f32) -> AutomationPoint {
+        AutomationPoint {
+            position,
+            value,
+            tension: 0.0,
+        }
+    }
+}
+
+fn f32_is_zero(v: &f32) -> bool {
+    *v == 0.0
+}
+
+/// Shape of a segment: maps progress `t` (0..=1) through a segment to
+/// progress in value. Positive tension starts slowly and finishes fast,
+/// negative the reverse; both ends stay fixed.
+pub fn automation_curve(t: f32, tension: f32) -> f32 {
+    let k = tension.clamp(-1.0, 1.0);
+    if k.abs() < 1e-4 {
+        return t;
+    }
+    let e = 1.0 + k.abs() * 6.0;
+    if k > 0.0 {
+        t.powf(e)
+    } else {
+        1.0 - (1.0 - t).powf(e)
+    }
 }
 
 /// Value of a breakpoint envelope at `pos` (holds outside the points).
@@ -332,7 +366,7 @@ pub fn automation_value(points: &[AutomationPoint], pos: Time) -> Option<f32> {
                 return Some(b.value);
             }
             let t = ((pos - a.position).as_f64() / span) as f32;
-            return Some(a.value + (b.value - a.value) * t);
+            return Some(a.value + (b.value - a.value) * automation_curve(t, a.tension));
         }
     }
     points.last().map(|p| p.value)

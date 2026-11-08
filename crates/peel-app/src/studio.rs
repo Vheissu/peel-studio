@@ -290,16 +290,21 @@ impl Studio {
             let pt = |b: i64, v: f32| AutomationPoint {
                 position: Time::beats(b),
                 value: v,
+                tension: 0.0,
             };
             self.session.doc.edit("Shape automation", |p| {
                 for c in p.arrangement_mut().clips.iter_mut() {
                     if let ClipContent::Automation { points, .. } = &mut c.content {
                         if c.id == fade {
                             *points = vec![pt(0, 0.8), pt(20, 0.8), pt(30, 0.15), pt(32, 0.0)];
+                            points[1].tension = -0.6;
                         } else if c.id == pan {
                             *points = (0..=8)
                                 .map(|i| pt(i * 4, if i % 2 == 0 { 0.15 } else { 0.85 }))
                                 .collect();
+                            for (i, x) in points.iter_mut().enumerate() {
+                                x.tension = if i % 2 == 0 { 0.5 } else { -0.5 };
+                            }
                         }
                     }
                 }

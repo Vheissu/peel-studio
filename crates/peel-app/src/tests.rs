@@ -1223,3 +1223,60 @@ fn the_tempo_strip_adds_drags_and_ramps_tempo_changes() {
     let mid = map.bpm_at(8.0);
     assert!(mid > 118.0 && mid < fast, "{mid}");
 }
+
+#[test]
+fn dragging_a_tension_handle_bends_an_automation_segment() {
+    use peel_document::{AutomationPoint, AutomationTarget};
+    let mut h = Harness::new();
+    let track = h.session().project().mixer.tracks[1].id;
+    let id = crate::playlist::create_automation(
+        &mut h.studio.session,
+        &mut h.studio.ws,
+        AutomationTarget::TrackGain { track },
+        0.5,
+    );
+    h.studio.session.doc.edit("Shape", |p| {
+        if let Some(c) = p.arrangement_mut().clips.iter_mut().find(|c| c.id == id)
+            && let ClipContent::Automation { points, .. } = &mut c.content
+        {
+            *points = vec![
+                AutomationPoint::new(Time::ZERO, 0.2),
+                AutomationPoint::new(Time::beats(16), 0.8),
+            ];
+        }
+    });
+    h.frame();
+    let canvas = h.rect(W::new("pl-canvas"));
+    let handle = crate::playlist::tension_handle_at(canvas, &h.studio.ws, h.session(), id, 0)
+        .expect("a rising segment has a handle");
+    // Pull the middle down: the segment starts slowly (positive tension).
+    h.drag(handle, handle + vec2(0.0, 30.0), 6);
+    let points = |h: &Harness| match &h
+        .session()
+        .project()
+        .arrangement()
+        .clips
+        .iter()
+        .find(|c| c.id == id)
+        .unwrap()
+        .content
+    {
+        ClipContent::Automation { points, .. } => points.clone(),
+        _ => unreachable!(),
+    };
+    let k = points(&h)[0].tension;
+    assert!(k > 0.2, "bent: {k}");
+    assert_eq!(points(&h).len(), 2, "no point added");
+    assert_eq!(h.session().doc.undo_label(), Some("Bend automation"));
+    let mid = peel_document::automation_value(&points(&h), Time::beats(8)).unwrap();
+    assert!(mid < 0.5, "the middle is lower than a straight line: {mid}");
+    // Double-click straightens it.
+    let handle =
+        crate::playlist::tension_handle_at(canvas, &h.studio.ws, h.session(), id, 0).unwrap();
+    h.move_to(handle);
+    h.move_to(handle);
+    h.ui.input.double_clicked = true;
+    h.press(0);
+    h.release(0);
+    assert_eq!(points(&h)[0].tension, 0.0);
+}

@@ -523,15 +523,30 @@ fn automation_lane(
         target: engine_target,
         start: clip.start.as_f64(),
         end: clip.end().as_f64(),
-        points: points
-            .iter()
-            .map(|pt| {
-                (
-                    (origin + pt.position).as_f64(),
-                    convert(pt.value.clamp(0.0, 1.0)),
-                )
-            })
-            .collect(),
+        points: {
+            // The engine interpolates straight lines; curved segments are
+            // sent as short straight pieces.
+            const PIECES: usize = 16;
+            let mut out = Vec::with_capacity(points.len() * 2);
+            for (i, pt) in points.iter().enumerate() {
+                let at = (origin + pt.position).as_f64();
+                out.push((at, convert(pt.value.clamp(0.0, 1.0))));
+                if let Some(next) = points.get(i + 1)
+                    && pt.tension != 0.0
+                    && next.value != pt.value
+                {
+                    let end = (origin + next.position).as_f64();
+                    for k in 1..PIECES {
+                        let f = k as f32 / PIECES as f32;
+                        let v = pt.value
+                            + (next.value - pt.value)
+                                * peel_document::automation_curve(f, pt.tension);
+                        out.push((at + (end - at) * f as f64, convert(v.clamp(0.0, 1.0))));
+                    }
+                }
+            }
+            out
+        },
         last: peel_engine::AUTOMATION_UNSET,
     })
 }

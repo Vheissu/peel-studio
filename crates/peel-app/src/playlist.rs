@@ -34,6 +34,8 @@ enum Drag {
     FadeIn,
     FadeOut,
     AutoPoint,
+    /// Bending the segment after `auto_point`.
+    AutoTension,
 }
 
 /// Which part of a clip the pointer is over.
@@ -52,6 +54,8 @@ enum Part {
 struct DragState {
     /// Breakpoint being dragged in an automation clip.
     auto_point: Option<usize>,
+    /// Pointer height and tension when a tension handle was grabbed.
+    tension_from: (f32, f32),
     kind: Drag,
     clip: Option<Clip>,
     /// Every clip being moved, as it was when the drag started.
@@ -983,6 +987,7 @@ fn clips(
             }
             (Tool::Slice, None) => {}
             (tool, Some((c, Part::AutoBody))) if tool != Tool::Erase => {
+                let mut return_early = false;
                 ws.playlist.selection.clear();
                 ws.playlist.selection.insert(c.id);
                 if let Some(lane) = lane_of.get(&c.track)
@@ -993,8 +998,35 @@ fn clips(
                         let (x, y) = auto_point_xy(v, &c, body, pt);
                         (x - p.x).abs() <= 7.0 && (y - p.y).abs() <= 7.0
                     });
+                    let handle = (0..points.len().saturating_sub(1)).find(|&i| {
+                        tension_handle(v, &c, body, points, i)
+                            .is_some_and(|h| (h.x - p.x).abs() <= 6.0 && (h.y - p.y).abs() <= 6.0)
+                    });
+                    if near.is_none()
+                        && let Some(i) = handle
+                    {
+                        if resp.double_clicked {
+                            let cid = c.id;
+                            s.doc.edit("Straighten automation", |p| {
+                                if let Some(cl) =
+                                    p.arrangement_mut().clips.iter_mut().find(|x| x.id == cid)
+                                    && let ClipContent::Automation { points, .. } = &mut cl.content
+                                    && let Some(pt) = points.get_mut(i)
+                                {
+                                    pt.tension = 0.0;
+                                }
+                            });
+                        } else {
+                            st.kind = Drag::AutoTension;
+                            st.clip = Some(c.clone());
+                            st.auto_point = Some(i);
+                            st.tension_from = (p.y, points[i].tension);
+                        }
+                        return_early = true;
+                    }
                     let index = match near {
                         Some(i) => i,
+                        None if return_early => 0,
                         None => {
                             let grid = if ui.input.modifiers.alt {
                                 Time::new(1, 960)
@@ -1015,19 +1047,18 @@ fn clips(
                                 {
                                     points.insert(
                                         at,
-                                        peel_document::AutomationPoint {
-                                            position: pos,
-                                            value,
-                                        },
+                                        peel_document::AutomationPoint::new(pos, value),
                                     );
                                 }
                             });
                             at
                         }
                     };
-                    st.kind = Drag::AutoPoint;
-                    st.clip = Some(c);
-                    st.auto_point = Some(index);
+                    if !return_early {
+                        st.kind = Drag::AutoPoint;
+                        st.clip = Some(c);
+                        st.auto_point = Some(index);
+                    }
                 }
             }
             (_, Some((c, part))) => {
@@ -1347,6 +1378,28 @@ fn clips(
                             }
                         });
                         ui.set_cursor(CursorIcon::Grabbing);
+                    }
+                }
+                Drag::AutoTension => {
+                    if let (Some(orig), Some(i)) = (&st.clip, st.auto_point)
+                        && let ClipContent::Automation { points, .. } = &orig.content
+                        && let (Some(a), Some(b)) = (points.get(i), points.get(i + 1))
+                    {
+                        // Moving the pointer down lowers the middle of the
+                        // segment, whichever way it slopes.
+                        let (y0, k0) = st.tension_from;
+                        let dir = if b.value > a.value { 1.0 } else { -1.0 };
+                        let k = (k0 + (p.y - y0) / 80.0 * dir).clamp(-1.0, 1.0);
+                        let cid = orig.id;
+                        s.doc.edit_gesture(st.gesture, "Bend automation", |p| {
+                            if let Some(cl) =
+                                p.arrangement_mut().clips.iter_mut().find(|x| x.id == cid)
+                                && let ClipContent::Automation { points, .. } = &mut cl.content
+                                && let Some(pt) = points.get_mut(i)
+                            {
+                                pt.tension = k;
+                            }
+                        });
                     }
                 }
                 Drag::AutoPoint => {
@@ -2135,13 +2188,22 @@ fn draw_automation_clip(
         .hline(cr.x, cr.right(), body.center().y, t.grid_step);
     if !points.is_empty() {
         let line = color.lighten(0.25).alpha(if muted { 0.4 } else { 1.0 });
-        let mut pts: Vec<peel_ui::Vec2> = points
-            .iter()
-            .map(|pt| {
-                let (x, y) = auto_point_xy(v, c, body, pt);
-                vec2(x, y)
-            })
-            .collect();
+        let mut pts: Vec<peel_ui::Vec2> = Vec::with_capacity(points.len() * 2);
+        for (i, pt) in points.iter().enumerate() {
+            let (x, y) = auto_point_xy(v, c, body, pt);
+            pts.push(vec2(x, y));
+            if let Some(next) = points.get(i + 1)
+                && pt.tension != 0.0
+            {
+                let (x1, y1) = auto_point_xy(v, c, body, next);
+                let n = (((x1 - x) / 4.0) as usize).clamp(2, 48);
+                for k in 1..n {
+                    let f = k as f32 / n as f32;
+                    let e = peel_document::automation_curve(f, pt.tension);
+                    pts.push(vec2(x + (x1 - x) * f, y + (y1 - y) * e));
+                }
+            }
+        }
         // Hold the first and last values to the clip edges.
         if let (Some(f), Some(l)) = (pts.first().copied(), pts.last().copied()) {
             pts.insert(0, vec2(cr.x, f.y));
@@ -2163,6 +2225,13 @@ fn draw_automation_clip(
             );
         }
         ui.scene.polyline(&pts, 1.75, line);
+        if hovered || sel {
+            for i in 0..points.len().saturating_sub(1) {
+                if let Some(h) = tension_handle(v, c, body, points, i) {
+                    ui.scene.circle_stroke(h, 3.0, t.bg, 1.25, line.alpha(0.8));
+                }
+            }
+        }
         for pt in points {
             let (x, y) = auto_point_xy(v, c, body, pt);
             let r = if hovered || sel { 4.0 } else { 3.0 };
@@ -2174,6 +2243,28 @@ fn draw_automation_clip(
         ui.scene
             .outline(cr, t.radius_s, 1.5, Color::WHITE.alpha(0.85));
     }
+}
+
+/// Where the tension handle of the segment after point `i` sits: halfway
+/// along, on the curve. Flat segments have none.
+fn tension_handle(
+    v: &View,
+    c: &Clip,
+    body: Rect,
+    points: &[peel_document::AutomationPoint],
+    i: usize,
+) -> Option<peel_ui::Vec2> {
+    let (a, b) = (points.get(i)?, points.get(i + 1)?);
+    if a.value == b.value {
+        return None;
+    }
+    let (x0, y0) = auto_point_xy(v, c, body, a);
+    let (x1, y1) = auto_point_xy(v, c, body, b);
+    if x1 - x0 < 14.0 {
+        return None;
+    }
+    let e = peel_document::automation_curve(0.5, a.tension);
+    Some(vec2((x0 + x1) * 0.5, y0 + (y1 - y0) * e))
 }
 
 /// Adds an automation clip for `target` on the first empty lane (or a new
@@ -2220,14 +2311,8 @@ pub fn create_automation(
             content: ClipContent::Automation {
                 target,
                 points: vec![
-                    peel_document::AutomationPoint {
-                        position: Time::ZERO,
-                        value,
-                    },
-                    peel_document::AutomationPoint {
-                        position: length,
-                        value,
-                    },
+                    peel_document::AutomationPoint::new(Time::ZERO, value),
+                    peel_document::AutomationPoint::new(length, value),
                 ],
             },
         });
@@ -2645,4 +2730,29 @@ fn tempo_lane(ui: &mut Ui, head: Rect, r: Rect, v: &View, s: &mut Session) {
             None => {}
         }
     }
+}
+
+/// Screen position of a tension handle, for tests.
+#[cfg(test)]
+pub(crate) fn tension_handle_at(
+    canvas: Rect,
+    ws: &Workspace,
+    s: &Session,
+    clip: Id,
+    i: usize,
+) -> Option<peel_ui::Vec2> {
+    let v = View {
+        lanes: canvas,
+        zoom_x: ws.playlist.zoom_x,
+        scroll: ws.playlist.scroll_beats,
+        lane_h: ws.playlist.lane_h,
+        scroll_y: ws.playlist.scroll_y,
+    };
+    let arr = s.project().arrangement();
+    let c = arr.clips.iter().find(|c| c.id == clip)?;
+    let lane = arr.tracks.iter().position(|t| t.id == c.track)?;
+    let ClipContent::Automation { points, .. } = &c.content else {
+        return None;
+    };
+    tension_handle(&v, c, auto_body(clip_rect(&v, lane, c)), points, i)
 }

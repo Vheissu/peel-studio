@@ -961,6 +961,57 @@ mod tests {
     }
 
     #[test]
+    fn curved_automation_compiles_to_the_same_curve() {
+        use peel_document::{AutomationPoint, AutomationTarget, Clip, ClipContent, Time};
+        let mut project = template::beat_and_melody();
+        let track = project.mixer.tracks[1].id;
+        let lane = project.arrangement().tracks[5].id;
+        let mut a = AutomationPoint::new(Time::ZERO, 0.1);
+        a.tension = 0.6;
+        let points = vec![a, AutomationPoint::new(Time::beats(8), 0.9)];
+        project.arrangement_mut().clips.push(Clip {
+            id: Id::new(),
+            track: lane,
+            start: Time::beats(4),
+            length: Time::beats(8),
+            offset: Time::ZERO,
+            muted: false,
+            content: ClipContent::Automation {
+                target: AutomationTarget::TrackPan { track },
+                points: points.clone(),
+            },
+        });
+        let s = Session::new_silent(project);
+        let p = s.project();
+        let slots = HashMap::new();
+        let meters: HashMap<Id, u16> = p
+            .mixer
+            .tracks
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (t.id, i as u16))
+            .collect();
+        let samples = HashMap::new();
+        let ctx = CompileContext {
+            mode: PlayMode::Song,
+            slots: &slots,
+            meters: &meters,
+            samples: &samples,
+        };
+        let (plan, _) = compile(p, &ctx);
+        let lane = plan.automation.first().expect("lane");
+        assert!(lane.points.len() > 2, "curve subdivided");
+        for beat in [5.0, 6.0, 8.0, 10.0, 11.5] {
+            let want = peel_document::automation_value(&points, Time::from_f64(beat - 4.0, 960))
+                .unwrap()
+                * 2.0
+                - 1.0;
+            let got = lane.value_at(beat).unwrap();
+            assert!((got - want).abs() < 0.02, "beat {beat}: {got} vs {want}");
+        }
+    }
+
+    #[test]
     fn exported_volume_automation_fades_the_song_out() {
         use peel_document::{AutomationPoint, AutomationTarget, Clip, ClipContent, Time};
         let dir = std::env::temp_dir().join(format!("peel-auto-test-{}", Id::new()));
@@ -983,10 +1034,12 @@ mod tests {
                     AutomationPoint {
                         position: Time::beats(16),
                         value: unity,
+                        tension: 0.0,
                     },
                     AutomationPoint {
                         position: Time::beats(28),
                         value: 0.0,
+                        tension: 0.0,
                     },
                 ],
             },
