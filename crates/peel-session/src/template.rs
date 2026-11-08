@@ -110,8 +110,8 @@ pub fn beat_and_melody() -> Project {
     // Leave headroom so the master limiter only catches peaks.
     for (id, db) in [
         (kick, -4.0),
-        (clap, -7.0),
-        (hat, -10.0),
+        (clap, -5.0),
+        (hat, -7.0),
         (snare, -8.0),
         (bass, -5.0),
         (keys, -6.0),
