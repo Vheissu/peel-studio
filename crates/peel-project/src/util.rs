@@ -1,6 +1,6 @@
 //! Filesystem and formatting helpers shared by the persistence modules.
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -52,7 +52,7 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
 pub(crate) fn sync_dir(dir: &Path) -> Result<()> {
     #[cfg(unix)]
     {
-        match File::open(dir).and_then(|f| f.sync_all()) {
+        match fs::File::open(dir).and_then(|f| f.sync_all()) {
             Ok(()) => {}
             Err(e)
                 if matches!(

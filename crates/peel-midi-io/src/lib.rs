@@ -78,6 +78,7 @@ mod tests {
         assert_eq!(midi.event_count(), 0);
     }
 
+    #[cfg(unix)]
     fn wait_until(what: &str, mut cond: impl FnMut() -> bool) {
         let start = Instant::now();
         while !cond() {
