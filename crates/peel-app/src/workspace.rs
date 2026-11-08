@@ -51,6 +51,10 @@ pub struct RollView {
     pub tool: Tool,
     pub selection: HashSet<Id>,
     pub ghosts: bool,
+    /// Scale highlighted and snapped to while drawing.
+    pub scale: Option<crate::harmony::Scale>,
+    /// Chord shape stamped when drawing (index into `harmony::CHORDS`).
+    pub chord: usize,
 }
 
 pub struct PlaylistView {
@@ -108,6 +112,8 @@ impl Default for Workspace {
                 tool: Tool::Draw,
                 selection: HashSet::new(),
                 ghosts: true,
+                scale: None,
+                chord: 0,
             },
             playlist: PlaylistView {
                 zoom_x: 22.0,

@@ -182,6 +182,9 @@ impl Studio {
             Ok("mixer") => self.ws.dock = DockTab::Mixer,
             _ => {}
         }
+        if std::env::var_os("PEEL_SCALE").is_some() {
+            self.ws.roll.scale = Some(crate::harmony::Scale { root: 9, kind: 1 });
+        }
         if std::env::var("PEEL_FOCUS").as_deref() == Ok("master") {
             self.ws.focus = Some(Focus::Track(self.session.project().mixer.tracks[0].id));
         }
@@ -625,7 +628,13 @@ fn dock(ui: &mut Ui, r: Rect, studio: &mut Studio) {
         (DockTab::Mixer, peel_ui::icons::FADERS, "Mixer"),
     ];
     for (tab, icon, label) in items {
-        let w = ui.measure(label, t.label).x + 52.0;
+        // Only the active tab spells out its name.
+        let active = studio.ws.dock == tab;
+        let w = if active {
+            ui.measure(label, t.label).x + 52.0
+        } else {
+            38.0
+        };
         let cell = tabs.cut_left(w);
         tabs.cut_left(4.0);
         let id = W::new(("dock-tab", label));
@@ -638,15 +647,20 @@ fn dock(ui: &mut Ui, r: Rect, studio: &mut Studio) {
             ui.scene.rect(cell, t.radius_m, t.raised.alpha(hot * 0.5));
         }
         let c = if on { t.text } else { t.text_dim };
-        let mut inner = cell.shrink2(10.0, 0.0);
-        ui.icon(
-            inner.cut_left(18.0),
-            icon,
-            15.0,
-            if on { t.accent } else { c },
-        );
-        inner.cut_left(6.0);
-        ui.text(inner, label, t.label, c, Align::Start);
+        if active {
+            let mut inner = cell.shrink2(10.0, 0.0);
+            ui.icon(inner.cut_left(18.0), icon, 15.0, t.accent);
+            inner.cut_left(6.0);
+            ui.text(inner, label, t.label, c, Align::Start);
+        } else {
+            ui.icon(cell, icon, 15.0, c);
+            let shortcut = match tab {
+                DockTab::Rack => "F6",
+                DockTab::PianoRoll => "F7",
+                DockTab::Mixer => "F9",
+            };
+            ui.tooltip(&resp, &format!("{label} ({shortcut})"));
+        }
         if resp.clicked {
             studio.ws.dock = tab;
         }

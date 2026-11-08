@@ -350,6 +350,13 @@ fn strip(
         Align::Center,
     );
     col_r.cut_bottom(2.0);
+    if let Some(out) = tr.output.filter(|_| !is_master)
+        && let Some(dest) = s.project().mixer.track(out)
+    {
+        let route_r = col_r.cut_bottom(16.0);
+        let label = ui.fit_text(&format!("→ {}", dest.name), t.caption, route_r.w);
+        ui.text(route_r, &label, t.caption, col(dest.color), Align::Center);
+    }
 
     // Fader and meter.
     let mut fm = col_r;

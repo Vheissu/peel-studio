@@ -438,3 +438,39 @@ fn piano_roll_copy_paste_and_quantize() {
         n.start
     );
 }
+
+#[test]
+fn chord_stamp_places_a_diatonic_triad() {
+    let mut h = Harness::new();
+    h.click(W::new(("dock-tab", "Piano roll")));
+    h.frame();
+    h.studio.ws.roll.scale = Some(crate::harmony::Scale { root: 9, kind: 1 }); // A minor
+    h.studio.ws.roll.chord = 1; // triad in scale
+    let ch = h.studio.ws.selected_channel.unwrap();
+    let pid = h.session().selected_pattern();
+    let before: Vec<_> = h
+        .session()
+        .project()
+        .pattern(pid)
+        .unwrap()
+        .notes_for(ch)
+        .map(|n| n.id)
+        .collect();
+    h.frame();
+    let canvas = h.rect(W::new("roll-canvas"));
+    h.click_at(vec2(canvas.x + 30.0, canvas.y + 50.0));
+    let mut added: Vec<u8> = h
+        .session()
+        .project()
+        .pattern(pid)
+        .unwrap()
+        .notes_for(ch)
+        .filter(|n| !before.contains(&n.id))
+        .map(|n| n.key)
+        .collect();
+    added.sort();
+    assert_eq!(added.len(), 3, "{added:?}");
+    let sc = crate::harmony::Scale { root: 9, kind: 1 };
+    assert!(added.iter().all(|k| sc.contains(*k)), "{added:?}");
+    assert_eq!(h.session().doc.undo_label(), Some("Add chord"));
+}

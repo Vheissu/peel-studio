@@ -184,7 +184,7 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
         top_key: ws.roll.top_key,
     };
 
-    grid(ui, &v, &pattern, s, pid);
+    grid(ui, &v, &pattern, s, ws.roll.scale);
     ruler(ui, top, &v, &pattern, s, pid);
     keyboard(ui, keys_r, &v, &channel, s, memo_id);
 
@@ -341,6 +341,133 @@ fn header(ui: &mut Ui, tools: Rect, ch: &Channel, ws: &mut Workspace) -> bool {
         ws.roll.snap = snaps[i];
         ws.roll.note_len = snaps[i];
     }
+    row.cut_right(6.0);
+    // Chord stamp.
+    let chord_r = row.cut_right(92.0);
+    let cresp = ui.interact(W::new("roll-chord"), chord_r);
+    let on = ws.roll.chord != 0;
+    ui.scene.rect(
+        chord_r,
+        t.radius_m,
+        if on {
+            t.accent.alpha(0.16)
+        } else if cresp.hovered {
+            t.control_hover
+        } else {
+            t.control
+        },
+    );
+    let mut cr = chord_r.shrink2(8.0, 0.0);
+    ui.icon(
+        cr.cut_left(14.0),
+        icons::MUSIC_NOTES,
+        13.0,
+        if on { t.accent } else { t.text_dim },
+    );
+    cr.cut_left(4.0);
+    let chord_label = if on {
+        crate::harmony::CHORDS[ws.roll.chord].0
+    } else {
+        "Chord"
+    };
+    let chord_label = ui.fit_text(chord_label, t.caption, cr.w);
+    ui.text(
+        cr,
+        &chord_label,
+        t.caption,
+        if on { t.text } else { t.text_dim },
+        Align::Start,
+    );
+    ui.tooltip(&cresp, "Stamp a chord with every click");
+    if cresp.clicked {
+        ui.open_popup(W::new("roll-chord-menu"), chord_r);
+    }
+    let items: Vec<MenuItem> = crate::harmony::CHORDS
+        .iter()
+        .enumerate()
+        .map(|(i, (n, _))| MenuItem::new(*n).checked(i == ws.roll.chord))
+        .collect();
+    if let Some(i) = ui.menu(
+        W::new("roll-chord-menu"),
+        vec2(chord_r.x, chord_r.bottom() + 4.0),
+        &items,
+    ) {
+        ws.roll.chord = i;
+    }
+    row.cut_right(4.0);
+    // Scale.
+    let scale_r = row.cut_right(118.0);
+    let sresp = ui.interact(W::new("roll-scale"), scale_r);
+    let on = ws.roll.scale.is_some();
+    ui.scene.rect(
+        scale_r,
+        t.radius_m,
+        if on {
+            t.accent.alpha(0.16)
+        } else if sresp.hovered {
+            t.control_hover
+        } else {
+            t.control
+        },
+    );
+    let mut sr = scale_r.shrink2(8.0, 0.0);
+    ui.icon(
+        sr.cut_left(14.0),
+        icons::PIANO_KEYS,
+        13.0,
+        if on { t.accent } else { t.text_dim },
+    );
+    sr.cut_left(4.0);
+    let scale_label = ws
+        .roll
+        .scale
+        .map(|s| s.name())
+        .unwrap_or_else(|| "Scale".into());
+    let scale_label = ui.fit_text(&scale_label, t.caption, sr.w);
+    ui.text(
+        sr,
+        &scale_label,
+        t.caption,
+        if on { t.text } else { t.text_dim },
+        Align::Start,
+    );
+    ui.tooltip(&sresp, "Highlight a scale and snap notes to it");
+    if sresp.clicked {
+        ui.open_popup(W::new("roll-scale-menu"), scale_r);
+    }
+    let mut items = vec![MenuItem::new("No scale").checked(ws.roll.scale.is_none())];
+    for (i, (name, _)) in crate::harmony::SCALES.iter().enumerate() {
+        items.push(MenuItem::new(*name).checked(ws.roll.scale.is_some_and(|s| s.kind == i)));
+    }
+    items.push(MenuItem::Separator);
+    items.push(MenuItem::Heading("Root".into()));
+    let root_base = items.len();
+    for (i, n) in crate::harmony::NOTE_NAMES.iter().enumerate() {
+        items.push(MenuItem::new(*n).checked(ws.roll.scale.is_some_and(|s| s.root as usize == i)));
+    }
+    if let Some(i) = ui.menu(
+        W::new("roll-scale-menu"),
+        vec2(scale_r.x, scale_r.bottom() + 4.0),
+        &items,
+    ) {
+        let current = ws
+            .roll
+            .scale
+            .unwrap_or(crate::harmony::Scale { root: 0, kind: 0 });
+        if i == 0 {
+            ws.roll.scale = None;
+        } else if i <= crate::harmony::SCALES.len() {
+            ws.roll.scale = Some(crate::harmony::Scale {
+                kind: i - 1,
+                ..current
+            });
+        } else if i >= root_base {
+            ws.roll.scale = Some(crate::harmony::Scale {
+                root: (i - root_base) as u8,
+                ..current
+            });
+        }
+    }
     row.cut_right(10.0);
     // Tools.
     for (tool, icon, tip) in [
@@ -373,7 +500,13 @@ fn header(ui: &mut Ui, tools: Rect, ch: &Channel, ws: &mut Workspace) -> bool {
     q.clicked
 }
 
-fn grid(ui: &mut Ui, v: &View, pattern: &Pattern, s: &Session, _pid: Id) {
+fn grid(
+    ui: &mut Ui,
+    v: &View,
+    pattern: &Pattern,
+    s: &Session,
+    scale: Option<crate::harmony::Scale>,
+) {
     let t = ui.theme.clone();
     let c = v.canvas;
     ui.scene.push_clip(c);
@@ -388,8 +521,19 @@ fn grid(ui: &mut Ui, v: &View, pattern: &Pattern, s: &Session, _pid: Id) {
             w: c.w,
             h: v.row_h,
         };
-        if is_black_key(k as u8) {
-            ui.scene.rect(row, 0.0, t.bg.mix(t.panel, 0.35));
+        match scale {
+            Some(sc) => {
+                if !sc.contains(k as u8) {
+                    ui.scene.rect(row, 0.0, t.bg.mix(t.panel, 0.25));
+                } else if (k as i32 - sc.root as i32).rem_euclid(12) == 0 {
+                    ui.scene.rect(row, 0.0, t.accent.alpha(0.07));
+                }
+            }
+            None => {
+                if is_black_key(k as u8) {
+                    ui.scene.rect(row, 0.0, t.bg.mix(t.panel, 0.35));
+                }
+            }
         }
         if k % 12 == 0 {
             ui.scene.hline(c.x, c.right(), y + v.row_h, t.grid_bar);
@@ -675,28 +819,47 @@ fn edit_canvas(
                 s.live_note(ch.id, n.key, 0.0, false);
             }
         } else if ws.roll.tool == Tool::Draw || ws.roll.tool == Tool::Paint {
-            // Create a note and keep dragging it.
+            // Create a note (or a stamped chord) and keep dragging it.
             let start = Time::from_f64(beat, 960).floor_to(snap);
-            let n = Note::new(ch.id, start, ws.roll.note_len, key as u8, 0.8);
-            let nid = n.id;
-            s.doc.edit_gesture(st.gesture, "Add note", |p| {
+            let root = match ws.roll.scale {
+                Some(sc) => sc.snap(key),
+                None => key,
+            };
+            let keys = crate::harmony::chord_keys(ws.roll.chord, root, ws.roll.scale);
+            let notes: Vec<Note> = keys
+                .iter()
+                .map(|&k| Note::new(ch.id, start, ws.roll.note_len, k, 0.8))
+                .collect();
+            let Some(anchor) = notes.first().copied() else {
+                return;
+            };
+            let label = if notes.len() > 1 {
+                "Add chord"
+            } else {
+                "Add note"
+            };
+            let added = notes.clone();
+            s.doc.edit_gesture(st.gesture, label, |p| {
                 if let Some(pt) = p.pattern_mut(pid) {
-                    pt.notes.push(n);
+                    pt.notes.extend(added);
                     pt.sort_notes();
                 }
             });
-            ws.roll.selection.clear();
-            ws.roll.selection.insert(nid);
+            ws.roll.selection = notes.iter().map(|n| n.id).collect();
             st.kind = DragKind::Move;
-            st.anchor = nid;
-            st.last_key = key as u8;
-            st.origin = vec![n];
-            s.live_note(ch.id, key as u8, 0.8, true);
-            s.live_note(ch.id, key as u8, 0.0, false);
+            st.anchor = anchor.id;
+            st.last_key = anchor.key;
+            st.origin = notes.clone();
+            for n in &notes {
+                s.live_note(ch.id, n.key, 0.8, true);
+            }
+            for n in &notes {
+                s.live_note(ch.id, n.key, 0.0, false);
+            }
             // Lengthen the pattern if the note lands past its end.
-            if n.end() > pattern.length {
-                let bars = n.end().ceil_to(Time::beats(4));
-                s.doc.edit_gesture(st.gesture, "Add note", |p| {
+            if anchor.end() > pattern.length {
+                let bars = anchor.end().ceil_to(Time::beats(4));
+                s.doc.edit_gesture(st.gesture, label, |p| {
                     if let Some(pt) = p.pattern_mut(pid) {
                         pt.length = bars;
                     }
@@ -733,7 +896,10 @@ fn edit_canvas(
                         let raw = anchor.start.as_f64() + (beat - st.start_beat);
                         let new_start = Time::from_f64(raw.max(0.0), 960).round_to(snap);
                         let dt = new_start - anchor.start;
-                        let dk = v.key(p.y).clamp(0, 127) - st.start_key;
+                        let mut dk = v.key(p.y).clamp(0, 127) - st.start_key;
+                        if let Some(sc) = ws.roll.scale {
+                            dk = sc.snap(anchor.key as i32 + dk) - anchor.key as i32;
+                        }
                         let origin = st.origin.clone();
                         let min_start = origin.iter().map(|n| n.start).min().unwrap_or(Time::ZERO);
                         let dt = if min_start + dt < Time::ZERO {

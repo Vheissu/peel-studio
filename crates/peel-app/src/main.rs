@@ -1,6 +1,7 @@
 //! Peel Studio desktop application.
 
 mod browser;
+mod harmony;
 mod inspector;
 mod keys;
 mod midi;

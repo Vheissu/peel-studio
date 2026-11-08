@@ -300,6 +300,86 @@ fn track(ui: &mut Ui, r: Rect, id: Id, s: &mut Session, _ws: &mut Workspace) {
     ui.text(hr, &sub, t.caption, t.text_faint, Align::Start);
     body.cut_top(8.0);
 
+    // Output routing (not for the master).
+    if !is_master {
+        let row = body.cut_top(28.0);
+        let mut rr = row;
+        ui.text(
+            rr.cut_left(60.0),
+            "Output",
+            t.caption,
+            t.text_dim,
+            Align::Start,
+        );
+        let out_id = tr.output.unwrap_or(s.project().mixer.tracks[0].id);
+        let out_name = s
+            .project()
+            .mixer
+            .track(out_id)
+            .map_or("Master".to_string(), |t| t.name.clone());
+        let resp = ui.interact(W::new(("insp-output", id)), rr);
+        ui.scene.rect(
+            rr,
+            t.radius_m,
+            if resp.hovered {
+                t.control_hover
+            } else {
+                t.control
+            },
+        );
+        let mut inner = rr.shrink2(10.0, 0.0);
+        ui.icon(inner.cut_right(14.0), icons::CARET_DOWN, 11.0, t.text_dim);
+        ui.text(inner, &out_name, t.label, t.text, Align::Start);
+        if resp.clicked {
+            ui.open_popup(W::new(("insp-output-menu", id)), rr);
+        }
+        // Valid destinations: any track that does not (indirectly) feed this one.
+        let p = s.project();
+        let feeds_into = |candidate: peel_document::Id| -> bool {
+            let mut cur = Some(candidate);
+            let mut guard = 0;
+            while let Some(c) = cur {
+                if c == id {
+                    return true;
+                }
+                if guard > 64 {
+                    return true;
+                }
+                guard += 1;
+                cur = p.mixer.track(c).and_then(|t| t.output).filter(|o| *o != c);
+                if c == p.mixer.tracks[0].id {
+                    break;
+                }
+            }
+            false
+        };
+        let dests: Vec<(peel_document::Id, String)> = p
+            .mixer
+            .tracks
+            .iter()
+            .filter(|t| t.id != id && !feeds_into(t.id))
+            .map(|t| (t.id, t.name.clone()))
+            .collect();
+        let items: Vec<MenuItem> = dests
+            .iter()
+            .map(|(d, n)| MenuItem::new(n.clone()).checked(*d == out_id))
+            .collect();
+        if let Some(i) = ui.menu(
+            W::new(("insp-output-menu", id)),
+            vec2(rr.x, rr.bottom() + 4.0),
+            &items,
+        ) {
+            let dest = dests[i].0;
+            let master = s.project().mixer.tracks[0].id;
+            s.doc.edit("Route mixer track", |p| {
+                if let Some(t) = p.mixer.track_mut(id) {
+                    t.output = if dest == master { None } else { Some(dest) };
+                }
+            });
+        }
+        body.cut_top(10.0);
+    }
+
     if tr.inserts.is_empty() {
         let mut c = body;
         c.cut_top(40.0);
