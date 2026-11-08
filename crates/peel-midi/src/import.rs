@@ -1532,6 +1532,7 @@ impl MidiImport {
                 solo: false,
                 inserts: Vec::new(),
                 output: None,
+                sends: Vec::new(),
             };
             let id = track.id;
             p.mixer.tracks.push(track);

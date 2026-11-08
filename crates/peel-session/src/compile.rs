@@ -49,22 +49,7 @@ pub fn compile(p: &Project, ctx: &CompileContext) -> (RenderPlan, PlanIndex) {
 
     // ---- mixer tracks in processing order (feeders before destinations) ----
     let master_id = p.mixer.tracks[0].id;
-    let depth = |id: Id| -> usize {
-        let mut d = 0;
-        let mut cur = id;
-        while cur != master_id && d < 64 {
-            cur = p
-                .mixer
-                .track(cur)
-                .and_then(|t| t.output)
-                .unwrap_or(master_id);
-            d += 1;
-        }
-        d
-    };
-    let mut order: Vec<usize> = (1..p.mixer.tracks.len()).collect();
-    order.sort_by_key(|&i| std::cmp::Reverse(depth(p.mixer.tracks[i].id)));
-    order.push(0);
+    let order = processing_order(p);
     for (pi, &ti) in order.iter().enumerate() {
         index.tracks.insert(p.mixer.tracks[ti].id, pi as u16);
     }
@@ -114,6 +99,21 @@ pub fn compile(p: &Project, ctx: &CompileContext) -> (RenderPlan, PlanIndex) {
                 muted: t.muted || solo_muted,
                 output,
                 meter: ctx.meters.get(&t.id).copied().unwrap_or(0),
+                sends: if is_master {
+                    Vec::new()
+                } else {
+                    t.sends
+                        .iter()
+                        .filter_map(|send| {
+                            let dest = *index.tracks.get(&send.target)?;
+                            Some(peel_engine::TrackSend {
+                                dest,
+                                gain: db_to_gain(send.gain_db),
+                                last: peel_engine::AUTOMATION_UNSET,
+                            })
+                        })
+                        .collect()
+                },
             }
         })
         .collect();
@@ -416,10 +416,55 @@ pub fn same_structure(a: &RenderPlan, b: &RenderPlan) -> bool {
             .iter()
             .zip(&b.channels)
             .all(|(x, y)| x.slot == y.slot && x.track == y.track)
-        && a.tracks
-            .iter()
-            .zip(&b.tracks)
-            .all(|(x, y)| x.inserts == y.inserts && x.output == y.output && x.meter == y.meter)
+        && a.tracks.iter().zip(&b.tracks).all(|(x, y)| {
+            x.inserts == y.inserts
+                && x.output == y.output
+                && x.meter == y.meter
+                && x.sends.len() == y.sends.len()
+                && x.sends.iter().zip(&y.sends).all(|(m, n)| m.dest == n.dest)
+        })
+}
+
+/// Mixer tracks (indices into `p.mixer.tracks`) ordered so every track
+/// comes after everything that feeds it through its output or a send; the
+/// master is last. Tracks caught in a cycle (rejected by validation) are
+/// appended in document order and their backward routes are ignored by the
+/// engine.
+fn processing_order(p: &Project) -> Vec<usize> {
+    let n = p.mixer.tracks.len();
+    let pos = |id: Id| p.mixer.tracks.iter().position(|t| t.id == id);
+    // Edges source -> destination.
+    let mut indegree = vec![0usize; n];
+    let mut edges: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (i, t) in p.mixer.tracks.iter().enumerate().skip(1) {
+        let mut dests: Vec<usize> = vec![t.output.and_then(pos).unwrap_or(0)];
+        dests.extend(t.sends.iter().filter_map(|s| pos(s.target)));
+        for d in dests {
+            if d != i {
+                edges[i].push(d);
+                indegree[d] += 1;
+            }
+        }
+    }
+    let mut ready: Vec<usize> = (1..n).filter(|&i| indegree[i] == 0).collect();
+    let mut order = Vec::with_capacity(n);
+    while let Some(i) = ready.first().copied() {
+        ready.remove(0);
+        order.push(i);
+        for &d in &edges[i] {
+            indegree[d] -= 1;
+            if indegree[d] == 0 && d != 0 {
+                ready.push(d);
+            }
+        }
+    }
+    for i in 1..n {
+        if !order.contains(&i) {
+            order.push(i);
+        }
+    }
+    order.push(0);
+    order
 }
 
 /// Compiles one automation clip into an engine lane: breakpoints move to
@@ -498,6 +543,7 @@ mod tests {
             solo: false,
             inserts: vec![],
             output: None,
+            sends: Vec::new(),
         };
         let ch = Channel {
             id: Id::new(),
@@ -676,6 +722,7 @@ mod tests {
             solo: true,
             inserts: vec![],
             output: None,
+            sends: Vec::new(),
         };
         p.mixer.tracks.push(other);
         let (slots, meters) = ctx_for(&p);
@@ -894,5 +941,53 @@ mod tests {
         f.p.arrangement_mut().clips[0].start = Time::ZERO;
         let (quieter, _) = f.compile(PlayMode::Song);
         assert!(!same_structure(&a, &quieter));
+    }
+
+    #[test]
+    fn sends_compile_forward_and_loops_are_rejected() {
+        let (mut p, _, pid) = project();
+        let bus = MixerTrack {
+            id: Id::new(),
+            name: "Bus".into(),
+            color: PALETTE[2],
+            gain_db: 0.0,
+            pan: 0.0,
+            muted: false,
+            solo: false,
+            inserts: vec![],
+            output: None,
+            sends: vec![],
+        };
+        let bus_id = bus.id;
+        // Insert the bus before the source so document order is "wrong".
+        p.mixer.tracks.insert(1, bus);
+        let src = p.mixer.tracks[2].id;
+        p.mixer.tracks[2].sends.push(peel_document::MixerSend {
+            target: bus_id,
+            gain_db: -6.0,
+        });
+        assert!(peel_document::validate(&p).iter().all(|i| !i.is_error()));
+        let (slots, meters) = ctx_for(&p);
+        let (plan, index) = compile(
+            &p,
+            &CompileContext {
+                mode: PlayMode::Pattern(pid),
+                slots: &slots,
+                meters: &meters,
+                samples: &HashMap::new(),
+            },
+        );
+        let (si, bi) = (index.tracks[&src] as usize, index.tracks[&bus_id] as usize);
+        assert!(si < bi, "source before bus");
+        assert_eq!(plan.tracks[si].sends.len(), 1);
+        assert_eq!(plan.tracks[si].sends[0].dest as usize, bi);
+        assert!((plan.tracks[si].sends[0].gain - 0.501).abs() < 0.01);
+        // A send back from the bus to the source is a loop.
+        let b = p.mixer.tracks.iter().position(|t| t.id == bus_id).unwrap();
+        p.mixer.tracks[b].sends.push(peel_document::MixerSend {
+            target: src,
+            gain_db: 0.0,
+        });
+        assert!(peel_document::validate(&p).iter().any(|i| i.is_error()));
     }
 }

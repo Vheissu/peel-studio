@@ -172,6 +172,19 @@ pub struct TrackRoute {
     pub output: Option<TrackIndex>,
     /// Telemetry meter index (stable per mixer track identity).
     pub meter: u16,
+    /// Post-fader sends to later tracks in plan order.
+    pub sends: Vec<TrackSend>,
+}
+
+/// A post-fader send from one track into another.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TrackSend {
+    pub dest: TrackIndex,
+    /// Linear send level.
+    pub gain: f32,
+    /// Level used at the end of the previous block, for click-free ramps
+    /// ([`AUTOMATION_UNSET`] until the engine first applies it).
+    pub last: f32,
 }
 
 impl TrackRoute {
@@ -183,6 +196,7 @@ impl TrackRoute {
             muted: false,
             output,
             meter,
+            sends: Vec::new(),
         }
     }
 }

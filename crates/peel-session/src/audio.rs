@@ -141,6 +141,7 @@ fn route_for_lane(
         solo: false,
         inserts: Vec::new(),
         output: None,
+        sends: Vec::new(),
     });
     id
 }

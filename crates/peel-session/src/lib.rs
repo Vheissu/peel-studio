@@ -412,6 +412,15 @@ impl Session {
                             muted: b.muted,
                         });
                     }
+                    for (si, (x, y)) in a.sends.iter().zip(&b.sends).enumerate() {
+                        if x.gain != y.gain {
+                            let _ = self.engine.send(EngineCommand::SetSendGain {
+                                track,
+                                send: si as u16,
+                                gain: y.gain,
+                            });
+                        }
+                    }
                 }
                 self.plan = Some(plan);
             }

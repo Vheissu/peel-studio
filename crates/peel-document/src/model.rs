@@ -393,6 +393,16 @@ pub struct MixerTrack {
     /// Destination track (master when `None`; ignored on the master).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output: Option<Id>,
+    /// Post-fader sends to other tracks (effect returns).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sends: Vec<MixerSend>,
+}
+
+/// A post-fader send to another mixer track.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MixerSend {
+    pub target: Id,
+    pub gain_db: f32,
 }
 
 /// An immutable audio file owned by or referenced from the project.

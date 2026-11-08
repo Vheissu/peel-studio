@@ -444,6 +444,14 @@ impl Engine {
                     t.pan = pan.clamp(-1.0, 1.0);
                 }
             }
+            EngineCommand::SetSendGain { track, send, gain } => {
+                if let Some(t) = self.plan.tracks.get_mut(track as usize)
+                    && let Some(sd) = t.sends.get_mut(send as usize)
+                    && gain.is_finite()
+                {
+                    sd.gain = gain.clamp(0.0, MAX_GAIN);
+                }
+            }
             EngineCommand::SetTrackMute { track, muted } => {
                 if let Some(t) = self.plan.tracks.get_mut(track as usize) {
                     t.muted = muted;
@@ -1196,6 +1204,43 @@ impl Engine {
             if ti == master {
                 continue;
             }
+            // Post-fader sends, ramped across the block.
+            for si in 0..plan.tracks[ti].sends.len() {
+                let send = plan.tracks[ti].sends[si];
+                let dest = send.dest as usize;
+                if dest <= ti || dest >= n_tracks {
+                    continue;
+                }
+                let g1 = send.gain.clamp(0.0, MAX_GAIN);
+                let g0 = if send.last == crate::plan::AUTOMATION_UNSET {
+                    g1
+                } else {
+                    send.last
+                };
+                plan.tracks[ti].sends[si].last = g1;
+                if g0 == 0.0 && g1 == 0.0 {
+                    continue;
+                }
+                let was_dirty = mixer.dirty[dest];
+                let (sl, sr, dl, dr) = mixer.track_pair(ti, dest, frames);
+                let inc = (g1 - g0) / frames.max(1) as f32;
+                let mut g = g0;
+                if was_dirty {
+                    for i in 0..frames {
+                        g += inc;
+                        dl[i] += sl[i] * g;
+                        dr[i] += sr[i] * g;
+                    }
+                } else {
+                    for i in 0..frames {
+                        g += inc;
+                        dl[i] = sl[i] * g;
+                        dr[i] = sr[i] * g;
+                    }
+                    mixer.dirty[dest] = true;
+                }
+            }
+            let route = &plan.tracks[ti];
             let Some(out) = route.output.map(usize::from) else {
                 continue;
             };

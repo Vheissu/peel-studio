@@ -61,6 +61,12 @@ pub enum EngineCommand {
         track: TrackIndex,
         muted: bool,
     },
+    /// Level of a track's `send`-th post-fader send (linear).
+    SetSendGain {
+        track: TrackIndex,
+        send: u16,
+        gain: f32,
+    },
 
     Play,
     /// Stop and release notes; position stays where it is.

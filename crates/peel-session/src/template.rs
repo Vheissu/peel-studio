@@ -50,6 +50,7 @@ pub fn add_channel(
         solo: false,
         inserts: vec![],
         output: None,
+        sends: Vec::new(),
     };
     let ch = Channel {
         id: Id::new(),

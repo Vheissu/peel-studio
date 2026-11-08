@@ -32,6 +32,7 @@ impl Project {
             solo: false,
             inserts: Vec::new(),
             output: None,
+            sends: Vec::new(),
         };
         let tracks = (1..=8)
             .map(|i| Track {
@@ -102,6 +103,7 @@ mod tests {
             solo: false,
             inserts: vec![],
             output: None,
+            sends: Vec::new(),
         };
         let ch = Channel {
             id: Id::new(),

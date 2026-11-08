@@ -61,6 +61,15 @@ pub fn validate(p: &Project) -> Vec<Issue> {
         for d in &t.inserts {
             unique(d.id, "insert", &mut issues);
         }
+        for send in &t.sends {
+            if !track_ids.contains(&send.target) || send.target == t.id || !send.gain_db.is_finite()
+            {
+                issues.push(Issue::error(format!(
+                    "mixer track {} has an invalid send",
+                    t.name
+                )));
+            }
+        }
         if let Some(out) = t.output {
             if !track_ids.contains(&out) {
                 issues.push(Issue::error(format!(
@@ -219,15 +228,43 @@ pub fn validate(p: &Project) -> Vec<Issue> {
 /// Name of a track on a routing cycle, if any.
 fn routing_cycle(p: &Project) -> Option<String> {
     let master = p.mixer.tracks.first()?.id;
-    for start in &p.mixer.tracks {
-        let mut seen = HashSet::new();
-        let mut cur = start.id;
-        while cur != master {
-            if !seen.insert(cur) {
-                return Some(start.name.clone());
+    // Depth-first search over outputs and sends; a back edge is a cycle.
+    fn visit(
+        p: &Project,
+        id: Id,
+        master: Id,
+        state: &mut std::collections::HashMap<Id, u8>,
+    ) -> Option<Id> {
+        match state.get(&id) {
+            Some(1) => return Some(id),
+            Some(2) => return None,
+            _ => {}
+        }
+        state.insert(id, 1);
+        if id != master
+            && let Some(t) = p.mixer.track(id)
+        {
+            let mut next = vec![t.output.unwrap_or(master)];
+            next.extend(t.sends.iter().map(|s| s.target));
+            for n in next {
+                if p.mixer.track(n).is_some()
+                    && let Some(c) = visit(p, n, master, state)
+                {
+                    return Some(c);
+                }
             }
-            let t = p.mixer.track(cur)?;
-            cur = t.output.unwrap_or(master);
+        }
+        state.insert(id, 2);
+        None
+    }
+    let mut state = std::collections::HashMap::new();
+    for t in &p.mixer.tracks {
+        if let Some(c) = visit(p, t.id, master, &mut state) {
+            return Some(
+                p.mixer
+                    .track(c)
+                    .map_or_else(|| t.name.clone(), |t| t.name.clone()),
+            );
         }
     }
     None

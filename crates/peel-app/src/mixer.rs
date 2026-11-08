@@ -90,6 +90,7 @@ pub fn draw(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) {
                 solo: false,
                 inserts: vec![],
                 output: None,
+                sends: Vec::new(),
             })
         });
     }

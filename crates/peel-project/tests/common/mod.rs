@@ -52,6 +52,7 @@ pub fn rich_project(managed_asset: Option<peel_document::AudioAsset>) -> Project
             d
         }],
         output: None,
+        sends: Vec::new(),
     };
     let lead_track = MixerTrack {
         id: Id::new(),
@@ -63,6 +64,7 @@ pub fn rich_project(managed_asset: Option<peel_document::AudioAsset>) -> Project
         solo: true,
         inserts: vec![],
         output: Some(bus.id),
+        sends: Vec::new(),
     };
     p.mixer.tracks.push(bus.clone());
     p.mixer.tracks.push(lead_track.clone());

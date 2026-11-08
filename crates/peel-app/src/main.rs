@@ -22,6 +22,9 @@ mod workspace;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+use inspector::reaches as inspector_reaches;
+
 use std::path::PathBuf;
 
 use peel_session::{Session, template};

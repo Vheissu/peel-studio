@@ -378,6 +378,7 @@ fn track(ui: &mut Ui, r: Rect, id: Id, s: &mut Session, ws: &mut Workspace) {
             });
         }
         body.cut_top(10.0);
+        sends_section(ui, &mut body, &tr, s);
     }
 
     if tr.inserts.is_empty() {
@@ -1037,4 +1038,151 @@ fn eq_view(
         }
     }
     ui.scene.pop_clip();
+}
+
+/// Post-fader sends of a mixer track: one knob per send plus an add menu.
+fn sends_section(ui: &mut Ui, body: &mut Rect, tr: &peel_document::MixerTrack, s: &mut Session) {
+    let t = ui.theme.clone();
+    let id = tr.id;
+    let mut head = body.cut_top(24.0);
+    ui.text(
+        head.cut_left(60.0),
+        "Sends",
+        t.caption,
+        t.text_dim,
+        Align::Start,
+    );
+    let add = ui.icon_button(
+        W::new(("send-add", id)),
+        head.cut_right(24.0),
+        icons::PLUS,
+        false,
+        None,
+    );
+    ui.tooltip(&add, "Send to a bus");
+    if add.clicked {
+        ui.open_popup(W::new(("send-menu", id)), add.rect);
+    }
+    // Valid targets: not this track, not already sent to, and not anything
+    // that feeds into this track (that would make a loop).
+    let p = s.project();
+    let targets: Vec<(peel_document::Id, String)> = p
+        .mixer
+        .tracks
+        .iter()
+        .skip(1)
+        .filter(|x| x.id != id && !tr.sends.iter().any(|sd| sd.target == x.id))
+        .filter(|x| !reaches(p, x.id, id))
+        .map(|x| (x.id, x.name.clone()))
+        .collect();
+    let items: Vec<MenuItem> = if targets.is_empty() {
+        vec![MenuItem::new("Add a mixer track first").enabled(false)]
+    } else {
+        targets
+            .iter()
+            .map(|(_, n)| MenuItem::new(n.clone()))
+            .collect()
+    };
+    if let Some(i) = ui.menu(
+        W::new(("send-menu", id)),
+        vec2(add.rect.x - 120.0, add.rect.bottom() + 4.0),
+        &items,
+    ) && let Some((target, name)) = targets.get(i).cloned()
+    {
+        s.doc.edit(format!("Send to {name}"), |p| {
+            if let Some(x) = p.mixer.track_mut(id) {
+                x.sends.push(peel_document::MixerSend {
+                    target,
+                    gain_db: -6.0,
+                });
+            }
+        });
+    }
+    if tr.sends.is_empty() {
+        let hint = body.cut_top(20.0);
+        ui.text(hint, "None", t.caption, t.text_faint, Align::Start);
+        body.cut_top(8.0);
+        return;
+    }
+    let names: Vec<String> = tr
+        .sends
+        .iter()
+        .map(|sd| {
+            s.project()
+                .mixer
+                .track(sd.target)
+                .map_or("Missing".into(), |x| x.name.clone())
+        })
+        .collect();
+    for (i, sd) in tr.sends.iter().enumerate() {
+        let mut row = body.cut_top(40.0);
+        let knob_r = row.cut_left(40.0);
+        let mut norm = peel_document::db_to_fader(sd.gain_db);
+        let k = ui.knob(
+            W::new(("send", id, i)),
+            Rect::from_center(knob_r.center(), 34.0, 34.0),
+            &mut norm,
+            peel_document::db_to_fader(-6.0),
+            t.accent,
+            false,
+        );
+        ui.tooltip(&k, &crate::util::format_db(sd.gain_db));
+        if k.changed {
+            let db = peel_document::fader_to_db(norm);
+            s.doc.edit_gesture(k.id.0, "Change send level", |p| {
+                if let Some(x) = p.mixer.track_mut(id)
+                    && let Some(send) = x.sends.get_mut(i)
+                {
+                    send.gain_db = db;
+                }
+            });
+        }
+        if k.released {
+            s.doc.end_gesture();
+        }
+        row.cut_left(8.0);
+        let x = ui.icon_button(
+            W::new(("send-remove", id, i)),
+            row.cut_right(24.0).shrink2(0.0, 8.0),
+            icons::X,
+            false,
+            None,
+        );
+        if x.clicked {
+            s.doc.edit("Remove send", |p| {
+                if let Some(t) = p.mixer.track_mut(id)
+                    && i < t.sends.len()
+                {
+                    t.sends.remove(i);
+                }
+            });
+        }
+        let label = format!("{}  {}", names[i], crate::util::format_db(sd.gain_db));
+        ui.text(row, &label, t.label, t.text, Align::Start);
+    }
+    body.cut_top(8.0);
+}
+
+/// True if audio from `from` can reach `to` through outputs and sends.
+pub(crate) fn reaches(
+    p: &peel_document::Project,
+    from: peel_document::Id,
+    to: peel_document::Id,
+) -> bool {
+    let master = p.mixer.tracks[0].id;
+    let mut stack = vec![from];
+    let mut seen = std::collections::HashSet::new();
+    while let Some(c) = stack.pop() {
+        if c == to {
+            return true;
+        }
+        if !seen.insert(c) || c == master {
+            continue;
+        }
+        if let Some(t) = p.mixer.track(c) {
+            stack.push(t.output.unwrap_or(master));
+            stack.extend(t.sends.iter().map(|x| x.target));
+        }
+    }
+    false
 }

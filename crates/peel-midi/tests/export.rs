@@ -25,6 +25,7 @@ fn channel(project: &mut Project, name: &str, device: &str) -> Id {
         solo: false,
         inserts: vec![],
         output: None,
+        sends: Vec::new(),
     };
     let ch = Channel {
         id: Id::new(),

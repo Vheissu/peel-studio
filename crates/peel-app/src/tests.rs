@@ -709,3 +709,55 @@ fn history_panel_jumps_back_several_steps() {
     assert_eq!(h.session().project().bpm(), 100.0);
     assert_eq!(h.session().doc.redo_label(), Some("Tempo 110"));
 }
+
+#[test]
+fn adding_a_send_routes_a_track_to_a_bus() {
+    let mut h = Harness::new();
+    // Make a bus and focus the Piano track.
+    h.studio.session.doc.edit("Add bus", |p| {
+        p.mixer.tracks.push(peel_document::MixerTrack {
+            id: peel_document::Id::new(),
+            name: "Verb".into(),
+            color: peel_document::PALETTE[7],
+            gain_db: 0.0,
+            pan: 0.0,
+            muted: false,
+            solo: false,
+            inserts: vec![],
+            output: None,
+            sends: vec![],
+        })
+    });
+    let piano = h
+        .session()
+        .project()
+        .mixer
+        .tracks
+        .iter()
+        .find(|t| t.name == "Piano")
+        .unwrap()
+        .id;
+    let bus = h.session().project().mixer.tracks.last().unwrap().id;
+    h.studio.ws.focus = Some(crate::workspace::Focus::Track(piano));
+    h.frame();
+    h.click(W::new(("send-add", piano)));
+    h.frame();
+    // The bus is the only valid target besides other channel tracks; pick it by name.
+    let targets: Vec<String> = h
+        .session()
+        .project()
+        .mixer
+        .tracks
+        .iter()
+        .skip(1)
+        .filter(|t| t.id != piano)
+        .map(|t| t.name.clone())
+        .collect();
+    let idx = targets.iter().position(|n| n == "Verb").unwrap();
+    h.click(W::new(("send-menu", piano)).with(("item", idx)));
+    let t = h.session().project().mixer.track(piano).unwrap().clone();
+    assert_eq!(t.sends.len(), 1);
+    assert_eq!(t.sends[0].target, bus);
+    // The bus can no longer send back to the piano track (that would loop).
+    assert!(super::inspector_reaches(h.session().project(), piano, bus));
+}

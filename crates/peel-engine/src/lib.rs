@@ -116,7 +116,7 @@ pub use live::{
 pub use offline::OfflineEngine;
 pub use plan::{
     AUTOMATION_UNSET, AudioRegion, AutomationLane, AutomationTarget, ChannelIndex, ChannelRoute,
-    RenderPlan, SeqEvent, SeqKind, Slot, TrackIndex, TrackRoute,
+    RenderPlan, SeqEvent, SeqKind, Slot, TrackIndex, TrackRoute, TrackSend,
 };
 pub use telemetry::Telemetry;
 
