@@ -629,6 +629,13 @@ impl Session {
             .collect()
     }
 
+    /// Drops the armed lanes and the clips of a finished take: they belong to
+    /// the project that is being replaced.
+    pub(crate) fn forget_lanes(&mut self) {
+        self.rec.armed.clear();
+        self.rec.finished.clear();
+    }
+
     pub fn is_lane_armed(&self, lane: Id) -> bool {
         self.rec.armed.contains(&lane) && self.lane_exists(lane)
     }

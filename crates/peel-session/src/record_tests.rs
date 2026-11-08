@@ -729,3 +729,20 @@ fn a_silent_input_is_flagged_until_a_sound_arrives() {
     input.fail_device("The device was unplugged");
     assert!(s.input_warning().unwrap().contains("unplugged"));
 }
+
+#[test]
+fn opening_another_project_forgets_the_armed_lanes() {
+    let dir = Scratch::new();
+    let (mut s, mut input, lane) = rig(&dir);
+    s.arm_lane(lane, true);
+    s.start_recording().unwrap();
+    wait(&mut s, "the transport", transport_running);
+    feed(&mut input, &ramp(4_800));
+    s.replace_project(template::beat_and_melody());
+    assert!(!s.is_recording());
+    assert!(s.armed_lanes().is_empty());
+    assert!(
+        s.stop_recording().is_empty(),
+        "those clips belonged to the old project"
+    );
+}

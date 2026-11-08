@@ -707,6 +707,7 @@ impl Session {
     /// Replaces the document (new project, template, open).
     pub fn replace_project(&mut self, project: Project) {
         self.stop();
+        self.forget_lanes();
         self.doc.replace(project);
         self.path = None;
         self.mode = PlayMode::Pattern(
