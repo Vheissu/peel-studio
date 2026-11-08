@@ -15,6 +15,7 @@ use crate::workspace::{DockTab, Focus, Workspace};
 
 const ROW_H: f32 = 34.0;
 const ROW_GAP: f32 = 4.0;
+const GRAPH_H: f32 = 64.0;
 const STEP: Time = Time::new_const(1, 4);
 
 #[derive(Default)]
@@ -39,10 +40,31 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
     let steps_total = (pattern.length.as_f64() * 4.0).round().max(1.0) as usize;
 
     header_tools(ui, tools, s, pid, &pattern);
+    {
+        // Velocity graph toggle, at the left of the header tools.
+        let mut row = tools;
+        let toggle = row.cut_left(30.0);
+        let b = ui.icon_button(
+            W::new("rack-graph"),
+            toggle,
+            icons::EQUALIZER,
+            ws.rack_graph,
+            None,
+        );
+        ui.tooltip(&b, "Velocity graph for the selected channel");
+        if b.clicked {
+            ws.rack_graph = !ws.rack_graph;
+        }
+    }
 
     let body = r.shrink2(10.0, 4.0);
     let channels: Vec<Channel> = s.project().channels.clone();
-    let content_h = channels.len() as f32 * (ROW_H + ROW_GAP) + ROW_H + 8.0;
+    let graph_h = if ws.rack_graph {
+        GRAPH_H + ROW_GAP
+    } else {
+        0.0
+    };
+    let content_h = channels.len() as f32 * (ROW_H + ROW_GAP) + ROW_H + 8.0 + graph_h;
     let mut offset = vec2(0.0, ws.rack_scroll);
     ui.scroll_area(
         W::new("rack-scroll"),
@@ -112,10 +134,20 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
             h: ROW_H,
         };
         y += ROW_H + ROW_GAP;
+        let selected = ws.selected_channel == Some(ch.id);
+        let graph_row = (selected && ws.rack_graph).then(|| {
+            let g = Rect {
+                x: body.x,
+                y,
+                w: body.w,
+                h: GRAPH_H,
+            };
+            y += GRAPH_H + ROW_GAP;
+            g
+        });
         if row.bottom() < body.y || row.y > body.bottom() {
             continue;
         }
-        let selected = ws.selected_channel == Some(ch.id);
         if selected {
             ui.scene
                 .rect(row.expand(2.0), t.radius_m, t.raised.alpha(0.55));
@@ -211,6 +243,26 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
                 s,
                 pid,
             );
+            if let Some(g) = graph_row {
+                let grid_g = Rect {
+                    y: g.y,
+                    h: g.h,
+                    ..grid
+                };
+                velocity_graph(
+                    ui,
+                    g,
+                    grid_g,
+                    ch,
+                    &notes,
+                    steps_total,
+                    step_w,
+                    step_gap,
+                    group_gap,
+                    s,
+                    pid,
+                );
+            }
         } else {
             note_preview(ui, grid, ch, &notes, pattern.length, ws);
         }
@@ -782,5 +834,97 @@ pub fn delete_channel(s: &mut Session, ws: &mut Workspace, cid: Id) {
     if ws.selected_channel == Some(cid) {
         ws.selected_channel = s.project().channels.first().map(|c| c.id);
         ws.focus = ws.selected_channel.map(Focus::Channel);
+    }
+}
+
+/// Velocity bars under the selected channel's steps; drag across to draw.
+#[allow(clippy::too_many_arguments)]
+fn velocity_graph(
+    ui: &mut Ui,
+    row: Rect,
+    grid: Rect,
+    ch: &Channel,
+    notes: &[Note],
+    steps: usize,
+    step_w: f32,
+    step_gap: f32,
+    group_gap: f32,
+    s: &mut Session,
+    pid: Id,
+) {
+    let t = ui.theme.clone();
+    let c = col(ch.color);
+    ui.scene.rect(row, t.radius_m, t.bg.mix(t.panel, 0.5));
+    ui.text(
+        Rect {
+            x: row.x + 28.0,
+            w: 132.0,
+            ..row
+        },
+        "Velocity",
+        t.caption,
+        t.text_faint,
+        Align::Start,
+    );
+    let inner = grid.shrink2(0.0, 6.0);
+    let id = W::new(("rack-velocity", ch.id));
+    let resp = ui.interact(id, inner);
+    if resp.hovered {
+        ui.set_cursor(CursorIcon::Crosshair);
+    }
+    let mut x = grid.x;
+    let mut cells = Vec::with_capacity(steps);
+    for i in 0..steps {
+        if i > 0 {
+            x += if i % 4 == 0 { group_gap } else { step_gap };
+        }
+        cells.push(Rect {
+            x,
+            y: inner.y,
+            w: step_w,
+            h: inner.h,
+        });
+        x += step_w;
+    }
+    for (i, cell) in cells.iter().enumerate() {
+        let pos = STEP.mul_int(i as i64);
+        ui.scene.rect(*cell, 2.0, t.raised.alpha(0.5));
+        if let Some(n) = notes.iter().find(|n| n.start == pos) {
+            let h = cell.h * n.velocity;
+            ui.scene.rect(
+                Rect {
+                    y: cell.bottom() - h,
+                    h,
+                    ..*cell
+                },
+                2.0,
+                c.alpha(0.85),
+            );
+        }
+    }
+    if (resp.pressed || resp.dragging)
+        && let Some(p) = ui.pointer()
+        && let Some(i) = cells
+            .iter()
+            .position(|r| p.x >= r.x - step_gap * 0.5 && p.x < r.right() + step_gap * 0.5)
+    {
+        let pos = STEP.mul_int(i as i64);
+        if notes.iter().any(|n| n.start == pos) {
+            let vel = ((inner.bottom() - p.y) / inner.h).clamp(0.05, 1.0);
+            let cid = ch.id;
+            s.doc.edit_gesture(id.0, "Change velocity", |p| {
+                if let Some(pt) = p.pattern_mut(pid)
+                    && let Some(n) = pt
+                        .notes
+                        .iter_mut()
+                        .find(|n| n.channel == cid && n.start == pos)
+                {
+                    n.velocity = vel;
+                }
+            });
+        }
+    }
+    if resp.released {
+        s.doc.end_gesture();
     }
 }

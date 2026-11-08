@@ -81,6 +81,7 @@ pub struct Workspace {
     pub playlist: PlaylistView,
     pub mixer_scroll: f32,
     pub rack_scroll: f32,
+    pub rack_graph: bool,
     pub octave: i32,
     /// Computer-keyboard notes currently held: physical key -> (channel, key).
     pub held: HashMap<KeyCode, (Id, u8)>,
@@ -130,6 +131,7 @@ impl Default for Workspace {
             },
             mixer_scroll: 0.0,
             rack_scroll: 0.0,
+            rack_graph: false,
             octave: 4,
             held: HashMap::new(),
             export: None,

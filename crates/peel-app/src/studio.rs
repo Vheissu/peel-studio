@@ -194,6 +194,21 @@ impl Studio {
                 log::error!("PEEL_AUDIO: {e}");
             }
         }
+        if std::env::var_os("PEEL_GRAPH").is_some() {
+            self.ws.rack_graph = true;
+        }
+        if let Ok(name) = std::env::var("PEEL_CHANNEL")
+            && let Some(c) = self
+                .session
+                .project()
+                .channels
+                .iter()
+                .find(|c| c.name == name)
+                .map(|c| c.id)
+        {
+            self.ws.selected_channel = Some(c);
+            self.ws.focus = Some(Focus::Channel(c));
+        }
         if std::env::var_os("PEEL_AUTOMATION").is_some() {
             use peel_document::{AutomationPoint, AutomationTarget, ClipContent, Time};
             let master = self.session.project().mixer.tracks[0].id;
