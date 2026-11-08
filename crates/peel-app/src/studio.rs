@@ -197,6 +197,16 @@ impl Studio {
             ) {
                 log::error!("PEEL_AUDIO: {e}");
             }
+            if let Some(c) = self
+                .session
+                .project()
+                .arrangement()
+                .clips
+                .iter()
+                .find(|c| c.track == lane)
+            {
+                self.ws.focus = Some(Focus::Clip(c.id));
+            }
         }
         if let Some(path) = std::env::var_os("PEEL_SAMPLE")
             && let Some(id) =

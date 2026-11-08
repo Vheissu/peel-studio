@@ -36,6 +36,8 @@ pub enum Tool {
 pub enum Focus {
     Channel(Id),
     Track(Id),
+    /// An audio clip in the Playlist.
+    Clip(Id),
 }
 
 pub struct RollView {

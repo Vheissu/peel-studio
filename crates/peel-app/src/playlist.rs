@@ -11,7 +11,7 @@ use peel_ui::{Align, Color, CursorIcon, MenuItem, Rect, Ui, icons, vec2};
 use crate::browser::BrowserItem;
 use crate::studio::current_pattern;
 use crate::util::{col, format_length, ink_on};
-use crate::workspace::{DockTab, Tool, Workspace};
+use crate::workspace::{DockTab, Focus, Tool, Workspace};
 
 const HEAD_W: f32 = 150.0;
 const RULER_H: f32 = 26.0;
@@ -1019,6 +1019,9 @@ fn clips(
                         ws.playlist.selection.clear();
                     }
                     ws.playlist.selection.insert(c.id);
+                }
+                if matches!(c.content, ClipContent::Audio { .. }) {
+                    ws.focus = Some(Focus::Clip(c.id));
                 }
                 st.start_lane = lane;
                 let selected: Vec<Clip> = s

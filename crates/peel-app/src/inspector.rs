@@ -30,6 +30,7 @@ pub fn draw(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) {
         Some(Focus::Track(id)) if s.project().mixer.track(id).is_some() => {
             track(ui, body, id, s, ws)
         }
+        Some(Focus::Clip(id)) if audio_clip_of(s, id).is_some() => audio_clip(ui, body, id, s),
         _ => {
             let mut c = body;
             c.cut_top(body.h * 0.35);
@@ -1247,4 +1248,276 @@ pub(crate) fn reaches(
         }
     }
     false
+}
+
+fn audio_clip_of(s: &Session, id: Id) -> Option<peel_document::Clip> {
+    s.project()
+        .arrangement()
+        .clips
+        .iter()
+        .find(|c| c.id == id && matches!(c.content, peel_document::ClipContent::Audio { .. }))
+        .cloned()
+}
+
+/// Gain range of the clip gain knob, in dB.
+const CLIP_GAIN: (f32, f32) = (-24.0, 12.0);
+
+/// Changes an audio clip's settings as one undo step (or gesture).
+fn edit_audio_clip(
+    s: &mut Session,
+    id: Id,
+    label: &str,
+    gesture: Option<u64>,
+    f: impl FnOnce(&mut f32, &mut bool, &mut Id),
+) {
+    let apply = |p: &mut peel_document::Project| {
+        if let Some(c) = p.arrangement_mut().clips.iter_mut().find(|c| c.id == id)
+            && let peel_document::ClipContent::Audio {
+                gain_db,
+                reversed,
+                track,
+                ..
+            } = &mut c.content
+        {
+            f(gain_db, reversed, track);
+        }
+    };
+    match gesture {
+        Some(g) => s.doc.edit_gesture(g, label, apply),
+        None => s.doc.edit(label, apply),
+    }
+}
+
+fn audio_clip(ui: &mut Ui, r: Rect, id: Id, s: &mut Session) {
+    let t = ui.theme.clone();
+    let Some(clip) = audio_clip_of(s, id) else {
+        return;
+    };
+    let peel_document::ClipContent::Audio {
+        asset,
+        gain_db,
+        reversed,
+        track,
+        ..
+    } = clip.content.clone()
+    else {
+        return;
+    };
+    let name = s
+        .project()
+        .asset(asset)
+        .map_or("Audio".to_string(), |a| a.name.clone());
+    let tempo = peel_time::TempoMap::from_segments(&s.project().tempo);
+    let bpm = tempo.bpm_at(clip.start.as_f64());
+    let secs = clip.length.as_f64() * 60.0 / bpm;
+    let mut body = r;
+
+    // Header.
+    let head = body.cut_top(44.0);
+    let mut hr = head;
+    let sw = hr.cut_left(6.0);
+    ui.scene.rect(sw.shrink2(0.0, 4.0), 3.0, t.text_dim);
+    hr.cut_left(10.0);
+    let shown = ui.fit_text(&name, t.heading, hr.w);
+    ui.text(hr.cut_top(24.0), &shown, t.heading, t.text, Align::Start);
+    ui.text(
+        hr,
+        &format!("Audio clip  ·  {secs:.2} s"),
+        t.caption,
+        t.text_faint,
+        Align::Start,
+    );
+    body.cut_top(10.0);
+
+    // Whole file, with the part the clip plays lit.
+    let wave = body.cut_top(72.0);
+    body.cut_top(12.0);
+    ui.scene.rect(wave, t.radius_m, t.bg);
+    let total = s.asset_duration_seconds(asset).unwrap_or(0.0);
+    let src_start = peel_session::clip_source_start_seconds(&tempo, &clip);
+    if let Some(peaks) = s.audio_peaks(asset)
+        && total > 0.0
+    {
+        let inner = wave.shrink2(6.0, 6.0);
+        let cols = inner.w.max(1.0) as usize;
+        let frames = peaks.frames();
+        let (lit0, lit1) = (
+            (src_start / total) as f32,
+            ((src_start + secs) / total) as f32,
+        );
+        for (i, (lo, hi)) in peaks.query(0, frames, cols).enumerate() {
+            let x = inner.x + i as f32;
+            let f = i as f32 / cols as f32;
+            let c = if f >= lit0 && f <= lit1 {
+                t.accent
+            } else {
+                t.text_faint.alpha(0.5)
+            };
+            let mid = inner.center().y;
+            let (y0, y1) = (
+                mid - hi.max(0.0) * inner.h * 0.5,
+                mid - lo.min(0.0) * inner.h * 0.5,
+            );
+            ui.scene.rect(
+                Rect {
+                    x,
+                    y: y0,
+                    w: 1.0,
+                    h: (y1 - y0).max(1.0),
+                },
+                0.0,
+                c,
+            );
+        }
+        let lit = Rect {
+            x: inner.x + inner.w * lit0,
+            w: inner.w * (lit1 - lit0).max(0.0),
+            ..wave
+        };
+        ui.scene.outline(lit, 2.0, 1.0, t.accent.alpha(0.5));
+    } else {
+        ui.text(wave, "Loading", t.caption, t.text_faint, Align::Center);
+    }
+
+    // Gain, reverse, normalize.
+    let row = body.cut_top(CELL_H);
+    body.cut_top(8.0);
+    let cells = row.columns(3, 0.0);
+    let mut norm = (gain_db - CLIP_GAIN.0) / (CLIP_GAIN.1 - CLIP_GAIN.0);
+    let default = -CLIP_GAIN.0 / (CLIP_GAIN.1 - CLIP_GAIN.0);
+    let gid = W::new(("clip-gain", id));
+    let k = knob_cell(
+        ui,
+        gid,
+        cells[0],
+        &mut norm,
+        default,
+        t.accent,
+        false,
+        "Gain",
+        &crate::util::format_db(gain_db),
+    );
+    if k.changed {
+        let db = (CLIP_GAIN.0 + norm * (CLIP_GAIN.1 - CLIP_GAIN.0)).clamp(CLIP_GAIN.0, CLIP_GAIN.1);
+        edit_audio_clip(s, id, "Clip gain", Some(gid.0), |g, _, _| *g = db);
+    }
+    if k.released {
+        s.doc.end_gesture();
+    }
+    let mut cr = cells[1];
+    let led_r = cr.cut_top(44.0);
+    let led = ui.led(
+        W::new(("clip-rev", id)),
+        Rect::from_center(led_r.center(), 22.0, 22.0),
+        reversed,
+        t.accent,
+    );
+    ui.name(&led, "Reverse");
+    ui.text(
+        cr.cut_top(16.0),
+        "Reverse",
+        t.caption,
+        t.text_dim,
+        Align::Center,
+    );
+    if led.clicked {
+        edit_audio_clip(
+            s,
+            id,
+            if reversed {
+                "Play forwards"
+            } else {
+                "Reverse clip"
+            },
+            None,
+            |_, rv, _| *rv = !*rv,
+        );
+    }
+    let mut cr = cells[2];
+    let btn_r = Rect::from_center(cr.cut_top(44.0).center(), 30.0, 30.0);
+    let nb = ui.icon_button(
+        W::new(("clip-normalize", id)),
+        btn_r,
+        icons::LIGHTNING,
+        false,
+        None,
+    );
+    ui.text(
+        cr.cut_top(16.0),
+        "Normalize",
+        t.caption,
+        t.text_dim,
+        Align::Center,
+    );
+    ui.tooltip(
+        &nb,
+        "Set the gain so the loudest peak in the clip reaches 0 dB",
+    );
+    if nb.clicked
+        && let Some(buf) = s.sample(asset)
+    {
+        let rate = f64::from(buf.sample_rate);
+        let a = (src_start * rate) as usize;
+        let b = ((src_start + secs) * rate) as usize;
+        let peak = buf
+            .channels
+            .iter()
+            .flat_map(|d| {
+                let (a, b) = (a.min(d.len()), b.min(d.len()));
+                d[a..b].iter().map(|x| x.abs())
+            })
+            .fold(0.0f32, f32::max);
+        if peak > 1e-5 {
+            let db = (-peel_dsp::util::gain_to_db(peak)).clamp(CLIP_GAIN.0, CLIP_GAIN.1);
+            edit_audio_clip(s, id, "Normalize clip", None, |g, _, _| *g = db);
+        } else {
+            s.notify("The clip is silent", true);
+        }
+    }
+
+    // Mixer output.
+    let mut row = body.cut_top(28.0);
+    ui.text(
+        row.cut_left(60.0),
+        "Output",
+        t.caption,
+        t.text_dim,
+        Align::Start,
+    );
+    let tracks: Vec<(Id, String)> = s
+        .project()
+        .mixer
+        .tracks
+        .iter()
+        .map(|m| (m.id, m.name.clone()))
+        .collect();
+    let current = tracks
+        .iter()
+        .find(|(tid, _)| *tid == track)
+        .map_or("Master".to_string(), |x| x.1.clone());
+    let oid = W::new(("clip-output", id));
+    let ob = ui.interact_button(oid, row, &current);
+    ui.scene.rect(
+        row,
+        t.radius_m,
+        if ob.hovered {
+            t.control_hover
+        } else {
+            t.control
+        },
+    );
+    let mut inner = row.shrink2(10.0, 0.0);
+    ui.icon(inner.cut_right(14.0), icons::CARET_DOWN, 11.0, t.text_dim);
+    ui.text(inner, &current, t.label, t.text, Align::Start);
+    if ob.clicked {
+        ui.open_popup(oid.with("menu"), row);
+    }
+    let items: Vec<MenuItem> = tracks
+        .iter()
+        .map(|(tid, n)| MenuItem::new(n.clone()).checked(*tid == track))
+        .collect();
+    if let Some(i) = ui.menu(oid.with("menu"), vec2(row.x, row.bottom() + 4.0), &items) {
+        let to = tracks[i].0;
+        edit_audio_clip(s, id, "Route clip", None, |_, _, tr| *tr = to);
+    }
 }

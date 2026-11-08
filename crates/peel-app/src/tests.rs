@@ -1109,3 +1109,75 @@ fn recording_audio_onto_an_armed_lane() {
     assert_eq!(h.session().doc.undo_label(), Some("Record audio"));
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn the_inspector_edits_a_selected_audio_clip() {
+    let dir = std::env::temp_dir().join(format!("peel-app-clip-{}", peel_document::Id::new()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("quiet.wav");
+    let sr = 48_000u32;
+    // Peaks at 0.25 (-12 dB).
+    let tone: Vec<f32> = (0..sr)
+        .map(|i| (i as f32 * 220.0 * std::f32::consts::TAU / sr as f32).sin() * 0.25)
+        .collect();
+    peel_media::write_wav(&path, &[&tone, &tone], sr, peel_media::WavFormat::FLOAT32).unwrap();
+    let mut h = Harness::new();
+    let lane = h.session().project().arrangement().tracks[4].id;
+    h.studio
+        .session
+        .add_audio_clip(lane, Time::beats(1), &path)
+        .expect("add clip");
+    let clip = |h: &Harness| {
+        h.session()
+            .project()
+            .arrangement()
+            .clips
+            .iter()
+            .find(|c| c.track == lane)
+            .cloned()
+            .expect("clip")
+    };
+    let id = clip(&h).id;
+    let ClipContent::Audio { asset, .. } = clip(&h).content else {
+        unreachable!()
+    };
+    for _ in 0..300 {
+        if h.session().sample(asset).is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        h.frame();
+    }
+    // Clicking the clip shows it in the inspector.
+    let canvas = h.rect(W::new("pl-canvas"));
+    let (zoom, lane_h) = (h.studio.ws.playlist.zoom_x, h.studio.ws.playlist.lane_h);
+    h.click_at(vec2(canvas.x + zoom * 1.5, canvas.y + lane_h * 4.6));
+    assert_eq!(h.studio.ws.focus, Some(crate::workspace::Focus::Clip(id)));
+    h.frame();
+    h.click(W::new(("clip-rev", id)));
+    h.click(W::new(("clip-normalize", id)));
+    let ClipContent::Audio {
+        gain_db, reversed, ..
+    } = clip(&h).content
+    else {
+        unreachable!()
+    };
+    assert!(reversed, "reversed");
+    assert!(
+        (gain_db - 12.04).abs() < 0.1,
+        "normalized to 0 dB: {gain_db}"
+    );
+    // Route to the Drums mixer track.
+    let drums = h.session().project().mixer.tracks[1].id;
+    h.click(W::new(("clip-output", id)));
+    h.click(
+        W::new(("clip-output", id))
+            .with("menu")
+            .with(("item", 1usize)),
+    );
+    let ClipContent::Audio { track, .. } = clip(&h).content else {
+        unreachable!()
+    };
+    assert_eq!(track, drums);
+    std::fs::remove_dir_all(&dir).ok();
+}
