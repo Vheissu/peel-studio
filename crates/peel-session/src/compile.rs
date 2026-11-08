@@ -6,10 +6,12 @@
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
-use peel_document::{ClipContent, Id, Pattern, Project, Time};
+use peel_document::{Clip, ClipContent, Id, Pattern, Project, Time};
+use peel_dsp::SampleBuffer;
 use peel_dsp::util::db_to_gain;
-use peel_engine::{ChannelRoute, RenderPlan, SeqEvent, SeqKind, Slot, TrackRoute};
+use peel_engine::{AudioRegion, ChannelRoute, RenderPlan, SeqEvent, SeqKind, Slot, TrackRoute};
 use peel_time::TempoMap;
 
 /// What the transport plays.
@@ -36,6 +38,10 @@ pub struct CompileContext<'a> {
     pub slots: &'a HashMap<Id, Slot>,
     /// Stable meter index for each mixer track id.
     pub meters: &'a HashMap<Id, u16>,
+    /// Decoded audio by asset id, already at the engine sample rate. Audio
+    /// clips whose asset is missing here are left out of the plan; the
+    /// caller loads them and compiles again.
+    pub samples: &'a HashMap<Id, Arc<SampleBuffer>>,
 }
 
 pub fn compile(p: &Project, ctx: &CompileContext) -> (RenderPlan, PlanIndex) {
@@ -132,8 +138,11 @@ pub fn compile(p: &Project, ctx: &CompileContext) -> (RenderPlan, PlanIndex) {
         });
     }
 
+    let tempo = TempoMap::from_segments(&p.tempo);
+
     // ---- sequence ----
     let mut seq = Vec::new();
+    let mut audio = Vec::new();
     let mut voice: u32 = 1;
     let (length, loop_range) = match ctx.mode {
         PlayMode::Pattern(pid) => {
@@ -165,21 +174,30 @@ pub fn compile(p: &Project, ctx: &CompileContext) -> (RenderPlan, PlanIndex) {
                 if clip.muted || muted_tracks.contains(&clip.track) {
                     continue;
                 }
-                if let ClipContent::Pattern { pattern } = clip.content
-                    && let Some(pt) = p.pattern(pattern)
-                {
-                    let salt = clip.id.short();
-                    realize(
-                        p,
-                        pt,
-                        clip.start,
-                        clip.offset,
-                        clip.length,
-                        &index,
-                        salt,
-                        &mut voice,
-                        &mut seq,
-                    );
+                match &clip.content {
+                    ClipContent::Pattern { pattern } => {
+                        if let Some(pt) = p.pattern(*pattern) {
+                            let salt = clip.id.short();
+                            realize(
+                                p,
+                                pt,
+                                clip.start,
+                                clip.offset,
+                                clip.length,
+                                &index,
+                                salt,
+                                &mut voice,
+                                &mut seq,
+                            );
+                        }
+                    }
+                    ClipContent::Audio { .. } => {
+                        if let Some(region) =
+                            audio_region(clip, &tempo, &index, index.tracks[&master_id], ctx)
+                        {
+                            audio.push(region);
+                        }
+                    }
                 }
             }
             let bar = p.time_signature.bar_length();
@@ -195,12 +213,12 @@ pub fn compile(p: &Project, ctx: &CompileContext) -> (RenderPlan, PlanIndex) {
 
     let plan = RenderPlan {
         revision: p.revision,
-        tempo: TempoMap::from_segments(&p.tempo),
+        tempo,
         sequence: seq,
         length_beats: length,
         loop_range,
         channels,
-        audio: Vec::new(),
+        audio,
         tracks,
         master: (order.len() - 1) as u16,
         beats_per_bar: (p.time_signature.bar_length().as_f64()
@@ -209,6 +227,54 @@ pub fn compile(p: &Project, ctx: &CompileContext) -> (RenderPlan, PlanIndex) {
         .max(1.0) as u32,
     };
     (plan, index)
+}
+
+/// The region an audio clip plays as, or `None` if the clip cannot sound yet
+/// (its audio is not decoded) or at all (empty).
+///
+/// The clip's `offset` is in quarter notes of the tempo at the clip start,
+/// so with a constant tempo it is exactly `offset * 60 / bpm` seconds into
+/// the file. The audio then plays at its native speed whatever the tempo
+/// does afterwards.
+fn audio_region(
+    clip: &Clip,
+    tempo: &TempoMap,
+    index: &PlanIndex,
+    master: u16,
+    ctx: &CompileContext,
+) -> Option<AudioRegion> {
+    let ClipContent::Audio {
+        asset,
+        gain_db,
+        reversed,
+        track,
+        fade_in,
+        fade_out,
+    } = &clip.content
+    else {
+        return None;
+    };
+    let sample = ctx.samples.get(asset)?;
+    if !clip.length.is_positive() {
+        return None;
+    }
+    let start = clip.start.as_f64();
+    let length = clip.length.as_f64();
+    let fade_in = fade_in.as_f64().clamp(0.0, length);
+    let fade_out = fade_out.as_f64().clamp(0.0, length - fade_in);
+    Some(AudioRegion {
+        // A clip routed to a mixer track that no longer exists plays on the
+        // master.
+        track: index.tracks.get(track).copied().unwrap_or(master),
+        sample: sample.clone(),
+        start_beat: start,
+        end_beat: (clip.start + clip.length).as_f64(),
+        source_start_seconds: clip.offset.as_f64() * 60.0 / tempo.bpm_at(start),
+        gain: db_to_gain(*gain_db),
+        reversed: *reversed,
+        fade_in_beats: fade_in,
+        fade_out_beats: fade_out,
+    })
 }
 
 /// Swing offset for a note start (delays off-beat 16ths).
@@ -324,6 +390,7 @@ fn realize(
 /// commands can update the running plan without a swap.
 pub fn same_structure(a: &RenderPlan, b: &RenderPlan) -> bool {
     a.sequence == b.sequence
+        && a.audio == b.audio
         && a.tempo == b.tempo
         && a.length_beats == b.length_beats
         && a.loop_range == b.loop_range
@@ -404,12 +471,14 @@ mod tests {
     fn pattern_mode_loops_pattern() {
         let (p, _, pid) = project();
         let (slots, meters) = ctx_for(&p);
+        let samples = HashMap::new();
         let (plan, _) = compile(
             &p,
             &CompileContext {
                 mode: PlayMode::Pattern(pid),
                 slots: &slots,
                 meters: &meters,
+                samples: &samples,
             },
         );
         assert_eq!(plan.sequence.len(), 8);
@@ -434,12 +503,14 @@ mod tests {
             content: ClipContent::Pattern { pattern: pid },
         });
         let (slots, meters) = ctx_for(&p);
+        let samples = HashMap::new();
         let (plan, _) = compile(
             &p,
             &CompileContext {
                 mode: PlayMode::Song,
                 slots: &slots,
                 meters: &meters,
+                samples: &samples,
             },
         );
         let ons: Vec<f64> = plan
@@ -482,12 +553,14 @@ mod tests {
             content: ClipContent::Pattern { pattern: pid },
         });
         let (slots, meters) = ctx_for(&p);
+        let samples = HashMap::new();
         let (plan, _) = compile(
             &p,
             &CompileContext {
                 mode: PlayMode::Song,
                 slots: &slots,
                 meters: &meters,
+                samples: &samples,
             },
         );
         let ons: Vec<f64> = plan
@@ -504,10 +577,12 @@ mod tests {
     fn structure_comparison_ignores_gains() {
         let (mut p, _, pid) = project();
         let (slots, meters) = ctx_for(&p);
+        let samples = HashMap::new();
         let ctx = CompileContext {
             mode: PlayMode::Pattern(pid),
             slots: &slots,
             meters: &meters,
+            samples: &samples,
         };
         let (a, _) = compile(&p, &ctx);
         p.mixer.tracks[1].gain_db = -6.0;
@@ -532,12 +607,14 @@ mod tests {
         };
         p.mixer.tracks.push(other);
         let (slots, meters) = ctx_for(&p);
+        let samples = HashMap::new();
         let (plan, index) = compile(
             &p,
             &CompileContext {
                 mode: PlayMode::Pattern(pid),
                 slots: &slots,
                 meters: &meters,
+                samples: &samples,
             },
         );
         let a = index.tracks[&p.mixer.tracks[1].id] as usize;
@@ -545,5 +622,205 @@ mod tests {
         assert!(plan.tracks[a].muted);
         assert!(!plan.tracks[b].muted);
         assert!(!plan.tracks[plan.master as usize].muted);
+    }
+
+    // ---- audio clips ----
+
+    struct AudioFixture {
+        p: Project,
+        asset: Id,
+        track: Id,
+        lane: Id,
+        samples: HashMap<Id, Arc<SampleBuffer>>,
+    }
+
+    fn audio_fixture() -> AudioFixture {
+        let (mut p, _, _) = project();
+        let asset = Id::new();
+        p.assets.push(peel_document::AudioAsset {
+            id: asset,
+            hash: "00".into(),
+            name: "loop.wav".into(),
+            path: "loop.wav".into(),
+            managed: false,
+            sample_rate: 48_000,
+            channels: 1,
+            frames: 96_000,
+        });
+        let track = p.mixer.tracks[1].id;
+        let lane = p.arrangement().tracks[0].id;
+        let buf = Arc::new(SampleBuffer::new("loop", 48_000.0, vec![vec![0.5; 96_000]]));
+        AudioFixture {
+            p,
+            asset,
+            track,
+            lane,
+            samples: HashMap::from([(asset, buf)]),
+        }
+    }
+
+    impl AudioFixture {
+        fn clip(&mut self, start: Time, length: Time, offset: Time) -> &mut Clip {
+            let clips = &mut self.p.arrangement_mut().clips;
+            clips.push(Clip {
+                id: Id::new(),
+                track: self.lane,
+                start,
+                length,
+                offset,
+                muted: false,
+                content: ClipContent::audio(self.asset, self.track),
+            });
+            clips.last_mut().unwrap()
+        }
+
+        fn compile(&self, mode: PlayMode) -> (RenderPlan, PlanIndex) {
+            let (slots, meters) = ctx_for(&self.p);
+            compile(
+                &self.p,
+                &CompileContext {
+                    mode,
+                    slots: &slots,
+                    meters: &meters,
+                    samples: &self.samples,
+                },
+            )
+        }
+    }
+
+    #[test]
+    fn audio_clips_become_regions_in_song_mode() {
+        let mut f = audio_fixture();
+        let (asset, track) = (f.asset, f.track);
+        let c = f.clip(Time::beats(4), Time::beats(6), Time::new(3, 2));
+        c.content = ClipContent::Audio {
+            asset,
+            gain_db: -6.0,
+            reversed: true,
+            track,
+            fade_in: Time::new(1, 2),
+            fade_out: Time::beats(1),
+        };
+        let (plan, index) = f.compile(PlayMode::Song);
+        assert_eq!(plan.audio.len(), 1);
+        let r = &plan.audio[0];
+        assert_eq!(r.track, index.tracks[&track]);
+        assert!(Arc::ptr_eq(&r.sample, &f.samples[&asset]));
+        assert_eq!((r.start_beat, r.end_beat), (4.0, 10.0));
+        // 1.5 beats at 120 BPM.
+        assert_eq!(r.source_start_seconds, 0.75);
+        assert!((r.gain - db_to_gain(-6.0)).abs() < 1e-7);
+        assert!(r.reversed);
+        assert_eq!((r.fade_in_beats, r.fade_out_beats), (0.5, 1.0));
+        // The arrangement ends at beat 10; the plan runs to the next bar.
+        assert_eq!(plan.length_beats, 12.0);
+
+        // Pattern mode never plays arrangement audio.
+        let (plan, _) = f.compile(PlayMode::Pattern(f.p.patterns[0].id));
+        assert!(plan.audio.is_empty());
+    }
+
+    #[test]
+    fn audio_clips_without_decoded_audio_are_skipped_until_it_arrives() {
+        let mut f = audio_fixture();
+        f.clip(Time::ZERO, Time::beats(4), Time::ZERO);
+        let loaded = f.samples.clone();
+        f.samples.clear();
+        let (plan, _) = f.compile(PlayMode::Song);
+        assert!(plan.audio.is_empty());
+        // The length still counts, so the transport does not stop early.
+        assert_eq!(plan.length_beats, 4.0);
+        f.samples = loaded;
+        assert_eq!(f.compile(PlayMode::Song).0.audio.len(), 1);
+    }
+
+    #[test]
+    fn muted_clips_and_lanes_leave_no_region() {
+        let mut f = audio_fixture();
+        f.clip(Time::ZERO, Time::beats(2), Time::ZERO).muted = true;
+        assert!(f.compile(PlayMode::Song).0.audio.is_empty());
+
+        let mut f = audio_fixture();
+        f.clip(Time::ZERO, Time::beats(2), Time::ZERO);
+        let lane = f.lane;
+        f.p.arrangement_mut()
+            .tracks
+            .iter_mut()
+            .find(|t| t.id == lane)
+            .unwrap()
+            .muted = true;
+        assert!(f.compile(PlayMode::Song).0.audio.is_empty());
+    }
+
+    #[test]
+    fn fades_are_limited_to_the_clip() {
+        let mut f = audio_fixture();
+        let (asset, track) = (f.asset, f.track);
+        let c = f.clip(Time::ZERO, Time::beats(2), Time::ZERO);
+        c.content = ClipContent::Audio {
+            asset,
+            gain_db: 0.0,
+            reversed: false,
+            track,
+            fade_in: Time::beats(3),
+            fade_out: Time::beats(3),
+        };
+        let r = &f.compile(PlayMode::Song).0.audio[0];
+        assert_eq!(r.fade_in_beats, 2.0);
+        assert_eq!(r.fade_out_beats, 0.0);
+    }
+
+    #[test]
+    fn audio_for_a_missing_mixer_track_plays_on_the_master() {
+        let mut f = audio_fixture();
+        let asset = f.asset;
+        let c = f.clip(Time::ZERO, Time::beats(2), Time::ZERO);
+        c.content = ClipContent::audio(asset, Id::new());
+        let (plan, _) = f.compile(PlayMode::Song);
+        assert_eq!(plan.audio[0].track, plan.master);
+    }
+
+    #[test]
+    fn the_source_offset_follows_the_tempo_at_the_clip_start() {
+        let mut f = audio_fixture();
+        f.p.tempo = vec![
+            peel_document::TempoSegment {
+                start: Time::ZERO,
+                bpm: 120.0,
+                ramp_to: None,
+            },
+            peel_document::TempoSegment {
+                start: Time::beats(8),
+                bpm: 60.0,
+                ramp_to: None,
+            },
+        ];
+        f.clip(Time::beats(8), Time::beats(4), Time::beats(2));
+        let r = &f.compile(PlayMode::Song).0.audio[0];
+        assert_eq!(r.source_start_seconds, 2.0);
+    }
+
+    #[test]
+    fn plans_with_different_audio_are_structurally_different() {
+        let mut f = audio_fixture();
+        f.clip(Time::ZERO, Time::beats(2), Time::ZERO);
+        let (a, _) = f.compile(PlayMode::Song);
+        let (b, _) = f.compile(PlayMode::Song);
+        assert!(same_structure(&a, &b));
+        f.p.arrangement_mut().clips[0].start = Time::beats(1);
+        let (moved, _) = f.compile(PlayMode::Song);
+        assert!(!same_structure(&a, &moved));
+        let asset = f.asset;
+        f.p.arrangement_mut().clips[0].content = ClipContent::Audio {
+            asset,
+            gain_db: -3.0,
+            reversed: false,
+            track: f.track,
+            fade_in: Time::ZERO,
+            fade_out: Time::ZERO,
+        };
+        f.p.arrangement_mut().clips[0].start = Time::ZERO;
+        let (quieter, _) = f.compile(PlayMode::Song);
+        assert!(!same_structure(&a, &quieter));
     }
 }

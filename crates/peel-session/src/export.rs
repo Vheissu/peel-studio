@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use peel_document::{Id, Project};
+use peel_document::{ClipContent, Id, Project};
 use peel_dsp::SampleBuffer;
 use peel_engine::{EngineCommand, EngineConfig, OfflineEngine, Slot};
 
@@ -30,9 +30,12 @@ pub struct ExportJob {
 }
 
 impl ExportJob {
+    /// Starts an export. `loads` are audio files the clips need that the
+    /// session has not decoded yet; the export thread decodes them itself.
     pub(crate) fn start(
         project: Project,
         samples: HashMap<Id, Arc<SampleBuffer>>,
+        loads: Vec<(Id, PathBuf)>,
         settings: ExportSettings,
     ) -> ExportJob {
         let progress = Arc::new(AtomicU32::new(0));
@@ -42,6 +45,15 @@ impl ExportJob {
         std::thread::Builder::new()
             .name("peel-export".into())
             .spawn(move || {
+                let mut samples = samples;
+                for (id, path) in loads {
+                    match peel_media::load_for_engine(&path, settings.sample_rate as f32) {
+                        Ok(buf) => {
+                            samples.insert(id, Arc::new(buf));
+                        }
+                        Err(e) => log::warn!("export: could not load {}: {e}", path.display()),
+                    }
+                }
                 let out = render(&project, &samples, &settings, &p, &c);
                 if let Ok(mut slot) = r.lock() {
                     *slot = Some(out);
@@ -119,12 +131,14 @@ pub fn render(
         .enumerate()
         .map(|(i, t)| (t.id, i as u16))
         .collect();
+    let audio = clip_audio(project, samples, rate)?;
     let (mut plan, _) = compile(
         project,
         &CompileContext {
             mode: PlayMode::Song,
             slots: &slots,
             meters: &meters,
+            samples: &audio,
         },
     );
     plan.loop_range = None;
@@ -169,4 +183,38 @@ pub fn render(
     .map_err(|e| e.to_string())?;
     progress.store(1f32.to_bits(), Ordering::Relaxed);
     Ok(settings.path.clone())
+}
+
+/// Decoded audio for the arrangement's audible audio clips at the export
+/// rate. A clip whose audio is missing is an error rather than a silent gap
+/// in the finished file.
+fn clip_audio(
+    project: &Project,
+    samples: &HashMap<Id, Arc<SampleBuffer>>,
+    rate: f32,
+) -> Result<HashMap<Id, Arc<SampleBuffer>>, String> {
+    let arr = project.arrangement();
+    let mut out = HashMap::new();
+    for clip in &arr.clips {
+        let ClipContent::Audio { asset, .. } = &clip.content else {
+            continue;
+        };
+        let lane_muted = arr.tracks.iter().any(|t| t.id == clip.track && t.muted);
+        if clip.muted || lane_muted || out.contains_key(asset) {
+            continue;
+        }
+        let Some(buf) = samples.get(asset) else {
+            let name = project.asset(*asset).map_or("An audio file", |a| &a.name);
+            return Err(format!(
+                "{name} could not be loaded, so it cannot be exported."
+            ));
+        };
+        let buf = if (buf.sample_rate - rate).abs() < 0.5 {
+            buf.clone()
+        } else {
+            Arc::new(peel_media::resample(buf, rate))
+        };
+        out.insert(*asset, buf);
+    }
+    Ok(out)
 }
