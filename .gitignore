@@ -5,3 +5,4 @@
 *.peelproj
 !crates/**/fixtures/**
 /scratch
+/.claude/
