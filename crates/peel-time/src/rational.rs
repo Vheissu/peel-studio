@@ -72,6 +72,13 @@ impl Time {
         Time::try_new(num as i128, den as i128).expect("valid musical time")
     }
 
+    /// Compile-time constructor. `num/den` must already be in lowest terms
+    /// with a positive denominator.
+    pub const fn new_const(num: i64, den: i64) -> Time {
+        assert!(den > 0);
+        Time { num: num as i128, den: den as i128 }
+    }
+
     pub const fn beats(n: i64) -> Time {
         Time {
             num: n as i128,
