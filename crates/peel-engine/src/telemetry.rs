@@ -25,6 +25,8 @@ pub struct Telemetry {
     meters: Box<[AtomicU32]>,
     /// Output peak per device slot (f32 bits), used for activity lights.
     slots: Box<[AtomicU32]>,
+    /// Per-slot gain reduction in dB (f32 bits), max since last read.
+    reduction: Box<[AtomicU32]>,
     /// Master output peak (f32 bits), left/right.
     master: [AtomicU32; 2],
     /// Number of non-finite samples contained at graph boundaries.
@@ -74,6 +76,7 @@ impl Telemetry {
             sample_rate: AtomicU32::new(0),
             meters: zeros(MAX_METERS * 2),
             slots: zeros(MAX_SLOTS),
+            reduction: zeros(MAX_SLOTS),
             master: [AtomicU32::new(0), AtomicU32::new(0)],
             non_finite: AtomicU64::new(0),
             dropped_notes: AtomicU64::new(0),
@@ -108,6 +111,12 @@ impl Telemetry {
         }
     }
 
+    pub fn push_reduction(&self, slot: u32, db: f32) {
+        if let Some(cell) = self.reduction.get(slot as usize) {
+            store_max(cell, db);
+        }
+    }
+
     pub fn push_master(&self, left: f32, right: f32) {
         store_max(&self.master[0], left);
         store_max(&self.master[1], right);
@@ -137,6 +146,13 @@ impl Telemetry {
 
     pub fn take_slot(&self, slot: u32) -> f32 {
         self.slots
+            .get(slot as usize)
+            .map_or(0.0, |c| f32::from_bits(c.swap(0, Ordering::Relaxed)))
+    }
+
+    /// Largest gain reduction a slot reported since the last call (dB).
+    pub fn take_reduction(&self, slot: u32) -> f32 {
+        self.reduction
             .get(slot as usize)
             .map_or(0.0, |c| f32::from_bits(c.swap(0, Ordering::Relaxed)))
     }

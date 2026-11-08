@@ -292,6 +292,10 @@ impl Fx for Compressor {
         &mut self.store
     }
 
+    fn reduction(&self) -> Option<f32> {
+        Some(self.gr_db)
+    }
+
     fn setup(&mut self, sample_rate: f32, _max_block: usize) {
         self.sample_rate = sample_rate.max(8_000.0);
         self.makeup.set_ramp(self.sample_rate, RAMP_SECONDS);

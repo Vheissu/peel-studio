@@ -310,6 +310,14 @@ impl Session {
         None
     }
 
+    /// Largest gain reduction (dB) a dynamics insert applied since the last
+    /// call; read once per frame.
+    pub fn take_reduction_db(&self, device: Id) -> f32 {
+        self.devices
+            .get(&device)
+            .map_or(0.0, |d| self.engine.telemetry().take_reduction(d.slot))
+    }
+
     /// Installed CLAP plugins (empty until the background scan finishes).
     pub fn plugins(&self) -> &[peel_host_clap::ClapPluginInfo] {
         self.plugins.plugins()
@@ -1176,6 +1184,43 @@ mod tests {
             .fold(0.0f32, f32::max);
         assert!(err < 1e-3, "stems sum to the mix (max error {err})");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_ducking_compressor_reports_gain_reduction() {
+        let mut project = template::beat_and_melody();
+        let kick = project
+            .channels
+            .iter()
+            .find(|c| c.name == "Kick")
+            .unwrap()
+            .track;
+        let synth = project
+            .channels
+            .iter()
+            .find(|c| c.name == "Synth")
+            .unwrap()
+            .track;
+        let mut comp = template::device("peel.fx.compressor", Some("Sidechain Duck"));
+        comp.sidechain = Some(kick);
+        let id = comp.id;
+        project
+            .mixer
+            .track_mut(synth)
+            .unwrap()
+            .inserts
+            .insert(0, comp);
+        let mut s = Session::new_silent(project);
+        s.set_mode(PlayMode::Song);
+        s.play();
+        let start = Instant::now();
+        let mut most = 0.0f32;
+        while start.elapsed().as_secs_f32() < 5.0 && most < 6.0 {
+            s.tick();
+            most = most.max(s.take_reduction_db(id));
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(most >= 6.0, "the kick pulls the synth down: {most} dB");
     }
 
     #[test]

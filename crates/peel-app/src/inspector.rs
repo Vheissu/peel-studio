@@ -473,6 +473,10 @@ fn track(ui: &mut Ui, r: Rect, id: Id, s: &mut Session, ws: &mut Workspace) {
             None,
         );
         ui.tooltip(&x, "Remove");
+        if peel_devices::shows_reduction(&dev.type_id) {
+            hr.cut_right(8.0);
+            reduction_meter(ui, hr.cut_right(70.0), s, did);
+        }
         if x.clicked {
             let name = desc.name;
             s.doc.edit(format!("Remove {name}"), |p| {
@@ -1236,6 +1240,32 @@ fn sends_section(ui: &mut Ui, body: &mut Rect, tr: &peel_document::MixerTrack, s
 }
 
 /// True if audio from `from` can reach `to` through outputs and sends.
+/// Gain reduction of a dynamics insert, drawn from the right edge leftwards
+/// over 0 to 24 dB, held and released smoothly.
+fn reduction_meter(ui: &mut Ui, r: Rect, s: &Session, device: Id) {
+    let t = ui.theme.clone();
+    let fall = 0.05f32.powf(ui.dt().clamp(0.0, 0.1));
+    let held = ui.state::<f32>(W::new(("gr-meter", device)));
+    *held = (*held * fall).max(s.take_reduction_db(device));
+    let db = *held;
+    let bar = Rect::from_center(r.center(), r.w, 6.0);
+    ui.scene.rect(bar, 3.0, t.bg);
+    let f = (db / 24.0).clamp(0.0, 1.0);
+    if f > 0.002 {
+        ui.scene.rect(
+            Rect {
+                x: bar.right() - bar.w * f,
+                w: bar.w * f,
+                ..bar
+            },
+            3.0,
+            t.warn,
+        );
+    }
+    let resp = ui.interact(W::new(("gr-meter-hit", device)), r);
+    ui.tooltip(&resp, &format!("Gain reduction {db:.1} dB"));
+}
+
 /// Chooses which mixer track keys a sidechain-capable insert.
 fn sidechain_row(ui: &mut Ui, row: Rect, s: &mut Session, track: Id, dev: &DeviceInstance) {
     let t = ui.theme.clone();

@@ -1261,6 +1261,9 @@ impl Engine {
                     }
                     bypass[s].mix = m;
                 }
+                if let Some(db) = dev.reduction_db() {
+                    telemetry.push_reduction(insert, db);
+                }
             }
 
             if route.key_source && mixer.dirty[ti] {

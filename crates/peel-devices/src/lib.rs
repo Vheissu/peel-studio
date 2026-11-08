@@ -63,3 +63,8 @@ pub fn apply_preset(device: &mut dyn Device, preset: &Preset) {
 pub fn accepts_sidechain(type_id: &str) -> bool {
     matches!(type_id, "peel.fx.compressor")
 }
+
+/// Device types that report gain reduction for a meter.
+pub fn shows_reduction(type_id: &str) -> bool {
+    matches!(type_id, "peel.fx.compressor" | "peel.fx.limiter")
+}

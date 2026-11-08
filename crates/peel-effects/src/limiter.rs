@@ -134,6 +134,10 @@ impl Fx for Limiter {
         &mut self.store
     }
 
+    fn reduction(&self) -> Option<f32> {
+        Some(self.core.gain_reduction_db())
+    }
+
     fn setup(&mut self, sample_rate: f32, _max_block: usize) {
         self.sample_rate = sample_rate.max(8_000.0);
         let look = (self.sample_rate * LOOKAHEAD_SECONDS).round() as usize;

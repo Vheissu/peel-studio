@@ -139,6 +139,12 @@ pub trait Device: Send {
         self.process(ctx, events, left, right);
     }
 
+    /// Gain reduction in dB (zero or positive) at the end of the last block,
+    /// for dynamics processors that show a meter. Must be cheap.
+    fn reduction_db(&self) -> Option<f32> {
+        None
+    }
+
     /// Processing latency in samples introduced by lookahead.
     fn latency(&self) -> u32 {
         0

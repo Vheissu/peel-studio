@@ -77,6 +77,10 @@ pub(crate) trait Fx {
         let _ = key;
         self.render(ctx, left, right);
     }
+    /// Gain reduction in dB for a meter, if the effect has one.
+    fn reduction(&self) -> Option<f32> {
+        None
+    }
     fn latency_samples(&self) -> u32 {
         0
     }
@@ -218,6 +222,9 @@ macro_rules! impl_device {
             }
             fn latency(&self) -> u32 {
                 $crate::common::Fx::latency_samples(self)
+            }
+            fn reduction_db(&self) -> Option<f32> {
+                $crate::common::Fx::reduction(self)
             }
             fn tail_seconds(&self) -> Option<f32> {
                 $crate::common::Fx::tail(self)
