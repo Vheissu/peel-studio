@@ -432,6 +432,23 @@ impl Session {
         })
     }
 
+    /// A reason to look at the input, if there is one: it failed, or it has
+    /// delivered nothing but digital silence for a few seconds (muted
+    /// hardware, an unplugged interface, or macOS withholding microphone
+    /// access, which it does by sending silence). For a status line next to
+    /// the meter; `None` when all is well or no input is open.
+    pub fn input_warning(&self) -> Option<String> {
+        if let Some(why) = self.input_error() {
+            return Some(why);
+        }
+        let shared = self.engine.input();
+        let listened = shared.callbacks() as f64 * shared.input_block_seconds();
+        (shared.is_open() && listened >= 3.0 && !shared.heard_signal()).then(|| {
+            "The input has been completely silent. Check the cable, the interface's gain and mute, and that Peel Studio may use the microphone (System Settings, Privacy & Security, Microphone)."
+                .to_string()
+        })
+    }
+
     /// Peak level of the input since the last call, left and right (the same
     /// for a mono selection), 0..=1 and beyond for clipping. Like the other
     /// meters, reading clears it; call once per frame.

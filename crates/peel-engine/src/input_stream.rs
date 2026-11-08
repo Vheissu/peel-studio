@@ -402,6 +402,57 @@ mod tests {
         );
     }
 
+    /// Opens real hardware. Run with `--ignored` on a machine with a
+    /// microphone; macOS asks for permission the first time.
+    #[test]
+    #[ignore = "needs an audio input device and microphone permission"]
+    fn the_default_input_delivers_callbacks_and_a_meter() {
+        use crate::{EngineConfig, EngineHandle};
+        let mut h = EngineHandle::start_null(EngineConfig::default()).unwrap();
+        let info = h.open_input(&InputRequest::default()).expect("open input");
+        assert!(info.channels > 0 && info.sample_rate > 0, "{info:?}");
+        assert_eq!(h.input_info(), Some(&info));
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        let shared = h.input();
+        assert!(shared.callbacks() > 5, "callbacks: {}", shared.callbacks());
+        assert!(shared.failure().is_none(), "{:?}", shared.last_error());
+        // The meter reports something finite, silence included.
+        let (l, r) = shared.take_peak();
+        assert!(l.is_finite() && r.is_finite());
+        h.close_input();
+        assert!(!h.input().is_open());
+    }
+
+    #[test]
+    #[ignore = "needs an audio input device and microphone permission"]
+    fn each_listed_input_can_be_opened_by_name() {
+        use crate::{EngineConfig, EngineHandle};
+        for device in list_input_devices() {
+            let mut h = EngineHandle::start_null(EngineConfig::default()).unwrap();
+            let info = h
+                .open_input(&InputRequest {
+                    device: Some(device.name.clone()),
+                    ..InputRequest::default()
+                })
+                .unwrap_or_else(|e| panic!("{}: {e}", device.name));
+            assert_eq!(info.device_name, device.name);
+        }
+    }
+
+    #[test]
+    fn a_missing_input_is_an_error_not_a_substitute() {
+        use crate::{EngineConfig, EngineHandle};
+        let mut h = EngineHandle::start_null(EngineConfig::default()).unwrap();
+        let err = h
+            .open_input(&InputRequest {
+                device: Some("No Such Interface".into()),
+                ..InputRequest::default()
+            })
+            .unwrap_err();
+        assert_eq!(err, InputError::NotFound("No Such Interface".into()));
+        assert!(!h.input().is_open());
+    }
+
     #[test]
     fn enumerating_input_devices_never_panics() {
         // Content depends on the machine: CI runners often have none.

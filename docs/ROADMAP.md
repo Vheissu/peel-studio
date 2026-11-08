@@ -25,11 +25,12 @@ processing, persistence and tests all exist.
 | Packaging | macOS app bundle and DMG, release workflow for macOS, Windows and Linux | Done |
 | Hardware MIDI input | Live playing with sustain, device hotplug | In progress |
 | Audio device selection | Choose output and buffer size | In progress |
+| Audio recording | Input devices and channels, input meter, monitoring, armed lanes, durable takes placed with latency compensation | Engine and session done, UI in progress |
 | Accessibility | AccessKit tree, keyboard focus traversal | In progress |
 
 ## Phase 2: recording and deeper editing
 
-Audio input and recording with take lanes, MIDI recording into patterns,
+Take lanes and comping for audio recording, MIDI recording into patterns,
 automation clips and lanes, sample and waveform editor, time stretching,
 clip fades and trims from the left edge, step graph editor, tempo
 automation UI, dedicated Core Audio / WASAPI / ASIO backends, engine

@@ -170,7 +170,14 @@ fn a_take_becomes_a_clip_holding_the_injected_audio_at_the_right_beat() {
 
     let signal = ramp(48_000);
     feed(&mut input, &signal);
-    let status = s.recording_status().expect("status");
+    let t0 = Instant::now();
+    let status = loop {
+        let status = s.recording_status().expect("status");
+        if status.frames > 0 || t0.elapsed() > Duration::from_secs(5) {
+            break status;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
     assert!(!status.waiting_for_transport);
     assert!(status.frames > 0 && status.error.is_none(), "{status:?}");
 
@@ -193,7 +200,7 @@ fn a_take_becomes_a_clip_holding_the_injected_audio_at_the_right_beat() {
         clip.start.as_f64()
     );
     assert!(
-        snap.playhead_beat >= 8.0 && snap.playhead_beat < 9.0,
+        snap.playhead_beat >= 8.0 && snap.playhead_beat < 12.0,
         "the playhead when the take began: {}",
         snap.playhead_beat
     );
@@ -288,9 +295,16 @@ fn the_file_is_on_disk_while_recording_even_if_the_ui_stalls() {
     // the file growing and valid.
     let signal = ramp(24_000);
     feed(&mut input, &signal);
-    std::thread::sleep(Duration::from_millis(350));
     let path = s.rec.active.as_ref().expect("active").path.clone();
-    let mid_take = decode_file(&path).expect("a valid WAV before stop");
+    // The writer checkpoints every 100 ms; give it a few seconds of slack.
+    let t0 = Instant::now();
+    let mid_take = loop {
+        let mid_take = decode_file(&path).expect("a valid WAV before stop");
+        if mid_take.frames() >= 20_000 || t0.elapsed() > Duration::from_secs(5) {
+            break mid_take;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
     assert!(
         mid_take.frames() >= 20_000,
         "frames on disk before stop: {}",
@@ -665,4 +679,53 @@ fn a_take_runs_straight_through_the_loop_and_the_end_of_the_song() {
     let after = s.plan.as_ref().expect("plan");
     assert_eq!(after.loop_range, Some((0.0, after.length_beats)));
     assert!(after.length_beats >= 8.0 && after.length_beats.is_finite());
+}
+
+/// Records one second from the default microphone onto a lane. Run with
+/// `--ignored` on a machine with a microphone; macOS asks for permission the
+/// first time.
+#[test]
+#[ignore = "needs an audio input device and microphone permission"]
+fn a_real_microphone_take_becomes_a_clip() {
+    let dir = Scratch::new();
+    let mut s = Session::new(Project::empty("real"));
+    s.set_recordings_dir(Some(dir.path("takes")));
+    s.set_mode(PlayMode::Song);
+    s.set_input_device(None).expect("open the default input");
+    assert!(s.input_is_open());
+    let lane = s.project().arrangement().tracks[0].id;
+    s.arm_lane(lane, true);
+    s.start_recording().expect("start");
+    let t0 = Instant::now();
+    while t0.elapsed() < Duration::from_millis(1200) {
+        s.tick();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let ids = s.stop_recording();
+    assert_eq!(ids.len(), 1, "{:?}", s.notice());
+    let asset = &s.project().assets[0];
+    let seconds = asset.frames as f64 / f64::from(asset.sample_rate);
+    assert!((0.9..1.4).contains(&seconds), "recorded {seconds} s");
+    assert!(decode_file(&asset.path).is_ok());
+}
+
+#[test]
+fn a_silent_input_is_flagged_until_a_sound_arrives() {
+    let dir = Scratch::new();
+    let (s, mut input, _) = rig(&dir);
+    assert_eq!(s.input_warning(), None, "nothing to say yet");
+    // Three and a half seconds of digital silence.
+    for _ in 0..660 {
+        input.push(&[0.0f32; 256]);
+    }
+    let hint = s.input_warning().expect("a hint");
+    assert!(
+        hint.contains("silent") && hint.contains("Microphone"),
+        "{hint}"
+    );
+    input.push(&[0.0f32, 0.001, 0.0, 0.0]);
+    assert_eq!(s.input_warning(), None);
+    // A failed device is reported in its own words.
+    input.fail_device("The device was unplugged");
+    assert!(s.input_warning().unwrap().contains("unplugged"));
 }

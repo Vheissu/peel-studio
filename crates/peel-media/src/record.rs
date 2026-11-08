@@ -29,6 +29,8 @@ const DATA_SIZE_AT: u64 = 40;
 /// WAV chunk sizes are 32 bits. This is the most sample data one file holds.
 const MAX_DATA_BYTES: u64 = u32::MAX as u64 - (HEADER_LEN - 8);
 const BYTES_PER_SAMPLE: u64 = 4;
+/// Most channels one file takes (the block alignment must fit 16 bits).
+const MAX_CHANNELS: u16 = 1024;
 /// Samples converted and written per `write` call.
 const WRITE_CHUNK: usize = 1 << 14;
 
@@ -78,6 +80,11 @@ impl WavRecorder {
         }
         if sample_rate == 0 {
             return Err(MediaError::InvalidArgument("sample rate is zero".into()));
+        }
+        if channels > MAX_CHANNELS {
+            return Err(MediaError::InvalidArgument(format!(
+                "{channels} channels is more than a recording can hold"
+            )));
         }
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
             fs::create_dir_all(parent).map_err(|e| MediaError::io(parent, e))?;
@@ -226,7 +233,11 @@ fn header(channels: u16, sample_rate: u32, frames: u64) -> [u8; HEADER_LEN as us
     h[20..22].copy_from_slice(&3u16.to_le_bytes()); // IEEE float
     h[22..24].copy_from_slice(&channels.to_le_bytes());
     h[24..28].copy_from_slice(&sample_rate.to_le_bytes());
-    h[28..32].copy_from_slice(&(sample_rate * u32::from(block_align)).to_le_bytes());
+    h[28..32].copy_from_slice(
+        &sample_rate
+            .saturating_mul(u32::from(block_align))
+            .to_le_bytes(),
+    );
     h[32..34].copy_from_slice(&block_align.to_le_bytes());
     h[34..36].copy_from_slice(&32u16.to_le_bytes());
     h[36..40].copy_from_slice(b"data");
@@ -404,6 +415,7 @@ mod tests {
         let path = dir.join("take.wav");
         assert!(WavRecorder::create(&path, 0, 48_000).is_err());
         assert!(WavRecorder::create(&path, 2, 0).is_err());
+        assert!(WavRecorder::create(&path, 5_000, 48_000).is_err());
         let mut rec = WavRecorder::create(&path, 2, 48_000).unwrap();
         assert!(rec.write(&[0.0; 3]).is_err(), "a partial frame");
         rec.write(&[f32::NAN, f32::INFINITY, 0.5, -0.5]).unwrap();

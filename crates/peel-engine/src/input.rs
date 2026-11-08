@@ -191,6 +191,8 @@ pub struct InputShared {
     failure: AtomicU8,
     last_error: Mutex<Option<String>>,
     xruns: AtomicU64,
+    /// A sample other than digital silence has arrived since the input opened.
+    heard: AtomicBool,
     // timing, written by the callbacks, read by the control side
     in_block: AtomicU32,
     in_latency_ns: AtomicU64,
@@ -244,6 +246,7 @@ impl InputShared {
             failure: AtomicU8::new(0),
             last_error: Mutex::new(None),
             xruns: AtomicU64::new(0),
+            heard: AtomicBool::new(false),
             in_block: AtomicU32::new(0),
             in_latency_ns: AtomicU64::new(0),
             out_callback_ns: AtomicU64::new(0),
@@ -303,6 +306,14 @@ impl InputShared {
             .clone()
     }
 
+    /// True once any non-zero sample has arrived since the input opened. An
+    /// input that stays digitally silent for seconds is usually muted,
+    /// unplugged at the interface or, on macOS, denied microphone access (the
+    /// system then delivers silence instead of an error).
+    pub fn heard_signal(&self) -> bool {
+        self.heard.load(Ordering::Relaxed)
+    }
+
     /// Overruns the device reported (it delivered audio we were too slow to
     /// take).
     pub fn xruns(&self) -> u64 {
@@ -334,6 +345,7 @@ impl InputShared {
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = None;
         self.state.store(STATE_IDLE, Ordering::Release);
+        self.heard.store(false, Ordering::Relaxed);
         self.monitor_supported
             .store(monitor_supported, Ordering::Relaxed);
         self.in_block.store(0, Ordering::Relaxed);
@@ -709,6 +721,9 @@ impl InputProcessor {
         }
         store_max(&shared.peak[0], peak[0]);
         store_max(&shared.peak[1], peak[1]);
+        if (peak[0] > 0.0 || peak[1] > 0.0) && !shared.heard.load(Ordering::Relaxed) {
+            shared.heard.store(true, Ordering::Relaxed);
+        }
         // Last: a reader that sees this count has seen all of the callback's
         // frames in the ring.
         shared.callbacks.fetch_add(1, Ordering::Release);
@@ -1334,6 +1349,18 @@ mod tests {
         r.input
             .process(&vec![0.9f32; 128], CallbackTiming::default());
         assert_eq!(mon.rx.slots(), 0, "not fed while off");
+    }
+
+    #[test]
+    fn the_input_remembers_whether_it_ever_heard_anything() {
+        let (mut r, _) = rig(2, false);
+        assert!(!r.shared.heard_signal());
+        r.input.process(&[0.0f32; 512], CallbackTiming::default());
+        assert!(!r.shared.heard_signal(), "digital silence is not signal");
+        // Channel 0 of the second frame (the selection is mono channel 0).
+        r.input
+            .process(&[0.0f32, 0.0, 1e-6, 0.0], CallbackTiming::default());
+        assert!(r.shared.heard_signal());
     }
 
     #[test]
