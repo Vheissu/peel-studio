@@ -793,3 +793,23 @@ fn deleting_a_mixer_track_reroutes_its_channel() {
     );
     assert!(peel_document::validate(p).iter().all(|i| !i.is_error()));
 }
+
+#[test]
+fn tapping_the_bpm_label_sets_the_tempo() {
+    let mut h = Harness::new();
+    let label = h.rect(W::new("tap-tempo")).center();
+    for _ in 0..4 {
+        h.click_at(label);
+        h.frames(26); // 4 + 26 frames = half a second per tap
+    }
+    let bpm = h.session().project().bpm();
+    assert!((bpm - 120.0).abs() < 0.6, "{bpm}");
+    assert_eq!(
+        h.session()
+            .doc
+            .history_labels()
+            .filter(|l| *l == "Tap tempo")
+            .count(),
+        1
+    );
+}

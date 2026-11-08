@@ -160,7 +160,43 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
         t.accent,
         |v| format!("{v:.1}"),
     );
-    ui.text(label, "BPM", t.caption, t.text_faint, Align::Start);
+    // Tap tempo: click the BPM label in time with the music.
+    let tap = ui.interact(W::new("tap-tempo"), label);
+    let tapped = ui.animate(W::new("tap-flash"), 0.0, 8.0);
+    ui.text(
+        label,
+        "BPM",
+        t.caption,
+        t.text_faint.mix(t.accent, tapped),
+        Align::Start,
+    );
+    ui.tooltip(&tap, "Tap to set the tempo");
+    if tap.hovered {
+        ui.set_cursor(peel_ui::CursorIcon::Pointer);
+    }
+    if tap.pressed {
+        let now = ui.time();
+        ui.animate(W::new("tap-flash"), 1.0, 1000.0);
+        let taps = ui.state::<Vec<f64>>(W::new("tap-times"));
+        if taps.last().is_some_and(|last| now - last > 2.0) {
+            taps.clear();
+        }
+        taps.push(now);
+        if taps.len() > 8 {
+            taps.remove(0);
+        }
+        if taps.len() >= 3 {
+            let span = taps[taps.len() - 1] - taps[0];
+            let bpm = 60.0 * (taps.len() - 1) as f64 / span.max(0.01);
+            if (30.0..=300.0).contains(&bpm) {
+                let bpm = (bpm * 10.0).round() / 10.0;
+                studio
+                    .session
+                    .doc
+                    .edit_gesture(W::new("tap-gesture").0, "Tap tempo", |p| p.set_bpm(bpm));
+            }
+        }
+    }
     if resp.changed {
         studio
             .session
