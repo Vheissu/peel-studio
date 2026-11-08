@@ -205,6 +205,15 @@ impl Lfo {
         }
     }
 
+    /// Returns the current phase (turns) and advances by one sample. Use it
+    /// to read several waveforms or offsets from one oscillator.
+    #[inline]
+    pub fn next_phase(&mut self) -> f32 {
+        let p = self.phase;
+        self.advance();
+        p
+    }
+
     /// Next sine value in `-1..=1`.
     #[inline]
     pub fn next_sine(&mut self) -> f32 {

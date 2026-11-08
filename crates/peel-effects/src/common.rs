@@ -104,6 +104,13 @@ pub(crate) fn run_events<F: Fx>(
 ) {
     let frames = left.len().min(right.len());
     let (left, right) = (&mut left[..frames], &mut right[..frames]);
+    // A NaN or infinity must never enter filter or feedback state, where it
+    // would circulate forever. Treat it as silence at the door.
+    for s in left.iter_mut().chain(right.iter_mut()) {
+        if !s.is_finite() {
+            *s = 0.0;
+        }
+    }
     let beats_per_frame = ctx.tempo_bpm / (60.0 * f64::from(ctx.sample_rate.max(1.0)));
     let mut pos = 0usize;
 
