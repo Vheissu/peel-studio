@@ -116,7 +116,7 @@ impl TempoMap {
     /// first segment is treated as starting at beat 0.
     pub fn from_segments(segments: &[TempoSegment]) -> TempoMap {
         let mut sorted: Vec<TempoSegment> = segments.to_vec();
-        sorted.sort_by(|a, b| a.start.cmp(&b.start));
+        sorted.sort_by_key(|a| a.start);
         if sorted.is_empty() {
             sorted.push(TempoSegment {
                 start: Time::ZERO,

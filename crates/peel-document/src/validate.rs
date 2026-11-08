@@ -90,13 +90,13 @@ pub fn validate(p: &Project) -> Vec<Issue> {
                 c.name
             )));
         }
-        if let Some(asset) = c.device.sample {
-            if p.asset(asset).is_none() {
-                issues.push(Issue::warning(format!(
-                    "channel {} references a missing sample",
-                    c.name
-                )));
-            }
+        if let Some(asset) = c.device.sample
+            && p.asset(asset).is_none()
+        {
+            issues.push(Issue::warning(format!(
+                "channel {} references a missing sample",
+                c.name
+            )));
         }
     }
 
