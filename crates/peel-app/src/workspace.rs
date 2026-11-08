@@ -68,6 +68,8 @@ pub struct PlaylistView {
     pub snap: Time,
     pub tool: Tool,
     pub selection: HashSet<Id>,
+    /// The tempo strip under the ruler is open.
+    pub show_tempo: bool,
 }
 
 pub struct Workspace {
@@ -134,6 +136,7 @@ impl Default for Workspace {
                 snap: Time::beats(1),
                 tool: Tool::Draw,
                 selection: HashSet::new(),
+                show_tempo: false,
             },
             mixer_scroll: 0.0,
             rack_scroll: 0.0,

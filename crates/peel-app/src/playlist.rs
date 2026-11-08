@@ -17,6 +17,7 @@ const HEAD_W: f32 = 150.0;
 const RULER_H: f32 = 26.0;
 /// Extra ruler height for the marker row when the arrangement has markers.
 const MARKER_H: f32 = 20.0;
+const TEMPO_H: f32 = 64.0;
 const EDGE: f32 = 8.0;
 
 #[derive(Clone, Copy, PartialEq, Default)]
@@ -104,6 +105,7 @@ pub fn draw(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) {
         RULER_H + MARKER_H
     };
     let mut top = body.cut_top(ruler_h);
+    let tempo_r = ws.playlist.show_tempo.then(|| body.cut_top(TEMPO_H));
     let heads = body.cut_left(HEAD_W);
     top.cut_left(HEAD_W);
     let lanes_r = body;
@@ -161,6 +163,10 @@ pub fn draw(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) {
     lanes_bg(ui, &v, &arr.tracks, s);
     ruler(ui, top, &v, s);
     markers(ui, top, &v, s);
+    if let Some(mut tr) = tempo_r {
+        let head = tr.cut_left(HEAD_W);
+        tempo_lane(ui, head, tr, &v, s);
+    }
     track_heads(ui, heads, &v, &arr.tracks, s);
     clips(ui, &v, &arr.tracks, &arr.clips, s, ws);
     take_preview(ui, &v, &arr.tracks, s);
@@ -307,6 +313,18 @@ fn header(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) {
             ws.playlist.tool = tool;
         }
         row.cut_left(2.0);
+    }
+    row.cut_left(10.0);
+    let tb = ui.icon_button(
+        W::new("pl-tempo"),
+        row.cut_left(30.0),
+        icons::METRONOME,
+        ws.playlist.show_tempo,
+        None,
+    );
+    ui.tooltip(&tb, "Tempo changes");
+    if tb.clicked {
+        ws.playlist.show_tempo = !ws.playlist.show_tempo;
     }
     row.cut_left(10.0);
     let snap_r = row.cut_left(78.0);
@@ -2413,4 +2431,218 @@ fn take_preview(ui: &mut Ui, v: &View, tracks: &[Track], s: &Session) {
         );
     }
     ui.scene.pop_clip();
+}
+
+/// Keeps tempo segments sorted, the first at zero, and every ramp ending
+/// at the next segment's tempo so the curve is continuous.
+pub(crate) fn tidy_tempo(segs: &mut [peel_time::TempoSegment]) {
+    segs.sort_by_key(|x| x.start);
+    if let Some(first) = segs.first_mut() {
+        first.start = Time::ZERO;
+    }
+    for i in 0..segs.len() {
+        let next = segs.get(i + 1).map(|n| n.bpm);
+        if segs[i].ramp_to.is_some() {
+            segs[i].ramp_to = next;
+        }
+    }
+}
+
+/// Tempo strip: the tempo curve with a handle at every change. Drag a
+/// handle to change its tempo (and position), double-click to add a
+/// change, right-click a handle to ramp to the next change or delete it.
+fn tempo_lane(ui: &mut Ui, head: Rect, r: Rect, v: &View, s: &mut Session) {
+    let t = ui.theme.clone();
+    let mut segs = s.project().tempo.clone();
+    tidy_tempo(&mut segs);
+    let map = peel_time::TempoMap::from_segments(&segs);
+
+    // Head.
+    let hrow = Rect {
+        w: head.w - 6.0,
+        ..head.shrink2(0.0, 2.0)
+    };
+    ui.scene.rect(hrow, t.radius_m, t.raised.alpha(0.55));
+    let mut hi = hrow.shrink2(12.0, 8.0);
+    ui.text(hi.cut_top(20.0), "Tempo", t.label, t.text, Align::Start);
+    let now = map.bpm_at(s.position().max(0.0));
+    ui.text(
+        hi,
+        &format!("{now:.1} BPM"),
+        t.caption,
+        t.text_faint,
+        Align::Start,
+    );
+
+    // Range shown: the tempos used, with room above and below.
+    let used = segs
+        .iter()
+        .flat_map(|x| [x.bpm, x.ramp_to.unwrap_or(x.bpm)]);
+    let (mut lo, mut top) = used.fold((f64::MAX, f64::MIN), |(a, b), x| (a.min(x), b.max(x)));
+    lo = ((lo - 10.0) / 10.0).floor() * 10.0;
+    top = ((top + 10.0) / 10.0).ceil() * 10.0;
+    if top - lo < 40.0 {
+        let mid = (top + lo) * 0.5;
+        (lo, top) = (mid - 20.0, mid + 20.0);
+    }
+    // Held still while a handle is dragged, so the scale does not move
+    // under the pointer.
+    let frozen = W::new("tempo-range");
+    if let Some((a, b)) = *ui.state::<Option<(f64, f64)>>(frozen) {
+        (lo, top) = (a, b);
+    }
+    let lane = r.shrink2(0.0, 10.0);
+    let y_of = |bpm: f64| lane.bottom() - ((bpm - lo) / (top - lo)) as f32 * lane.h;
+    let bpm_of = |y: f32| lo + ((lane.bottom() - y) / lane.h).clamp(0.0, 1.0) as f64 * (top - lo);
+
+    ui.scene.push_clip(r);
+    ui.scene.rect(r, 0.0, t.bg.alpha(0.35));
+    ui.scene.hline(r.x, r.right(), r.bottom() - 0.5, t.line);
+    // Curve.
+    for (i, seg) in segs.iter().enumerate() {
+        let x0 = v.x(seg.start.as_f64());
+        let x1 = segs
+            .get(i + 1)
+            .map_or(r.right() + 4.0, |n| v.x(n.start.as_f64()));
+        let y0 = y_of(seg.bpm);
+        let end = if segs.get(i + 1).is_some() {
+            seg.ramp_to.unwrap_or(seg.bpm)
+        } else {
+            seg.bpm
+        };
+        let y1 = y_of(end);
+        ui.scene.line(vec2(x0, y0), vec2(x1, y1), 2.0, t.accent);
+        if let Some(n) = segs.get(i + 1) {
+            ui.scene
+                .line(vec2(x1, y1), vec2(x1, y_of(n.bpm)), 2.0, t.accent);
+        }
+    }
+    ui.scene.pop_clip();
+
+    // Double-click empty space: add a change.
+    let bg = ui.interact(W::new("tempo-lane"), r);
+    if bg.double_clicked
+        && let Some(p) = ui.pointer()
+    {
+        let at = Time::from_f64(v.beat(p.x).max(0.0), 960).round_to(Time::beats(1));
+        if at > Time::ZERO && segs.iter().all(|x| x.start != at) {
+            let bpm = map.bpm_at(at.as_f64()).round();
+            s.doc.edit("Add tempo change", |p| {
+                p.tempo.push(peel_time::TempoSegment {
+                    start: at,
+                    bpm,
+                    ramp_to: None,
+                });
+                tidy_tempo(&mut p.tempo);
+            });
+            return;
+        }
+    }
+    ui.tooltip(&bg, "Double-click to add a tempo change");
+
+    for (i, seg) in segs.iter().enumerate() {
+        let c = vec2(v.x(seg.start.as_f64()), y_of(seg.bpm));
+        if c.x < r.x - 8.0 || c.x > r.right() + 8.0 {
+            continue;
+        }
+        let id = W::new(("tempo-pt", i));
+        let hit = Rect::from_center(c, 14.0, 14.0);
+        let resp = ui.interact_button(id, hit, &format!("Tempo {:.1} BPM", seg.bpm));
+        let hot = resp.hovered || resp.active;
+        ui.scene.circle_stroke(
+            c,
+            if hot { 5.5 } else { 4.5 },
+            t.panel,
+            2.0,
+            if hot { t.text } else { t.accent },
+        );
+        let label = format!("{:.0}", seg.bpm);
+        let lx = (c.x + 8.0).max(r.x + 2.0);
+        ui.text_at(
+            vec2(lx, (c.y - 18.0).clamp(r.y, r.bottom() - 14.0)),
+            &label,
+            t.caption,
+            t.text_dim,
+        );
+        if hot {
+            ui.set_cursor(CursorIcon::Grab);
+        }
+        if resp.pressed {
+            *ui.state::<Option<(f64, f64)>>(frozen) = Some((lo, top));
+        }
+        if resp.dragging
+            && let Some(p) = ui.pointer()
+        {
+            let fine = ui.input.modifiers.shift;
+            let raw = bpm_of(p.y);
+            let bpm = if fine {
+                (raw * 10.0).round() / 10.0
+            } else {
+                raw.round()
+            }
+            .clamp(20.0, 400.0);
+            let at = if i == 0 {
+                Time::ZERO
+            } else {
+                let lo_t = segs[i - 1].start + Time::beats(1);
+                let hi_t = segs.get(i + 1).map(|n| n.start - Time::beats(1));
+                let mut at = Time::from_f64(v.beat(p.x).max(0.0), 960)
+                    .round_to(Time::beats(1))
+                    .max(lo_t);
+                if let Some(h) = hi_t {
+                    at = at.min(h);
+                }
+                at
+            };
+            if bpm != seg.bpm || at != seg.start {
+                s.doc.edit_gesture(id.0, "Change tempo", |p| {
+                    tidy_tempo(&mut p.tempo);
+                    if let Some(x) = p.tempo.get_mut(i) {
+                        x.bpm = bpm;
+                        x.start = at;
+                    }
+                    tidy_tempo(&mut p.tempo);
+                });
+            }
+        }
+        if resp.released {
+            *ui.state::<Option<(f64, f64)>>(frozen) = None;
+            s.doc.end_gesture();
+        }
+        ui.tooltip(&resp, &format!("{:.1} BPM", seg.bpm));
+        let menu = id.with("menu");
+        if resp.secondary_clicked {
+            ui.open_popup(menu, hit);
+        }
+        let has_next = i + 1 < segs.len();
+        let items = [
+            MenuItem::new("Ramp to next")
+                .checked(seg.ramp_to.is_some())
+                .enabled(has_next),
+            MenuItem::new("Delete").enabled(i > 0),
+        ];
+        match ui.menu(menu, vec2(hit.x, hit.bottom() + 4.0), &items) {
+            Some(0) => {
+                let on = seg.ramp_to.is_none();
+                s.doc
+                    .edit(if on { "Ramp tempo" } else { "Step tempo" }, |p| {
+                        tidy_tempo(&mut p.tempo);
+                        if let Some(x) = p.tempo.get_mut(i) {
+                            x.ramp_to = on.then_some(x.bpm);
+                        }
+                        tidy_tempo(&mut p.tempo);
+                    });
+            }
+            Some(_) => {
+                s.doc.edit("Delete tempo change", |p| {
+                    tidy_tempo(&mut p.tempo);
+                    if i > 0 && i < p.tempo.len() {
+                        p.tempo.remove(i);
+                    }
+                    tidy_tempo(&mut p.tempo);
+                });
+            }
+            None => {}
+        }
+    }
 }

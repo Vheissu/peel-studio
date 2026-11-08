@@ -1181,3 +1181,45 @@ fn the_inspector_edits_a_selected_audio_clip() {
     assert_eq!(track, drums);
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn the_tempo_strip_adds_drags_and_ramps_tempo_changes() {
+    let mut h = Harness::new();
+    h.click(W::new("pl-tempo"));
+    assert!(h.studio.ws.playlist.show_tempo);
+    h.frame();
+    let lane = h.rect(W::new("tempo-lane"));
+    let zoom = h.studio.ws.playlist.zoom_x;
+    let tempo = |h: &Harness| h.session().project().tempo.clone();
+    // Double-click at bar 5.
+    let p = vec2(lane.x + zoom * 16.0, lane.center().y);
+    h.move_to(p);
+    h.move_to(p);
+    h.ui.input.double_clicked = true;
+    h.press(0);
+    h.release(0);
+    assert_eq!(tempo(&h).len(), 2);
+    assert_eq!(tempo(&h)[1].start, Time::beats(16));
+    assert_eq!(tempo(&h)[1].bpm, 118.0);
+    // Drag it up a little: faster, same place, and no runaway.
+    let pt = h.rect(W::new(("tempo-pt", 1usize))).center();
+    h.drag(pt, pt - vec2(0.0, 10.0), 10);
+    let fast = tempo(&h)[1].bpm;
+    assert!(fast > 118.0 && fast < 135.0, "{fast}");
+    assert_eq!(tempo(&h)[1].start, Time::beats(16));
+    assert_eq!(h.session().doc.undo_label(), Some("Change tempo"));
+    // Ramp from the start into it.
+    let first = h.rect(W::new(("tempo-pt", 0usize))).center();
+    h.move_to(first);
+    h.press(1);
+    h.release(1);
+    h.click(
+        W::new(("tempo-pt", 0usize))
+            .with("menu")
+            .with(("item", 0usize)),
+    );
+    assert_eq!(tempo(&h)[0].ramp_to, Some(fast));
+    let map = peel_time::TempoMap::from_segments(&tempo(&h));
+    let mid = map.bpm_at(8.0);
+    assert!(mid > 118.0 && mid < fast, "{mid}");
+}

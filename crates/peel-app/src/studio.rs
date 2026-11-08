@@ -219,6 +219,29 @@ impl Studio {
                 self.session.doc.end_gesture();
             }
         }
+        if std::env::var_os("PEEL_TEMPO").is_some() {
+            self.ws.playlist.show_tempo = true;
+            self.session.doc.edit("Tempo", |p| {
+                use peel_document::Time;
+                p.tempo = vec![
+                    peel_time::TempoSegment {
+                        start: Time::ZERO,
+                        bpm: 118.0,
+                        ramp_to: Some(140.0),
+                    },
+                    peel_time::TempoSegment {
+                        start: Time::beats(16),
+                        bpm: 140.0,
+                        ramp_to: None,
+                    },
+                    peel_time::TempoSegment {
+                        start: Time::beats(24),
+                        bpm: 104.0,
+                        ramp_to: None,
+                    },
+                ];
+            });
+        }
         if std::env::var_os("PEEL_ARM").is_some() {
             for k in [3, 4] {
                 let lane = self.session.project().arrangement().tracks[k].id;

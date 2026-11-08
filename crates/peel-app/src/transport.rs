@@ -148,7 +148,20 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
     // Tempo.
     let bpm_r = row.cut_left(96.0);
     ui.scene.rect(bpm_r, t.radius_m, t.panel);
-    let mut bpm = studio.session.project().bpm();
+    // With tempo changes, the tempo at the playhead: live while playing
+    // (ramps included), the change in force when stopped. Edits change
+    // that tempo change.
+    let segs = studio.session.project().tempo.clone();
+    let pos = studio.session.position().max(0.0);
+    let active = segs
+        .iter()
+        .rposition(|x| x.start.as_f64() <= pos + 1e-9)
+        .unwrap_or(0);
+    let mut bpm = match segs.len() {
+        0 | 1 => studio.session.project().bpm(),
+        _ if studio.session.is_playing() => peel_time::TempoMap::from_segments(&segs).bpm_at(pos),
+        _ => segs[active].bpm,
+    };
     let mut br = bpm_r;
     let label = br.cut_right(34.0);
     let resp = ui.drag_number(
@@ -204,7 +217,16 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
             .session
             .doc
             .edit_gesture(W::new("bpm-gesture").0, "Change tempo", |p| {
-                p.set_bpm((bpm * 10.0).round() / 10.0)
+                let v = ((bpm * 10.0).round() / 10.0).clamp(10.0, 999.0);
+                if p.tempo.len() > 1 {
+                    crate::playlist::tidy_tempo(&mut p.tempo);
+                    if let Some(x) = p.tempo.get_mut(active) {
+                        x.bpm = v;
+                    }
+                    crate::playlist::tidy_tempo(&mut p.tempo);
+                } else {
+                    p.set_bpm(v);
+                }
             });
     }
     if resp.released {
