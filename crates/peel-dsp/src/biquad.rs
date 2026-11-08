@@ -424,6 +424,11 @@ impl StereoBiquad {
         self.zr = [0.0; 2];
     }
 
+    /// True while the coefficients are still moving toward a new target.
+    pub fn is_ramping(&self) -> bool {
+        self.coeffs.is_ramping()
+    }
+
     /// True when the filter is settled at identity and does nothing.
     pub fn is_bypassed(&self) -> bool {
         !self.coeffs.is_ramping() && self.coeffs.current().is_identity()

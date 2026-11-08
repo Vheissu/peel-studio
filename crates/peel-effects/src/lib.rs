@@ -16,6 +16,13 @@
 
 use peel_dsp::{Device, DeviceDescriptor, Preset};
 
+mod common;
+pub mod compressor;
+pub mod delay;
+pub mod eq;
+pub mod limiter;
+pub mod utility;
+
 /// Every effect descriptor, in browser order.
 pub fn descriptors() -> &'static [&'static DeviceDescriptor] {
     &[]
