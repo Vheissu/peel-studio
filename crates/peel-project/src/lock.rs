@@ -283,8 +283,14 @@ fn move_aside(path: &Path, observed: Option<&[u8]>, holder: Option<&LockInfo>) -
 }
 
 /// This machine's name, from sources that agree between a terminal-launched
-/// and a desktop-launched process. Falls back to `"unknown-host"`.
+/// and a desktop-launched process. Falls back to `"unknown-host"`. Looked up
+/// once per process (it may spawn `hostname`).
 pub(crate) fn hostname() -> String {
+    static HOST: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    HOST.get_or_init(lookup_hostname).clone()
+}
+
+fn lookup_hostname() -> String {
     #[cfg(windows)]
     {
         if let Ok(name) = std::env::var("COMPUTERNAME")

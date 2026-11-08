@@ -104,6 +104,9 @@ pub fn save_with(project: &Project, path: &Path, opts: &SaveOptions) -> Result<S
     create_dir_all(parent)?;
     create_dir_all(&objects)?;
     create_dir_all(&history)?;
+    // Make a freshly created `objects/` and `history/` durable before
+    // anything refers to them.
+    sync_dir(&data_dir)?;
 
     // 1. Shards first. A shard is skipped when a file of the right name and
     // length is already there; load verifies the hash of what it reads.
