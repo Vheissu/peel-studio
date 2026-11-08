@@ -310,18 +310,23 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
 }
 
 fn logo(ui: &mut Ui, r: Rect) {
-    // A citrus disc with a curl of peel lifting away.
+    // A cut orange with a curl of peel lifting away.
     let t = ui.theme.clone();
     let c = r.center();
     ui.scene.circle(c, 12.0, t.accent);
-    ui.scene.circle(c, 8.5, t.accent.darken(0.18));
-    ui.scene.arc(c, 12.0, 3.0, 0.35, 1.25, t.bg);
+    ui.scene.circle(c, 9.2, t.accent.darken(0.18));
+    for k in 0..4 {
+        let a = k as f32 * std::f32::consts::FRAC_PI_4;
+        let d = vec2(a.sin(), -a.cos()) * 8.6;
+        ui.scene.line(c - d, c + d, 1.2, t.accent);
+    }
+    ui.scene.arc(c, 12.0, 2.8, 0.35, 1.25, t.bg);
     ui.scene.arc(
-        c + vec2(9.0, -8.0),
-        4.0,
-        2.2,
-        3.4,
-        2.6,
+        c + vec2(9.4, -8.8),
+        3.8,
+        2.0,
+        3.5,
+        2.5,
         t.accent.lighten(0.15),
     );
 }

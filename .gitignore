@@ -6,3 +6,4 @@
 !crates/**/fixtures/**
 /scratch
 /.claude/
+/dist

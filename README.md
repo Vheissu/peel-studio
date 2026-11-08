@@ -26,6 +26,25 @@ cargo test --workspace
 Linux also needs ALSA development headers (`libasound2-dev` on Debian and
 Ubuntu) and a Vulkan driver.
 
+To build a macOS app bundle and disk image in `dist/`:
+
+```sh
+scripts/package-macos.sh
+```
+
+Set `SIGN_ID` to a Developer ID identity to sign for distribution;
+without it the bundle is ad-hoc signed for local use.
+
+## Headless tools
+
+```sh
+peel render song.peelproj mix.wav --rate 48000 --bits 24
+peel render --demo demo.wav       # the starter project
+peel info song.peelproj
+peel validate song.peelproj
+peel devices                      # every native instrument and effect
+```
+
 ## Layout
 
 | Path | Contents |

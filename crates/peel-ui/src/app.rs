@@ -101,6 +101,9 @@ pub struct WindowOptions {
     pub title: String,
     pub size: (f64, f64),
     pub min_size: (f64, f64),
+    /// PNG bytes for the window/taskbar icon (Windows and Linux; macOS uses
+    /// the bundle icon).
+    pub icon_png: Option<&'static [u8]>,
 }
 
 impl Default for WindowOptions {
@@ -109,6 +112,7 @@ impl Default for WindowOptions {
             title: "Peel Studio".into(),
             size: (1440.0, 900.0),
             min_size: (960.0, 600.0),
+            icon_png: None,
         }
     }
 }
@@ -183,6 +187,9 @@ impl<A: App, F: FnOnce(&mut Ui) -> A> ApplicationHandler for Runner<A, F> {
                 self.options.min_size.0,
                 self.options.min_size.1,
             ));
+        if let Some(icon) = self.options.icon_png.and_then(decode_icon) {
+            attrs = attrs.with_window_icon(Some(icon));
+        }
         #[cfg(target_os = "macos")]
         {
             use winit::platform::macos::WindowAttributesExtMacOS;
@@ -322,4 +329,16 @@ fn write_png(path: &std::path::Path, w: u32, h: u32, rgba: &[u8]) -> Result<(), 
     enc.set_depth(png::BitDepth::Eight);
     let mut writer = enc.write_header().map_err(|e| e.to_string())?;
     writer.write_image_data(rgba).map_err(|e| e.to_string())
+}
+
+fn decode_icon(png_bytes: &[u8]) -> Option<winit::window::Icon> {
+    let decoder = png::Decoder::new(std::io::Cursor::new(png_bytes));
+    let mut reader = decoder.read_info().ok()?;
+    let mut buf = vec![0; reader.output_buffer_size()?];
+    let info = reader.next_frame(&mut buf).ok()?;
+    if info.color_type != png::ColorType::Rgba || info.bit_depth != png::BitDepth::Eight {
+        return None;
+    }
+    buf.truncate(info.buffer_size());
+    winit::window::Icon::from_rgba(buf, info.width, info.height).ok()
 }
