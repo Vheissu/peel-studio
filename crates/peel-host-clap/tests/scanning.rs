@@ -87,29 +87,14 @@ fn a_bundle_without_an_info_plist_is_found_by_its_name() {
 }
 
 #[test]
-fn a_clap_file_without_the_entry_symbol_is_an_error() {
-    let dir = temp_dir("scan-noentry");
-    // Any real shared library that is not a CLAP plugin.
-    let some_lib = if cfg!(target_os = "macos") {
-        "/usr/lib/libSystem.B.dylib"
-    } else if cfg!(windows) {
-        "C:\\Windows\\System32\\kernel32.dll"
-    } else {
-        "libm.so.6"
-    };
-    let fake = dir.join("fake.clap");
-    if Path::new(some_lib).is_absolute() && Path::new(some_lib).exists() {
-        std::fs::copy(some_lib, &fake).unwrap();
-    } else {
-        // The dynamic loader can find it, but there is nothing to copy.
-        let _ = std::fs::remove_dir_all(&dir);
-        return;
-    }
-    match scan_file(&fake) {
+fn a_binary_that_is_not_a_clap_plugin_is_an_error() {
+    // The test executable is a real binary without a `clap_entry`. The
+    // platform loader refuses it, or loads it and finds no entry symbol.
+    let exe = std::env::current_exe().unwrap();
+    match scan_file(&exe) {
         Err(ClapError::NoEntry(_)) | Err(ClapError::Load { .. }) => {}
         other => panic!("expected a load error, got {other:?}"),
     }
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

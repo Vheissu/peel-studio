@@ -55,12 +55,22 @@
 //!
 //! # Parameters
 //!
-//! `set_param` records the value (the latest wins per parameter, so the queue
-//! cannot overflow) and the next `process` delivers it as a CLAP parameter
-//! event at frame 0. `EventKind::Param` events are delivered at their sample
-//! offset. Stepped parameters starting at zero with at most 64 values become
-//! choices labelled by the plugin's own `value_to_text`; hidden and read-only
-//! parameters are not exposed.
+//! `set_param` updates the parameter mirror (`param` and
+//! [`ClapHandle::param`] read it) and delivers the value to the plugin. While
+//! the device is processing, the value is queued (the latest wins per
+//! parameter, so the queue cannot overflow) and the next `process` sends it as
+//! a CLAP parameter event at frame 0. Before the first block and while the
+//! plugin is asleep (`is_silent`), it goes straight through `params.flush`
+//! instead, so a knob moves and `save_state` is current even when the
+//! transport is stopped. `EventKind::Param` events are delivered at their
+//! sample offset.
+//!
+//! Stepped parameters starting at zero with at most 64 values become choices
+//! labelled by the plugin's own `value_to_text`; hidden and read-only
+//! parameters are not exposed. Restore a saved state with `load_state`
+//! *before* replaying stored parameter values, and do not call
+//! `peel_dsp::device::apply_defaults` afterwards: for a plugin the state is
+//! the source of truth and defaults would overwrite it.
 //!
 //! # Not covered yet
 //!

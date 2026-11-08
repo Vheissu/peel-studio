@@ -482,19 +482,66 @@ fn state_round_trips_between_instances() {
 }
 
 #[test]
-fn restoring_state_discards_earlier_parameter_changes() {
+fn parameters_reach_the_plugin_without_audio_running() {
+    // Nothing has been processed: set_param goes through params.flush, so
+    // the saved state already has the change.
+    let dev = {
+        let mut dev = load(GAIN);
+        dev.set_param(GAIN_ID, 0.25);
+        dev.set_param(INVERT_ID, 1.0);
+        dev
+    };
+    let blob = dev.handle().save_state().unwrap();
+    let mut other = load(GAIN);
+    other.load_state(&blob).unwrap();
+    assert_eq!(other.param(GAIN_ID), 0.25);
+    assert_eq!(other.param(INVERT_ID), 1.0);
+
+    // The same holds for a plugin that has gone to sleep.
+    let mut sine = load(SINE);
+    run(&mut sine, &[note_on(0, 60, 1), note_off(10, 60, 1)], 64);
+    assert!(sine.is_silent());
+    sine.set_param(LEVEL_ID, 0.125);
+    let blob = sine.handle().save_state().unwrap();
+    let mut other = load(SINE);
+    other.load_state(&blob).unwrap();
+    assert_eq!(other.param(LEVEL_ID), 0.125);
+    // And the next note uses it.
+    let (l, _) = run(&mut sine, &[note_on(0, 69, 2)], 256);
+    let peak = l.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+    assert!((0.12..=0.1251).contains(&peak), "peak {peak}");
+}
+
+#[test]
+fn events_past_the_end_of_the_block_are_delivered_on_its_last_frame() {
+    let mut dev = load(GAIN);
+    let events = [at(
+        9_999,
+        EventKind::Param {
+            id: GAIN_ID,
+            value: 0.5,
+        },
+    )];
+    let (l, _) = run_effect(&mut dev, &events, &[1.0; 16]);
+    assert!(l[..15].iter().all(|x| *x == 1.0));
+    assert_eq!(l[15], 0.5);
+}
+
+#[test]
+fn restoring_state_discards_changes_still_waiting_for_the_next_block() {
     let mut a = load(GAIN);
     a.set_param(GAIN_ID, 2.0);
     let blob = a.save_state().unwrap();
 
+    // B is processing, so its set_param waits for the next block.
     let mut b = load(GAIN);
+    run_effect(&mut b, &[], &[0.0; 4]);
     b.set_param(GAIN_ID, 4.0);
+    assert_eq!(b.param(GAIN_ID), 4.0);
     b.load_state(&blob).unwrap();
-    // The state is an exact copy of A's plugin state: gain is still the
-    // default there because A never processed the queued change.
+    assert_eq!(b.param(GAIN_ID), 2.0);
     let (l, _) = run_effect(&mut b, &[], &[0.5; 8]);
-    assert_eq!(l, [0.5; 8]);
-    assert_eq!(b.param(GAIN_ID), 1.0);
+    assert_eq!(l, [1.0; 8], "the restored 2.0 wins over the queued 4.0");
 }
 
 #[test]

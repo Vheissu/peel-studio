@@ -3,12 +3,19 @@
 //! A CLAP library must be initialised once and de-initialised once for each
 //! time it is loaded. Several devices (and the scanner) can use the same
 //! file at once, so loaded files are shared through a process-wide registry
-//! keyed by canonical path. The file stays loaded while any [`ModuleHandle`]
-//! to it exists; the last one to go runs `clap_entry.deinit` and unloads the
-//! library, under the registry lock so a concurrent open can never overlap a
-//! deinit.
+//! keyed by canonical path. The file stays initialised while any
+//! [`ModuleHandle`] to it exists; the last one to go runs `clap_entry.deinit`,
+//! under the registry lock so a concurrent open can never overlap a deinit.
+//!
+//! The shared library itself is **never unloaded**. Plugins routinely leave
+//! threads, timers and static destructors that would run into unmapped code
+//! after `dlclose`, and a crash there is far worse than a few mapped
+//! megabytes. The consequence is that a plugin updated on disk is not picked
+//! up until the application restarts, and a later load of the same file
+//! runs `init` again on the same image, which the CLAP entry contract allows.
 
 use std::ffi::{CStr, CString};
+use std::mem::ManuallyDrop;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -87,8 +94,9 @@ pub(crate) struct ModuleInner {
     entry: *const clap_plugin_entry,
     factory: *const clap_plugin_factory,
     path: PathBuf,
-    // Declared last so it unloads after `Drop::drop` has run `deinit`.
-    _library: libloading::Library,
+    // Kept mapped for the life of the process, see the module docs. The
+    // wrapper stops `libloading` from calling `dlclose` when this drops.
+    _library: ManuallyDrop<libloading::Library>,
 }
 
 // SAFETY: CLAP requires the entry and factory functions to be thread-safe,
@@ -146,7 +154,7 @@ impl ModuleInner {
             entry,
             factory: std::ptr::null(),
             path: path.to_path_buf(),
-            _library: library,
+            _library: ManuallyDrop::new(library),
         };
         // SAFETY: the id is a valid C string and the entry is initialised.
         let factory =
@@ -166,8 +174,7 @@ impl ModuleInner {
 
 impl Drop for ModuleInner {
     fn drop(&mut self) {
-        // SAFETY: `entry` is valid until the library unloads, which happens
-        // after this body returns.
+        // SAFETY: `entry` points into the library, which is never unloaded.
         let entry = unsafe { &*self.entry };
         if let Some(deinit) = entry.deinit {
             let _main = RoleScope::main();

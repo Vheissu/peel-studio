@@ -26,7 +26,7 @@ use crate::host::{F_FLUSH, F_PROCESS, F_RESTART};
 use crate::info::{ClapPluginInfo, ClapRole};
 use crate::instance::{IdleReport, NotePortInfo, PluginShared};
 use crate::module::ModuleHandle;
-use crate::params::PendingParams;
+use crate::params::{ParamEntry, PendingParams};
 use crate::thread::RoleScope;
 
 /// Event slots per device beyond one slot per parameter.
@@ -424,6 +424,25 @@ impl ClapDevice {
         self.voices.clear();
     }
 
+    /// Sends one parameter value outside of `process`. False when the plugin
+    /// has no `flush`, in which case the value must go through `pending`.
+    fn flush_param(&mut self, entry: &ParamEntry, value: f64) -> bool {
+        if !self.shared.has_flush() {
+            return false;
+        }
+        self.events.clear();
+        self.events
+            .push_param(0, entry.id, entry.cookie, value, true);
+        let input = events::input_events(&self.events);
+        let output = events::output_events(&self.shared);
+        {
+            let _audio = RoleScope::audio();
+            self.shared.flush(&input, &output);
+        }
+        self.events.clear();
+        true
+    }
+
     fn fill_transport(&mut self, ctx: &ProcessContext, frames_into_block: usize) {
         let mut flags = CLAP_TRANSPORT_HAS_TEMPO | CLAP_TRANSPORT_HAS_BEATS_TIMELINE;
         if ctx.playing {
@@ -562,19 +581,27 @@ impl Device for ClapDevice {
         }
     }
 
+    /// Records the value and hands it to the plugin: with the next block when
+    /// the device is processing, at once (through `params.flush`) when it is
+    /// not, so a stopped transport or a sleeping plugin still follows the
+    /// knob and its saved state stays current.
     fn set_param(&mut self, id: ParamId, value: f32) {
         let Some(index) = self.shared.table.index_of(id) else {
             return;
         };
-        let Some(entry) = self.shared.table.get(index) else {
+        let Some(entry) = self.shared.table.get(index).copied() else {
             return;
         };
         if !value.is_finite() {
             return;
         }
         let v = entry.clamp(f64::from(value));
-        self.pending.set(index, v);
         self.shared.store_value(index, v);
+        let idle = !self.started || self.sleeping;
+        if self.ready && idle && self.flush_param(&entry, v) {
+            return;
+        }
+        self.pending.set(index, v);
     }
 
     fn param(&self, id: ParamId) -> f32 {
@@ -624,7 +651,13 @@ impl Device for ClapDevice {
                 self.pending
                     .drain_into(&self.shared.table, &mut self.events);
             }
-            while next_event < events.len() && (events[next_event].offset as usize) < pos + n {
+            // The last chunk also takes events past the end of the block (a
+            // contract violation), at its final frame, so a note-off is never
+            // lost.
+            let last_chunk = pos + n == frames;
+            while next_event < events.len()
+                && (last_chunk || (events[next_event].offset as usize) < pos + n)
+            {
                 let e = events[next_event];
                 self.push_event(&e, pos, n);
                 next_event += 1;
@@ -643,7 +676,6 @@ impl Device for ClapDevice {
             }
             pos += n;
         }
-        // Events past the block (a contract violation) are ignored.
 
         if self.reset_after_block {
             self.reset_after_block = false;

@@ -17,6 +17,7 @@ use std::ffi::{CStr, CString, c_char};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
+use clap_sys::events::{clap_input_events, clap_output_events};
 use clap_sys::ext::audio_ports::{
     CLAP_AUDIO_PORT_IS_MAIN, CLAP_EXT_AUDIO_PORTS, clap_audio_port_info, clap_plugin_audio_ports,
 };
@@ -486,6 +487,22 @@ impl PluginShared {
             // the call; audio-thread call on an active, started plugin.
             Some(f) => unsafe { f(self.plugin, process) },
             None => clap_sys::process::CLAP_PROCESS_ERROR,
+        }
+    }
+
+    /// True when the plugin can take parameter changes while not processing.
+    pub(crate) fn has_flush(&self) -> bool {
+        // SAFETY: extension pointer is null or valid while the plugin is.
+        unsafe { self.exts.params.as_ref() }.is_some_and(|p| p.flush.is_some())
+    }
+
+    /// Delivers parameter events without a `process` call. Audio-thread
+    /// function: the caller must not be inside `process`.
+    pub(crate) fn flush(&self, input: &clap_input_events, output: &clap_output_events) {
+        // SAFETY: extension pointer is null or valid while the plugin is.
+        if let Some(flush) = unsafe { self.exts.params.as_ref() }.and_then(|p| p.flush) {
+            // SAFETY: both lists are valid for the call.
+            unsafe { flush(self.plugin, input, output) };
         }
     }
 
