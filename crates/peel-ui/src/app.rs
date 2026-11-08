@@ -2,6 +2,22 @@
 //!
 //! Draws only when input arrives or when the UI asks for another frame
 //! (animation, playback), so an idle window uses no CPU or GPU time.
+//!
+//! # Accessibility
+//!
+//! The window is created hidden, an [`accesskit_winit::Adapter`] is attached
+//! (it must see the window before it is first shown), and then the window is
+//! shown. The adapter reports through the event loop:
+//!
+//! * *InitialTreeRequested*: a screen reader connected. The UI starts
+//!   building its accessibility tree and the next frame sends all of it.
+//! * *ActionRequested*: the screen reader asked for something (focus, click,
+//!   increment, set a value...). The request is queued on the [`Ui`] and the
+//!   next frame's widgets act on it.
+//! * *AccessibilityDeactivated*: the screen reader went away; the tree stops
+//!   being built, so an unused feature costs nothing.
+//!
+//! Set `PEEL_NO_A11Y=1` to skip creating the adapter.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -9,7 +25,7 @@ use std::time::Instant;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::WindowEvent;
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::window::{Window, WindowId};
 
 use crate::geom::Rect;
@@ -122,6 +138,19 @@ struct Running<A> {
     renderer: Renderer,
     control: WindowControl,
     app: A,
+    adapter: Option<accesskit_winit::Adapter>,
+}
+
+/// Events the event loop receives from other threads.
+#[derive(Debug)]
+enum UserEvent {
+    AccessKit(accesskit_winit::Event),
+}
+
+impl From<accesskit_winit::Event> for UserEvent {
+    fn from(e: accesskit_winit::Event) -> UserEvent {
+        UserEvent::AccessKit(e)
+    }
 }
 
 struct Runner<A, F> {
@@ -133,6 +162,7 @@ struct Runner<A, F> {
     ui: Ui,
     start: Instant,
     error: Option<String>,
+    proxy: EventLoopProxy<UserEvent>,
 }
 
 /// Opens the main window and runs until it closes. `make` builds the app
@@ -141,7 +171,9 @@ pub fn run<A: App + 'static, F: FnOnce(&mut Ui) -> A + 'static>(
     options: WindowOptions,
     make: F,
 ) -> Result<(), String> {
-    let event_loop = EventLoop::new().map_err(|e| e.to_string())?;
+    let event_loop = EventLoop::<UserEvent>::with_user_event()
+        .build()
+        .map_err(|e| e.to_string())?;
     event_loop.set_control_flow(ControlFlow::Wait);
     let screenshot = std::env::var_os("PEEL_SCREENSHOT").map(|p| {
         let frames = std::env::var("PEEL_SCREENSHOT_FRAMES")
@@ -166,6 +198,7 @@ pub fn run<A: App + 'static, F: FnOnce(&mut Ui) -> A + 'static>(
         ui: Ui::new(),
         start: Instant::now(),
         error: None,
+        proxy: event_loop.create_proxy(),
     };
     event_loop.run_app(&mut runner).map_err(|e| e.to_string())?;
     match runner.error {
@@ -174,7 +207,7 @@ pub fn run<A: App + 'static, F: FnOnce(&mut Ui) -> A + 'static>(
     }
 }
 
-impl<A: App, F: FnOnce(&mut Ui) -> A> ApplicationHandler for Runner<A, F> {
+impl<A: App, F: FnOnce(&mut Ui) -> A> ApplicationHandler<UserEvent> for Runner<A, F> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.running.is_some() {
             return;
@@ -182,6 +215,8 @@ impl<A: App, F: FnOnce(&mut Ui) -> A> ApplicationHandler for Runner<A, F> {
         #[allow(unused_mut)]
         let mut attrs = Window::default_attributes()
             .with_title(&self.options.title)
+            // Hidden until the accessibility adapter has seen the window.
+            .with_visible(false)
             .with_inner_size(LogicalSize::new(self.options.size.0, self.options.size.1))
             .with_min_inner_size(LogicalSize::new(
                 self.options.min_size.0,
@@ -206,6 +241,10 @@ impl<A: App, F: FnOnce(&mut Ui) -> A> ApplicationHandler for Runner<A, F> {
                 return;
             }
         };
+        let adapter = std::env::var_os("PEEL_NO_A11Y").is_none().then(|| {
+            accesskit_winit::Adapter::with_event_loop_proxy(event_loop, &window, self.proxy.clone())
+        });
+        window.set_visible(true);
         let renderer = match pollster::block_on(Renderer::new(
             window.clone(),
             event_loop.owned_display_handle(),
@@ -232,13 +271,35 @@ impl<A: App, F: FnOnce(&mut Ui) -> A> ApplicationHandler for Runner<A, F> {
             renderer,
             control,
             app,
+            adapter,
         });
         window.request_redraw();
+    }
+
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
+        let UserEvent::AccessKit(event) = event;
+        match event.window_event {
+            accesskit_winit::WindowEvent::InitialTreeRequested => {
+                self.ui.set_accessibility_active(true);
+            }
+            accesskit_winit::WindowEvent::ActionRequested(request) => {
+                self.ui.queue_accessibility_action(request);
+            }
+            accesskit_winit::WindowEvent::AccessibilityDeactivated => {
+                self.ui.set_accessibility_active(false);
+            }
+        }
+        if let Some(run) = &self.running {
+            run.window.request_redraw();
+        }
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         let Some(run) = &mut self.running else { return };
         let now = self.start.elapsed().as_secs_f64();
+        if let Some(adapter) = &mut run.adapter {
+            adapter.process_event(&run.window, &event);
+        }
         match &event {
             WindowEvent::CloseRequested => {
                 if run.app.close_requested() {
@@ -285,7 +346,25 @@ impl<A: App, F: FnOnce(&mut Ui) -> A> Runner<A, F> {
         };
         self.ui.begin_frame(screen, scale, now);
         run.app.update(&mut self.ui, &run.control);
+        if self.ui.accessibility_active() {
+            self.ui.set_window_label(&run.control.title());
+        }
         self.ui.end_frame();
+        if self.ui.accessibility_active()
+            && let Some(update) = self.ui.take_accessibility_update()
+            && let Some(adapter) = &mut run.adapter
+        {
+            let mut taken = false;
+            adapter.update_if_active(|| {
+                taken = true;
+                update
+            });
+            // The adapter had already gone inactive: send everything next
+            // time.
+            if !taken {
+                self.ui.accessibility_resync();
+            }
+        }
         run.window.set_cursor(self.ui.cursor());
         let clear = self.ui.theme.bg;
         self.frames += 1;
