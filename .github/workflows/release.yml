@@ -1,0 +1,68 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: macos-arm64, os: macos-14 }
+          - { name: windows-x64, os: windows-latest }
+          - { name: linux-x64, os: ubuntu-latest }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux packages
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev libxkbcommon-dev libwayland-dev libgtk-3-dev
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.0"
+      - uses: Swatinem/rust-cache@v2
+      - name: Package macOS
+        if: runner.os == 'macOS'
+        run: scripts/package-macos.sh
+      - name: Package Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo build --release -p peel-app -p peel-cli
+          New-Item -ItemType Directory -Force dist/PeelStudio | Out-Null
+          Copy-Item target/release/peel-studio.exe dist/PeelStudio/
+          Copy-Item target/release/peel.exe dist/PeelStudio/
+          Copy-Item LICENSE, README.md, assets/LICENSES.md dist/PeelStudio/
+          Compress-Archive -Path dist/PeelStudio -DestinationPath dist/Peel-Studio-windows-x64.zip
+      - name: Package Linux
+        if: runner.os == 'Linux'
+        run: |
+          cargo build --release -p peel-app -p peel-cli
+          mkdir -p dist/peel-studio/share/applications dist/peel-studio/share/icons/hicolor/256x256/apps dist/peel-studio/bin
+          cp target/release/peel-studio target/release/peel dist/peel-studio/bin/
+          cp packaging/linux/peel-studio.desktop dist/peel-studio/share/applications/
+          cp assets/icons/peel-256.png dist/peel-studio/share/icons/hicolor/256x256/apps/peel-studio.png
+          cp LICENSE README.md assets/LICENSES.md dist/peel-studio/
+          tar -C dist -czf dist/Peel-Studio-linux-x64.tar.gz peel-studio
+      - uses: actions/upload-artifact@v4
+        with:
+          name: peel-studio-${{ matrix.name }}
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/*.tar.gz
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          draft: true
+          files: |
+            dist/*.dmg
+            dist/*.zip
+            dist/*.tar.gz
