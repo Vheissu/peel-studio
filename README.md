@@ -27,8 +27,11 @@ effects. There is no web view.
 - Arrangement: pattern, audio and automation clips; trims, fades, marquee
   selection, Alt-drag copies, loop range, lane management.
 - Mixing: console-style strips with inserts, bus routing, post-fader sends,
-  pan, faders, meters, mute and solo; automation of any device parameter,
-  track volume or pan.
+  sidechain compression, gain reduction meters, pan, faders, meters, mute
+  and solo; curved automation of any device parameter, track volume or pan.
+- Composing tools: legato, articulate, chop, arpeggiate, strum, flam,
+  humanize, velocity levels, flip and tidy, previewed live before they
+  apply.
 - Playing and recording: computer keyboard and hardware MIDI keyboards with
   sustain, note recording into patterns, audio recording onto armed
   Playlist lanes with input monitoring, scales and chord stamping,
@@ -36,7 +39,8 @@ effects. There is no web view.
 - Exact rational musical time, sample-accurate playback that cannot drift,
   and a realtime audio path verified to make no allocations.
 - Open project files with atomic saves, autosave and crash recovery,
-  Standard MIDI File import and export, WAV export, undo history.
+  Standard MIDI File import and export, WAV export of the mix or stems,
+  undo history.
 - Screen reader support through AccessKit and keyboard focus traversal.
 
 | Piano Roll with a scale | Mixer and EQ |
