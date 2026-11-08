@@ -389,6 +389,30 @@ fn plan_swap_keeps_notes_whose_release_is_still_ahead() {
 }
 
 #[test]
+fn a_plan_swap_exactly_at_an_event_loses_no_note() {
+    // Swap the plan on the very sample a note starts, at beats that do not
+    // convert to whole samples. The new plan's cursor must still include it.
+    let tempo = constant(133.3);
+    for beat in [0.5, 1.234_567, 3.0 / 7.0, 9.87654321, 20.1] {
+        let target = tempo.beat_to_sample(beat, SRF) as usize;
+        let notes = [note(beat, 0.25, 1)];
+        let mut off = rig(plan(tempo.clone(), &notes, 1, None, 64.0), None);
+        off.send(EngineCommand::Play);
+        let (l, _) = render_blocks(&mut off, target, 256);
+        assert!(l.iter().all(|&x| x == 0.0), "beat {beat}: early");
+        off.send(EngineCommand::SetPlan(Box::new(plan(
+            tempo.clone(),
+            &notes,
+            1,
+            None,
+            64.0,
+        ))));
+        let (l, _) = render_blocks(&mut off, 100, 100);
+        assert_eq!(l[0], 1.0, "beat {beat}: note must start on sample {target}");
+    }
+}
+
+#[test]
 fn plan_swap_releases_notes_whose_release_disappeared() {
     let mut off = rig(
         plan(constant(120.0), &[note(0.0, 4.0, 1)], 1, None, 8.0),

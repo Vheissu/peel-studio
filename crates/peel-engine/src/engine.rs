@@ -597,20 +597,19 @@ impl Engine {
                 let SeqKind::NoteOff { key, voice, .. } = ev.kind else {
                     continue;
                 };
-                let Ok(i) = notes.binary_search_by_key(&voice, |n| n.voice) else {
-                    continue;
-                };
-                let n = &mut notes[i];
-                if n.keep || n.key != key {
-                    continue;
-                }
                 let slot = plan.channels.get(ev.channel as usize).map(|c| c.slot);
-                if slot == Some(n.slot) {
-                    n.keep = true;
-                    remaining -= 1;
-                    if remaining == 0 {
+                // Voice ids are unique per realized note, but be exact if two
+                // slots ever reuse one: look at every note sharing the id.
+                let start = notes.partition_point(|n| n.voice < voice);
+                for n in notes[start..].iter_mut().take_while(|n| n.voice == voice) {
+                    if !n.keep && n.key == key && slot == Some(n.slot) {
+                        n.keep = true;
+                        remaining -= 1;
                         break;
                     }
+                }
+                if remaining == 0 {
+                    break;
                 }
             }
         }

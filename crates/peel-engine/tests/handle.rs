@@ -153,3 +153,51 @@ fn the_default_device_opens_and_runs() {
     wait_for("the playhead to move", || t.beat() > 0.1);
     assert!(h.is_healthy());
 }
+
+/// A busy song on the real device for two seconds: no overruns, and the load
+/// is reported. Run with `--ignored --nocapture` to see the numbers.
+#[test]
+#[ignore = "needs an audio output device"]
+fn the_default_device_plays_a_busy_song_without_overruns() {
+    let mut h = EngineHandle::start(config()).unwrap();
+    let channels = 24;
+    let notes: Vec<_> = (0..channels * 64)
+        .map(|i| {
+            let mut n = note((i / channels) as f64 * 0.25, 0.4, i as u32);
+            n.channel = (i % channels) as u16;
+            n
+        })
+        .collect();
+    for c in 0..channels {
+        send(
+            &mut h,
+            EngineCommand::InstallDevice {
+                slot: c as u32,
+                device: Box::new(Gate::new()),
+            },
+        );
+    }
+    let p = plan(
+        TempoMap::constant(150.0),
+        &notes,
+        channels,
+        Some((0.0, 16.0)),
+        16.0,
+    );
+    send(&mut h, EngineCommand::SetPlan(Box::new(p)));
+    send(&mut h, EngineCommand::Metronome { enabled: true });
+    send(&mut h, EngineCommand::Play);
+    std::thread::sleep(Duration::from_secs(2));
+    let t = h.telemetry().clone();
+    println!(
+        "cpu load {:.4}, overruns {}, beat {:.2}",
+        t.cpu_load(),
+        t.overruns.load(Ordering::Relaxed),
+        t.beat()
+    );
+    assert_eq!(t.overruns.load(Ordering::Relaxed), 0);
+    assert!(t.beat() > 4.0);
+    assert!(h.is_healthy());
+    send(&mut h, EngineCommand::Stop { return_to: 0.0 });
+    h.collect_garbage();
+}
