@@ -26,12 +26,17 @@ enum Drag {
     Paint,
     Erase,
     Seek,
+    Marquee,
 }
 
 #[derive(Clone, Default)]
 struct DragState {
     kind: Drag,
     clip: Option<Clip>,
+    /// Every clip being moved, as it was when the drag started.
+    origin: Vec<Clip>,
+    start_lane: i32,
+    marquee_from: (f64, f32),
     start_beat: f64,
     gesture: u64,
     last_paint: Option<(Id, Time)>,
@@ -603,14 +608,54 @@ fn clips(
         let lane = v.lane_at(p.y);
         let mut st = DragState {
             start_beat: beat,
+            start_lane: lane,
             gesture: id.0 ^ (ui.time() * 1000.0) as u64,
             ..Default::default()
         };
         match (ws.playlist.tool, hit.clone()) {
             (Tool::Erase, _) => st.kind = Drag::Erase,
             (_, Some((c, edge))) => {
-                ws.playlist.selection.clear();
-                ws.playlist.selection.insert(c.id);
+                if !ws.playlist.selection.contains(&c.id) {
+                    if !ui.input.modifiers.shift {
+                        ws.playlist.selection.clear();
+                    }
+                    ws.playlist.selection.insert(c.id);
+                }
+                st.start_lane = lane;
+                let selected: Vec<Clip> = s
+                    .project()
+                    .arrangement()
+                    .clips
+                    .iter()
+                    .filter(|x| ws.playlist.selection.contains(&x.id))
+                    .cloned()
+                    .collect();
+                // Alt-drag duplicates the selection and moves the copies.
+                if ui.input.modifiers.alt && !edge && !resp.double_clicked {
+                    let copies: Vec<Clip> = selected
+                        .iter()
+                        .map(|x| Clip {
+                            id: Id::new(),
+                            ..x.clone()
+                        })
+                        .collect();
+                    let added = copies.clone();
+                    s.doc.edit_gesture(st.gesture, "Duplicate clips", |p| {
+                        p.arrangement_mut().clips.extend(added)
+                    });
+                    ws.playlist.selection = copies.iter().map(|x| x.id).collect();
+                    let anchor = copies
+                        .iter()
+                        .zip(&selected)
+                        .find(|(_, o)| o.id == c.id)
+                        .map(|(n, _)| n.clone());
+                    st.kind = Drag::Move;
+                    st.clip = anchor;
+                    st.origin = copies;
+                    *ui.state::<DragState>(drag_id) = st;
+                    return;
+                }
+                st.origin = selected;
                 if resp.double_clicked {
                     if let ClipContent::Pattern { pattern } = c.content {
                         s.select_pattern(pattern);
@@ -638,6 +683,13 @@ fn clips(
                         st.clip = new;
                     }
                 }
+            }
+            (Tool::Select, None) => {
+                if !ui.input.modifiers.shift {
+                    ws.playlist.selection.clear();
+                }
+                st.kind = Drag::Marquee;
+                st.marquee_from = (beat, p.y);
             }
             _ => ws.playlist.selection.clear(),
         }
@@ -741,21 +793,82 @@ fn clips(
                         let start = Time::from_f64(raw.max(0.0), 960)
                             .round_to(snap)
                             .max(Time::ZERO);
-                        let lane = (v.lane_at(p.y)).clamp(0, tracks.len() as i32 - 1) as usize;
-                        let track = tracks[lane].id;
-                        let cid = orig.id;
-                        if start != orig.start || track != orig.track {
-                            s.doc.edit_gesture(st.gesture, "Move clip", |p| {
-                                if let Some(c) =
-                                    p.arrangement_mut().clips.iter_mut().find(|c| c.id == cid)
-                                {
-                                    c.start = start;
-                                    c.track = track;
-                                }
-                            });
+                        let mut dt = start - orig.start;
+                        let mut dl = v.lane_at(p.y) - st.start_lane;
+                        let origin = if st.origin.is_empty() {
+                            vec![orig.clone()]
+                        } else {
+                            st.origin.clone()
+                        };
+                        // Keep the whole group inside the arrangement.
+                        let min_start = origin.iter().map(|c| c.start).min().unwrap_or(Time::ZERO);
+                        if min_start + dt < Time::ZERO {
+                            dt = -min_start;
                         }
+                        let lanes: Vec<i32> = origin
+                            .iter()
+                            .filter_map(|c| tracks.iter().position(|t| t.id == c.track))
+                            .map(|i| i as i32)
+                            .collect();
+                        let (lo, hi) = (
+                            lanes.iter().copied().min().unwrap_or(0),
+                            lanes.iter().copied().max().unwrap_or(0),
+                        );
+                        dl = dl.clamp(-lo, tracks.len() as i32 - 1 - hi);
+                        let moves: Vec<(Id, Time, Id)> = origin
+                            .iter()
+                            .filter_map(|c| {
+                                let li = tracks.iter().position(|t| t.id == c.track)? as i32 + dl;
+                                Some((c.id, c.start + dt, tracks[li as usize].id))
+                            })
+                            .collect();
+                        let label = if moves.len() == 1 {
+                            "Move clip".to_string()
+                        } else {
+                            format!("Move {} clips", moves.len())
+                        };
+                        s.doc.edit_gesture(st.gesture, label, |p| {
+                            for (id, start, track) in &moves {
+                                if let Some(c) =
+                                    p.arrangement_mut().clips.iter_mut().find(|c| c.id == *id)
+                                {
+                                    c.start = *start;
+                                    c.track = *track;
+                                }
+                            }
+                        });
                         ui.set_cursor(CursorIcon::Grabbing);
                     }
+                }
+                Drag::Marquee => {
+                    let (b0, y0) = st.marquee_from;
+                    let x0 = v.x(b0);
+                    let mr = Rect::from_min_max(
+                        vec2(x0.min(p.x), y0.min(p.y)),
+                        vec2(x0.max(p.x), y0.max(p.y)),
+                    );
+                    ui.with_layer(peel_ui::LayerId::ABOVE, |ui| {
+                        ui.scene.push_clip(lanes);
+                        ui.scene
+                            .rect_stroke(mr, 2.0, t.focus.alpha(0.12), 1.0, t.focus.alpha(0.8));
+                        ui.scene.pop_clip();
+                    });
+                    let inside: Vec<Id> = s
+                        .project()
+                        .arrangement()
+                        .clips
+                        .iter()
+                        .filter(|c| {
+                            lane_of
+                                .get(&c.track)
+                                .is_some_and(|&l| clip_rect(v, l, c).intersects(&mr))
+                        })
+                        .map(|c| c.id)
+                        .collect();
+                    if !ui.input.modifiers.shift {
+                        ws.playlist.selection.clear();
+                    }
+                    ws.playlist.selection.extend(inside);
                 }
                 Drag::Resize => {
                     if let Some(orig) = &st.clip {

@@ -474,3 +474,49 @@ fn chord_stamp_places_a_diatonic_triad() {
     assert!(added.iter().all(|k| sc.contains(*k)), "{added:?}");
     assert_eq!(h.session().doc.undo_label(), Some("Add chord"));
 }
+
+#[test]
+fn playlist_marquee_selects_and_moves_a_group() {
+    let mut h = Harness::new();
+    h.studio.ws.playlist.tool = crate::workspace::Tool::Select;
+    h.frame();
+    let canvas = h.rect(W::new("pl-canvas"));
+    let lane_h = h.studio.ws.playlist.lane_h;
+    // Marquee from an empty lane up across the first two lanes.
+    h.drag(
+        vec2(canvas.x + 60.0, canvas.y + lane_h * 3.5),
+        vec2(canvas.x + 5.0, canvas.y + lane_h * 0.5),
+        6,
+    );
+    assert_eq!(
+        h.studio.ws.playlist.selection.len(),
+        2,
+        "beat and chords clips selected"
+    );
+    let before: Vec<_> = h
+        .session()
+        .project()
+        .arrangement()
+        .clips
+        .iter()
+        .filter(|c| h.studio.ws.playlist.selection.contains(&c.id))
+        .map(|c| (c.id, c.start))
+        .collect();
+    // Drag the group four beats to the right.
+    let zoom = h.studio.ws.playlist.zoom_x;
+    let from = vec2(canvas.x + 30.0, canvas.y + lane_h * 0.5);
+    h.drag(from, from + vec2(zoom * 4.0, 0.0), 8);
+    for (id, start) in before {
+        let now = h
+            .session()
+            .project()
+            .arrangement()
+            .clips
+            .iter()
+            .find(|c| c.id == id)
+            .unwrap()
+            .start;
+        assert_eq!(now, start + Time::beats(4));
+    }
+    assert_eq!(h.session().doc.undo_label(), Some("Move 2 clips"));
+}
