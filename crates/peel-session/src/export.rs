@@ -35,6 +35,55 @@ pub struct ExportJob {
 /// Devices built on the main thread for an export (plugins), by instance id.
 pub type Prebuilt = HashMap<Id, Box<dyn Device>>;
 
+/// One file an export job writes.
+pub(crate) struct Render {
+    pub project: Project,
+    pub prebuilt: Prebuilt,
+    pub settings: ExportSettings,
+}
+
+/// Mixer tracks worth a stem: anything a channel, an audio clip or another
+/// track plays into. Excludes the master.
+pub fn stem_tracks(p: &Project) -> Vec<Id> {
+    let master = p.mixer.tracks[0].id;
+    let mut used: std::collections::HashSet<Id> = p.channels.iter().map(|c| c.track).collect();
+    for a in &p.arrangements {
+        for c in &a.clips {
+            if let peel_document::ClipContent::Audio { track, .. } = &c.content {
+                used.insert(*track);
+            }
+        }
+    }
+    for t in &p.mixer.tracks {
+        used.extend(t.sends.iter().map(|s| s.target));
+        if let Some(o) = t.output {
+            used.insert(o);
+        }
+    }
+    p.mixer
+        .tracks
+        .iter()
+        .filter(|t| t.id != master && used.contains(&t.id))
+        .map(|t| t.id)
+        .collect()
+}
+
+/// A file name part made safe for every platform.
+pub(crate) fn file_safe(name: &str) -> String {
+    let s: String = name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || " -_.()".contains(c) {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let s = s.trim().trim_matches('.').to_string();
+    if s.is_empty() { "Track".into() } else { s }
+}
+
 impl ExportJob {
     /// Starts an export. `loads` are audio files the clips need that the
     /// session has not decoded yet; the export thread decodes them itself.
@@ -46,6 +95,26 @@ impl ExportJob {
         plugins: Vec<peel_host_clap::ClapHandle>,
         settings: ExportSettings,
     ) -> ExportJob {
+        let rate = settings.sample_rate;
+        let renders = vec![Render {
+            project,
+            prebuilt,
+            settings,
+        }];
+        ExportJob::start_many(renders, samples, loads, plugins, rate, None)
+    }
+
+    /// Runs several renders in turn (stems), reporting combined progress.
+    /// `done` is the result reported when every render succeeds (the stems
+    /// folder); a single render reports its file.
+    pub(crate) fn start_many(
+        renders: Vec<Render>,
+        samples: HashMap<Id, Arc<SampleBuffer>>,
+        loads: Vec<(Id, PathBuf)>,
+        plugins: Vec<peel_host_clap::ClapHandle>,
+        sample_rate: u32,
+        done: Option<PathBuf>,
+    ) -> ExportJob {
         let progress = Arc::new(AtomicU32::new(0));
         let cancel = Arc::new(AtomicBool::new(false));
         let result = Arc::new(Mutex::new(None));
@@ -55,14 +124,33 @@ impl ExportJob {
             .spawn(move || {
                 let mut samples = samples;
                 for (id, path) in loads {
-                    match peel_media::load_for_engine(&path, settings.sample_rate as f32) {
+                    match peel_media::load_for_engine(&path, sample_rate as f32) {
                         Ok(buf) => {
                             samples.insert(id, Arc::new(buf));
                         }
                         Err(e) => log::warn!("export: could not load {}: {e}", path.display()),
                     }
                 }
-                let out = render_with(&project, &samples, prebuilt, &settings, &p, &c);
+                let n = renders.len().max(1) as f32;
+                let mut out = Err("Nothing to export".to_string());
+                for (i, job) in renders.into_iter().enumerate() {
+                    let report =
+                        |f: f32| p.store(((i as f32 + f) / n).to_bits(), Ordering::Relaxed);
+                    out = render_with(
+                        &job.project,
+                        &samples,
+                        job.prebuilt,
+                        &job.settings,
+                        &report,
+                        &c,
+                    );
+                    if out.is_err() {
+                        break;
+                    }
+                }
+                if let (Ok(_), Some(dir)) = (&out, &done) {
+                    out = Ok(dir.clone());
+                }
                 if let Ok(mut slot) = r.lock() {
                     *slot = Some(out);
                 }
@@ -107,14 +195,8 @@ pub fn render(
     progress: &AtomicU32,
     cancel: &AtomicBool,
 ) -> Result<PathBuf, String> {
-    render_with(
-        project,
-        samples,
-        Prebuilt::new(),
-        settings,
-        progress,
-        cancel,
-    )
+    let report = |f: f32| progress.store(f.to_bits(), Ordering::Relaxed);
+    render_with(project, samples, Prebuilt::new(), settings, &report, cancel)
 }
 
 /// [`render`] with devices that had to be created on the main thread.
@@ -123,7 +205,7 @@ pub fn render_with(
     samples: &HashMap<Id, Arc<SampleBuffer>>,
     mut prebuilt: Prebuilt,
     settings: &ExportSettings,
-    progress: &AtomicU32,
+    progress: &dyn Fn(f32),
     cancel: &AtomicBool,
 ) -> Result<PathBuf, String> {
     let rate = settings.sample_rate as f32;
@@ -202,10 +284,7 @@ pub fn render_with(
         let n = chunk.min(total - pos);
         engine.render(&mut left[pos..pos + n], &mut right[pos..pos + n]);
         pos += n;
-        progress.store(
-            (pos as f32 / total as f32 * 0.95).to_bits(),
-            Ordering::Relaxed,
-        );
+        progress(pos as f32 / total as f32 * 0.95);
         engine.drain_retired();
     }
     let format = peel_media::WavFormat {
@@ -219,7 +298,7 @@ pub fn render_with(
         format,
     )
     .map_err(|e| e.to_string())?;
-    progress.store(1f32.to_bits(), Ordering::Relaxed);
+    progress(1.0);
     Ok(settings.path.clone())
 }
 

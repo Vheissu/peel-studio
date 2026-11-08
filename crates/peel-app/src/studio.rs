@@ -621,7 +621,11 @@ impl Studio {
             bits: self.ws.export_bits,
             tail_seconds: self.ws.export_tail,
         };
-        self.ws.export = Some(self.session.export(settings));
+        self.ws.export = Some(if self.ws.export_stems {
+            self.session.export_stems(settings)
+        } else {
+            self.session.export(settings)
+        });
     }
 
     /// Writes the arrangement as a Standard MIDI File.
@@ -678,6 +682,9 @@ impl Studio {
             job.idle();
             if let Some(result) = job.take_result() {
                 match result {
+                    Ok(p) if p.is_dir() => self
+                        .session
+                        .notify(format!("Exported stems to {}", p.display()), false),
                     Ok(p) => self
                         .session
                         .notify(format!("Exported {}", p.display()), false),

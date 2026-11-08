@@ -662,7 +662,7 @@ fn export_panel(ui: &mut Ui, anchor: Rect, studio: &mut Studio) {
         x: (anchor.right() - w).min(screen.right() - w - 8.0),
         y: anchor.bottom() + 6.0,
         w,
-        h: 214.0,
+        h: 250.0,
     };
     let mut action = 0;
     ui.popup_panel(id, r, |ui, r| {
@@ -721,12 +721,23 @@ fn export_panel(ui: &mut Ui, anchor: Rect, studio: &mut Studio) {
         if ui.segmented(W::new("export-tail"), c, &["None", "3 s", "8 s"], &mut i) {
             studio.ws.export_tail = tails[i];
         }
+        let (l, c) = row(&mut body);
+        ui.text(l, "Files", t.caption, t.text_dim, Align::Start);
+        let mut i = usize::from(studio.ws.export_stems);
+        if ui.segmented(W::new("export-stems"), c, &["Mix", "Stems"], &mut i) {
+            studio.ws.export_stems = i == 1;
+        }
         body.cut_top(6.0);
         let mut buttons = body.cut_top(34.0);
         let midi = buttons.cut_left(100.0);
         buttons.cut_left(8.0);
+        let label = if studio.ws.export_stems {
+            "Export stems"
+        } else {
+            "Export WAV"
+        };
         if ui
-            .button_primary(W::new("export-audio"), buttons, "Export WAV")
+            .button_primary(W::new("export-audio"), buttons, label)
             .clicked
         {
             action = 1;

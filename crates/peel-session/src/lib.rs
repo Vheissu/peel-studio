@@ -27,7 +27,7 @@ use peel_engine::{EngineCommand, EngineConfig, EngineHandle, RenderPlan, Slot, T
 pub use compile::{
     CompileContext, PlanIndex, PlayMode, clip_source_start_seconds, compile, same_structure,
 };
-pub use export::{ExportJob, ExportSettings, render as render_to_wav};
+pub use export::{ExportJob, ExportSettings, render as render_to_wav, stem_tracks};
 pub use io::{
     LiveTiming, MidiPortInfo, OutputDeviceInfo, PortSelection, RecordedMidi, list_output_devices,
 };
@@ -835,45 +835,101 @@ impl Session {
         self.sync();
     }
 
+    /// Renders one WAV per mixer track that carries sound (each track
+    /// soloed, so it keeps its buses and returns) on a background thread.
+    /// Files go next to `settings.path` as `<name> - <track>.wav`.
+    pub fn export_stems(&mut self, settings: ExportSettings) -> ExportJob {
+        self.capture_plugin_states();
+        let project = self.doc.project().clone();
+        let base = settings.path.with_extension("");
+        let stem = base
+            .file_name()
+            .map_or("Export".to_string(), |s| s.to_string_lossy().into_owned());
+        let dir = base.parent().map(Path::to_path_buf).unwrap_or_default();
+        let mut renders = Vec::new();
+        let mut handles = Vec::new();
+        for track in export::stem_tracks(&project) {
+            let mut p = project.clone();
+            for t in &mut p.mixer.tracks {
+                t.solo = t.id == track;
+            }
+            let name = p
+                .mixer
+                .track(track)
+                .map_or("Track".to_string(), |t| t.name.clone());
+            let path = dir.join(format!("{stem} - {}.wav", export::file_safe(&name)));
+            let (prebuilt, mut h) = self.offline_plugins(&p, settings.sample_rate);
+            handles.append(&mut h);
+            renders.push(export::Render {
+                project: p,
+                prebuilt,
+                settings: ExportSettings {
+                    path,
+                    ..settings.clone()
+                },
+            });
+        }
+        let samples = self.cached_project_samples();
+        ExportJob::start_many(
+            renders,
+            samples,
+            self.export_loads(),
+            handles,
+            settings.sample_rate,
+            Some(dir),
+        )
+    }
+
+    /// Plugin instances for an offline render of `p`, made here on the main
+    /// thread from their current state.
+    fn offline_plugins(
+        &mut self,
+        p: &Project,
+        rate: u32,
+    ) -> (export::Prebuilt, Vec<peel_host_clap::ClapHandle>) {
+        let mut prebuilt = export::Prebuilt::new();
+        let mut handles = Vec::new();
+        let instances = p
+            .channels
+            .iter()
+            .map(|c| &c.device)
+            .chain(p.mixer.tracks.iter().flat_map(|t| t.inserts.iter()))
+            .filter(|d| d.type_id.starts_with("clap:"));
+        for inst in instances {
+            match self.plugins.create_offline(inst, rate as f32, 512) {
+                Ok((dev, handle)) => {
+                    prebuilt.insert(inst.id, dev);
+                    handles.push(handle);
+                }
+                Err(e) => log::warn!("export: {e}"),
+            }
+        }
+        (prebuilt, handles)
+    }
+
+    fn cached_project_samples(&self) -> HashMap<Id, Arc<SampleBuffer>> {
+        self.doc
+            .project()
+            .assets
+            .iter()
+            .filter_map(|a| self.samples.cached(a.id).map(|b| (a.id, b)))
+            .collect()
+    }
+
     /// Renders the arrangement to a WAV file on a background thread.
     pub fn export(&mut self, settings: ExportSettings) -> ExportJob {
         // Plugins get their own instances, built here on the main thread
         // from their current state.
         self.capture_plugin_states();
-        let mut prebuilt = export::Prebuilt::new();
-        let mut plugin_handles = Vec::new();
         let project = self.doc.project().clone();
-        let instances = project
-            .channels
-            .iter()
-            .map(|c| &c.device)
-            .chain(project.mixer.tracks.iter().flat_map(|t| t.inserts.iter()))
-            .filter(|d| d.type_id.starts_with("clap:"));
-        for inst in instances {
-            match self
-                .plugins
-                .create_offline(inst, settings.sample_rate as f32, 512)
-            {
-                Ok((dev, handle)) => {
-                    prebuilt.insert(inst.id, dev);
-                    plugin_handles.push(handle);
-                }
-                Err(e) => log::warn!("export: {e}"),
-            }
-        }
-        let samples: HashMap<Id, Arc<SampleBuffer>> = self
-            .doc
-            .project()
-            .assets
-            .iter()
-            .filter_map(|a| self.samples.cached(a.id).map(|b| (a.id, b)))
-            .collect();
+        let (prebuilt, handles) = self.offline_plugins(&project, settings.sample_rate);
+        let samples = self.cached_project_samples();
         ExportJob::start(
-            self.doc.project().clone(),
+            project,
             samples,
             self.export_loads(),
             prebuilt,
-            plugin_handles,
+            handles,
             settings,
         )
     }
@@ -1066,6 +1122,59 @@ mod tests {
         }
         assert!(off > 0.01, "the synth is playing: {off}");
         assert!(on < off * 0.5, "ducked after each kick: {on} vs {off}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn stems_are_one_file_per_sounding_track_and_sum_to_the_mix() {
+        let dir = std::env::temp_dir().join(format!("peel-stems-test-{}", Id::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut project = template::beat_and_melody();
+        // No master processing, so the stems add up to the mix exactly.
+        project.mixer.tracks[0].inserts.clear();
+        for t in project.mixer.tracks.iter_mut() {
+            t.inserts
+                .retain(|d| !d.type_id.contains("reverb") && !d.type_id.contains("delay"));
+        }
+        let mut s = Session::new_silent(project);
+        let settings = |name: &str| ExportSettings {
+            path: dir.join(name),
+            sample_rate: 48_000,
+            bits: 32,
+            tail_seconds: 0.0,
+        };
+        let wait = |job: ExportJob| loop {
+            if let Some(r) = job.take_result() {
+                return r;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        let mix = wait(s.export(settings("Song.wav"))).expect("mix");
+        let folder = wait(s.export_stems(settings("Song.wav"))).expect("stems");
+        assert_eq!(folder, dir);
+        let tracks = stem_tracks(s.project());
+        let mut files: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().into_owned()))
+            .filter(|n| n.starts_with("Song - "))
+            .collect();
+        files.sort();
+        assert_eq!(files.len(), tracks.len(), "{files:?}");
+        assert!(files.iter().any(|f| f == "Song - Kick.wav"), "{files:?}");
+        let full = peel_media::decode_file(&mix).unwrap();
+        let mut sum = vec![0.0f32; full.left().len()];
+        for f in &files {
+            let b = peel_media::decode_file(dir.join(f)).unwrap();
+            for (acc, x) in sum.iter_mut().zip(b.left()) {
+                *acc += x;
+            }
+        }
+        let err = sum
+            .iter()
+            .zip(full.left())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(err < 1e-3, "stems sum to the mix (max error {err})");
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -100,6 +100,8 @@ pub struct Workspace {
     pub export_bits: u16,
     pub export_rate: u32,
     pub export_tail: f32,
+    /// Export one file per mixer track instead of the mix.
+    pub export_stems: bool,
 }
 
 impl Default for Workspace {
@@ -150,6 +152,7 @@ impl Default for Workspace {
             export_bits: 24,
             export_rate: 48_000,
             export_tail: 3.0,
+            export_stems: false,
         }
     }
 }
