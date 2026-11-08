@@ -299,3 +299,142 @@ fn mode_switch_and_pattern_selection() {
         "selecting a pattern does not leave song mode"
     );
 }
+
+fn command_key(h: &mut Harness, ch: &str, code: peel_ui::KeyCode) {
+    let mods = peel_ui::Modifiers {
+        logo: cfg!(target_os = "macos"),
+        ctrl: !cfg!(target_os = "macos"),
+        ..Default::default()
+    };
+    h.ui.input.modifiers = mods;
+    h.ui.input.keys.push(peel_ui::input::KeyPress {
+        key: peel_ui::Key::Character(ch.into()),
+        code: Some(code),
+        repeat: false,
+        modifiers: mods,
+        consumed: false,
+    });
+    h.frame();
+    h.ui.input.modifiers = peel_ui::Modifiers::default();
+}
+
+#[test]
+fn make_unique_gives_a_clip_its_own_pattern() {
+    let mut h = Harness::new();
+    // Paint a second Beat clip so the pattern is shared.
+    let canvas = h.rect(W::new("pl-canvas"));
+    let lane_h = h.studio.ws.playlist.lane_h;
+    h.click_at(vec2(canvas.x + 60.0, canvas.y + lane_h * 4.5));
+    let beat = h.session().project().patterns[0].id;
+    assert_eq!(h.session().project().pattern_usage(beat), 2);
+    let clip = h
+        .session()
+        .project()
+        .arrangement()
+        .clips
+        .last()
+        .unwrap()
+        .clone();
+    // Right click the new clip and choose Make unique.
+    let p = vec2(canvas.x + 70.0, canvas.y + lane_h * 4.5);
+    h.move_to(p);
+    h.move_to(p);
+    h.press(1);
+    h.release(1);
+    h.frame();
+    h.click(W::new("pl-clip-menu").with(("item", 1usize)));
+    let after = h
+        .session()
+        .project()
+        .arrangement()
+        .clips
+        .iter()
+        .find(|c| c.id == clip.id)
+        .unwrap()
+        .clone();
+    let ClipContent::Pattern { pattern } = after.content else {
+        panic!()
+    };
+    assert_ne!(pattern, beat);
+    assert_eq!(h.session().project().pattern_usage(beat), 1);
+    assert_eq!(
+        h.session().project().pattern(pattern).unwrap().notes.len(),
+        h.session().project().pattern(beat).unwrap().notes.len()
+    );
+    assert_eq!(h.session().selected_pattern(), pattern);
+}
+
+#[test]
+fn piano_roll_copy_paste_and_quantize() {
+    let mut h = Harness::new();
+    let chords = h.session().project().patterns[1].id;
+    h.studio.session.select_pattern(chords);
+    let piano = h
+        .session()
+        .project()
+        .channels
+        .iter()
+        .find(|c| c.name == "Piano")
+        .unwrap()
+        .id;
+    h.studio.ws.selected_channel = Some(piano);
+    h.click(W::new(("dock-tab", "Piano roll")));
+    h.frame();
+    let count = |h: &Harness| {
+        h.session()
+            .project()
+            .pattern(chords)
+            .unwrap()
+            .notes_for(piano)
+            .count()
+    };
+    let before = count(&h);
+    h.studio.ws.roll.selection = h
+        .session()
+        .project()
+        .pattern(chords)
+        .unwrap()
+        .notes_for(piano)
+        .take(3)
+        .map(|n| n.id)
+        .collect();
+    h.move_to(vec2(5.0, 5.0));
+    command_key(&mut h, "c", peel_ui::KeyCode::KeyC);
+    command_key(&mut h, "v", peel_ui::KeyCode::KeyV);
+    assert_eq!(count(&h), before + 3);
+    // Nudge a note off the grid, then quantize everything.
+    let off = h
+        .session()
+        .project()
+        .pattern(chords)
+        .unwrap()
+        .notes_for(piano)
+        .next()
+        .unwrap()
+        .id;
+    h.studio.session.doc.edit("nudge", |p| {
+        if let Some(pt) = p.pattern_mut(chords)
+            && let Some(n) = pt.notes.iter_mut().find(|n| n.id == off)
+        {
+            n.start = Time::new(1, 17);
+        }
+    });
+    h.studio.ws.roll.selection.clear();
+    h.frame();
+    h.click(W::new("roll-quantize"));
+    let n = h
+        .session()
+        .project()
+        .pattern(chords)
+        .unwrap()
+        .notes
+        .iter()
+        .find(|n| n.id == off)
+        .copied()
+        .unwrap();
+    assert!(
+        n.start.rem_euclid(h.studio.ws.roll.snap).is_zero(),
+        "{:?}",
+        n.start
+    );
+}

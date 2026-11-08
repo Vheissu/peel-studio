@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use peel_document::{Clip, ClipContent, Id, Pattern, Time, Track};
 use peel_session::{PlayMode, Session};
 use peel_ui::Id as W;
-use peel_ui::{Align, Button, Color, CursorIcon, MenuItem, Rect, Ui, icons, vec2};
+use peel_ui::{Align, Color, CursorIcon, MenuItem, Rect, Ui, icons, vec2};
 
 use crate::browser::BrowserItem;
 use crate::studio::current_pattern;
@@ -493,6 +493,21 @@ fn track_heads(ui: &mut Ui, r: Rect, v: &View, tracks: &[Track], s: &mut Session
             },
             Align::Start,
         );
+        let name_resp = ui.interact(W::new(("pl-lane-name", tr.id)), inner);
+        ui.tooltip(&name_resp, "Double-click to rename");
+        if name_resp.double_clicked {
+            *ui.state::<Option<Id>>(W::new("pl-rename-lane-target")) = Some(tr.id);
+            crate::rename::open(ui, W::new("pl-rename-lane"), row, &tr.name);
+        }
+    }
+    if let Some(name) = crate::rename::show(ui, W::new("pl-rename-lane"))
+        && let Some(lane) = *ui.state::<Option<Id>>(W::new("pl-rename-lane-target"))
+    {
+        s.doc.edit("Rename lane", |p| {
+            if let Some(x) = p.arrangement_mut().tracks.iter_mut().find(|x| x.id == lane) {
+                x.name = name;
+            }
+        });
     }
     // Add lane.
     let y = v.lane_y(tracks.len());
@@ -629,18 +644,90 @@ fn clips(
         *ui.state::<DragState>(drag_id) = st;
     }
 
-    // Right button deletes clips under the pointer.
-    if ui.input.down[Button::Right as usize]
-        && resp.hovered
+    // Right click opens the clip menu.
+    let menu_id = W::new("pl-clip-menu");
+    if resp.secondary_clicked
         && let Some((c, _)) = &hit
     {
-        let cid = c.id;
-        s.doc.edit_gesture(id.0 ^ 0xe7a5e, "Delete clips", |p| {
-            p.arrangement_mut().clips.retain(|x| x.id != cid)
-        });
+        ws.playlist.selection.clear();
+        ws.playlist.selection.insert(c.id);
+        *ui.state::<Option<Clip>>(menu_id) = Some(c.clone());
+        ui.open_popup(
+            menu_id,
+            Rect::from_center(pointer.unwrap_or_default(), 1.0, 1.0),
+        );
     }
-    if ui.input.released(Button::Right) {
-        s.doc.end_gesture();
+    if let Some(c) = ui.state::<Option<Clip>>(menu_id).clone() {
+        let at = ui.popup_rect().map(|r| vec2(r.x, r.y)).unwrap_or_default();
+        let shared = match c.content {
+            ClipContent::Pattern { pattern } => s.project().pattern_usage(pattern) > 1,
+            _ => false,
+        };
+        let items = [
+            MenuItem::new("Open pattern"),
+            MenuItem::new("Make unique").enabled(shared),
+            MenuItem::new("Rename pattern"),
+            MenuItem::new(if c.muted { "Unmute clip" } else { "Mute clip" }),
+            MenuItem::Separator,
+            MenuItem::new("Delete clip").shortcut("Del"),
+        ];
+        if let Some(choice) = ui.menu(menu_id, at, &items) {
+            let ClipContent::Pattern { pattern } = c.content else {
+                return;
+            };
+            match choice {
+                0 => {
+                    s.select_pattern(pattern);
+                    ws.dock = DockTab::Rack;
+                }
+                1 => {
+                    if let Some(new) = make_unique(s, c.id, pattern) {
+                        s.select_pattern(new);
+                    }
+                }
+                2 => {
+                    let name = s
+                        .project()
+                        .pattern(pattern)
+                        .map(|p| p.name.clone())
+                        .unwrap_or_default();
+                    let lane = lane_of.get(&c.track).copied().unwrap_or(0);
+                    let anchor = clip_rect(v, lane, &c);
+                    *ui.state::<Option<Id>>(W::new("pl-rename-target")) = Some(pattern);
+                    crate::rename::open(ui, W::new("pl-rename-pattern"), anchor, &name);
+                }
+                3 => {
+                    let cid = c.id;
+                    s.doc
+                        .edit(if c.muted { "Unmute clip" } else { "Mute clip" }, |p| {
+                            if let Some(x) =
+                                p.arrangement_mut().clips.iter_mut().find(|x| x.id == cid)
+                            {
+                                x.muted = !x.muted;
+                            }
+                        });
+                }
+                5 => {
+                    let cid = c.id;
+                    s.doc.edit("Delete clip", |p| {
+                        p.arrangement_mut().clips.retain(|x| x.id != cid)
+                    });
+                }
+                _ => {}
+            }
+        }
+        if !ui.is_popup_open(menu_id) {
+            *ui.state::<Option<Clip>>(menu_id) = None;
+        }
+    }
+    if let Some(name) = crate::rename::show(ui, W::new("pl-rename-pattern"))
+        && let Some(pid) = *ui.state::<Option<Id>>(W::new("pl-rename-target"))
+    {
+        s.doc.edit("Rename pattern", |p| {
+            if let Some(pt) = p.pattern_mut(pid) {
+                pt.name = name;
+            }
+        });
     }
 
     let st = ui.state::<DragState>(drag_id).clone();
@@ -924,4 +1011,41 @@ fn place_clip_gesture(
         p.arrangement_mut().clips.push(clip)
     });
     Some(out)
+}
+
+/// Gives one clip its own copy of a shared pattern. Returns the new
+/// pattern id.
+pub fn make_unique(s: &mut Session, clip: Id, pattern: Id) -> Option<Id> {
+    let src = s.project().pattern(pattern)?.as_ref().clone();
+    let existing: Vec<String> = s
+        .project()
+        .patterns
+        .iter()
+        .map(|p| p.name.clone())
+        .collect();
+    let mut n = 2;
+    let base = src
+        .name
+        .trim_end_matches(|c: char| c.is_ascii_digit())
+        .trim_end()
+        .to_string();
+    let mut name = format!("{base} {n}");
+    while existing.contains(&name) {
+        n += 1;
+        name = format!("{base} {n}");
+    }
+    let mut copy = src;
+    copy.id = Id::new();
+    copy.name = name;
+    for note in &mut copy.notes {
+        note.id = Id::new();
+    }
+    let new_id = copy.id;
+    s.doc.edit("Make unique", |p| {
+        p.patterns.push(std::sync::Arc::new(copy));
+        if let Some(c) = p.arrangement_mut().clips.iter_mut().find(|c| c.id == clip) {
+            c.content = ClipContent::Pattern { pattern: new_id };
+        }
+    });
+    Some(new_id)
 }

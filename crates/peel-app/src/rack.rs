@@ -421,6 +421,7 @@ fn channel_button(
     }
     let mut items = vec![
         MenuItem::new("Piano roll").shortcut("F7"),
+        MenuItem::new("Rename channel"),
         MenuItem::new("Clone channel"),
         MenuItem::new("Clear notes in pattern"),
         MenuItem::Separator,
@@ -446,8 +447,9 @@ fn channel_button(
         let cid = ch.id;
         match i {
             0 => ws.dock = DockTab::PianoRoll,
-            1 => clone_channel(s, cid),
-            2 => {
+            1 => crate::rename::open(ui, W::new(("rename-channel-popup", cid)), r, &ch.name),
+            2 => clone_channel(s, cid),
+            3 => {
                 let pid = current_pattern(s);
                 s.doc.edit("Clear notes", |p| {
                     if let Some(pt) = p.pattern_mut(pid) {
@@ -470,6 +472,18 @@ fn channel_button(
             i if i == delete_idx => delete_channel(s, ws, cid),
             _ => {}
         }
+    }
+    if let Some(name) = crate::rename::show(ui, W::new(("rename-channel-popup", ch.id))) {
+        let cid = ch.id;
+        s.doc.edit("Rename channel", |p| {
+            if let Some(c) = p.channel_mut(cid) {
+                c.name = name.clone();
+                let track = c.track;
+                if let Some(t) = p.mixer.track_mut(track) {
+                    t.name = name;
+                }
+            }
+        });
     }
     // Tiny tag showing the instrument in a strong ink on selection.
     let _ = ink_on(c);

@@ -107,7 +107,7 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
     };
     ws.selected_channel = Some(channel.id);
 
-    header(ui, tools, &channel, ws);
+    let quantize = header(ui, tools, &channel, ws);
 
     let mut area = r.shrink2(8.0, 0.0);
     area.cut_bottom(8.0);
@@ -208,7 +208,13 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
     let notes: Vec<Note> = pattern.notes_for(channel.id).copied().collect();
     edit_canvas(ui, &v, &notes, &channel, s, ws, pid, &pattern);
     velocity_lane(ui, vel_r, &v, &notes, &channel, s, ws, pid);
-    keyboard_shortcuts(ui, s, ws, pid, &channel, &notes, &pattern);
+    let paste_at = ui
+        .pointer()
+        .filter(|p| canvas.contains(*p))
+        .map(|p| Time::from_f64(v.beat(p.x).max(0.0), 960).floor_to(ws.roll.snap));
+    keyboard_shortcuts(
+        ui, s, ws, pid, &channel, &notes, &pattern, paste_at, quantize,
+    );
 
     // Playhead.
     if s.is_playing() && matches!(s.mode(), PlayMode::Pattern(p) if p == pid) {
@@ -260,7 +266,7 @@ fn note_rect(v: &View, n: &Note) -> Rect {
     }
 }
 
-fn header(ui: &mut Ui, tools: Rect, ch: &Channel, ws: &mut Workspace) {
+fn header(ui: &mut Ui, tools: Rect, ch: &Channel, ws: &mut Workspace) -> bool {
     let t = ui.theme.clone();
     let mut row = tools;
     // Channel chip.
@@ -355,6 +361,16 @@ fn header(ui: &mut Ui, tools: Rect, ch: &Channel, ws: &mut Workspace) {
         }
         row.cut_right(2.0);
     }
+    row.cut_right(8.0);
+    let q = ui.icon_button(
+        W::new("roll-quantize"),
+        row.cut_right(30.0),
+        icons::GRID,
+        false,
+        None,
+    );
+    ui.tooltip(&q, "Quantize to the grid (selection, or all notes)");
+    q.clicked
 }
 
 fn grid(ui: &mut Ui, v: &View, pattern: &Pattern, s: &Session, _pid: Id) {
@@ -974,6 +990,8 @@ fn keyboard_shortcuts(
     ch: &Channel,
     notes: &[Note],
     pattern: &Pattern,
+    paste_at: Option<Time>,
+    quantize: bool,
 ) {
     if ui.text_focus() {
         return;
@@ -986,7 +1004,79 @@ fn keyboard_shortcuts(
     if ui.input.take_command("a", false) {
         ws.roll.selection = notes.iter().map(|n| n.id).collect();
     }
+    // Paste works without a selection.
+    if ui.input.take_command("v", false) && !ws.clipboard.is_empty() {
+        let first = ws
+            .clipboard
+            .iter()
+            .map(|n| n.start)
+            .min()
+            .unwrap_or(Time::ZERO);
+        let last = ws
+            .clipboard
+            .iter()
+            .map(|n| n.end())
+            .max()
+            .unwrap_or(Time::ZERO);
+        let at = paste_at
+            .unwrap_or_else(|| (first + (last - first).ceil_to(ws.roll.snap)).max(Time::ZERO));
+        let copies: Vec<Note> = ws
+            .clipboard
+            .iter()
+            .map(|n| Note {
+                id: Id::new(),
+                channel: ch.id,
+                start: at + (n.start - first),
+                ..*n
+            })
+            .collect();
+        let needed = copies.iter().map(|n| n.end()).max().unwrap_or(Time::ZERO);
+        let len = pattern.length;
+        ws.roll.selection = copies.iter().map(|n| n.id).collect();
+        s.doc.edit(format!("Paste {} notes", copies.len()), |p| {
+            if let Some(pt) = p.pattern_mut(pid) {
+                pt.notes.extend(copies);
+                pt.sort_notes();
+                if needed > len {
+                    pt.length = needed.ceil_to(Time::beats(4));
+                }
+            }
+        });
+        return;
+    }
+    if quantize {
+        let targets: HashSet<Id> = if sel.is_empty() {
+            notes.iter().map(|n| n.id).collect()
+        } else {
+            sel.iter().map(|n| n.id).collect()
+        };
+        let grid = ws.roll.snap;
+        s.doc.edit("Quantize notes", |p| {
+            if let Some(pt) = p.pattern_mut(pid) {
+                for n in pt.notes.iter_mut().filter(|n| targets.contains(&n.id)) {
+                    n.start = n.start.round_to(grid).max(Time::ZERO);
+                    n.length = n.length.round_to(grid).max(grid);
+                }
+                pt.sort_notes();
+            }
+        });
+    }
     if sel.is_empty() {
+        return;
+    }
+    let copy = ui.input.take_command("c", false);
+    let cut = ui.input.take_command("x", false);
+    if copy || cut {
+        ws.clipboard = sel.clone();
+    }
+    if cut {
+        let ids: HashSet<Id> = sel.iter().map(|n| n.id).collect();
+        s.doc.edit(format!("Cut {} notes", sel.len()), |p| {
+            if let Some(pt) = p.pattern_mut(pid) {
+                pt.notes.retain(|n| !ids.contains(&n.id));
+            }
+        });
+        ws.roll.selection.clear();
         return;
     }
     let ids: HashSet<Id> = sel.iter().map(|n| n.id).collect();

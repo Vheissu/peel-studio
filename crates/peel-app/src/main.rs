@@ -7,6 +7,7 @@ mod mixer;
 mod piano_roll;
 mod playlist;
 mod rack;
+mod rename;
 mod studio;
 mod transport;
 mod util;

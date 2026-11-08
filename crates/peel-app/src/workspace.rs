@@ -82,6 +82,8 @@ pub struct Workspace {
     pub held: HashMap<KeyCode, (Id, u8)>,
     pub export: Option<ExportJob>,
     pub browser_scroll: f32,
+    /// Notes copied in the Piano Roll.
+    pub clipboard: Vec<peel_document::Note>,
 }
 
 impl Default for Workspace {
@@ -122,6 +124,7 @@ impl Default for Workspace {
             held: HashMap::new(),
             export: None,
             browser_scroll: 0.0,
+            clipboard: Vec::new(),
         }
     }
 }

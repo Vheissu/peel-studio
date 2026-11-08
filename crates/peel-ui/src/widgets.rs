@@ -625,6 +625,16 @@ impl Ui {
 
     // ---- text input ----
 
+    /// Focuses a text field, optionally selecting its contents so typing
+    /// replaces them.
+    pub fn focus_text_edit(&mut self, id: Id, select_all: bool) {
+        self.request_focus(id);
+        let st = self.state::<TextEditState>(id);
+        st.select_all = select_all;
+        st.editing = true;
+        st.cursor = usize::MAX;
+    }
+
     /// Single-line text field. `changed` is set when Enter commits.
     pub fn text_edit(&mut self, id: Id, r: Rect, text: &mut String, placeholder: &str) -> Response {
         let style = self.theme.body;

@@ -435,6 +435,7 @@ fn pattern_picker(ui: &mut Ui, row: &mut Rect, studio: &mut Studio) {
     items.push(MenuItem::Separator);
     items.push(MenuItem::new("New pattern"));
     items.push(MenuItem::new("Duplicate pattern"));
+    items.push(MenuItem::new("Rename pattern"));
     items.push(MenuItem::new("Delete pattern").enabled(patterns.len() > 1));
     if let Some(i) = ui.menu(W::new("pattern-menu"), vec2(r.x, r.bottom() + 4.0), &items) {
         let n = patterns.len();
@@ -447,8 +448,17 @@ fn pattern_picker(ui: &mut Ui, row: &mut Rect, studio: &mut Studio) {
             let id = new_pattern(studio, Some(&pat));
             studio.session.select_pattern(id);
         } else if i == n + 3 {
+            crate::rename::open(ui, W::new("rename-pattern"), r, &pat.name);
+        } else if i == n + 4 {
             delete_pattern(studio, pid);
         }
+    }
+    if let Some(name) = crate::rename::show(ui, W::new("rename-pattern")) {
+        studio.session.doc.edit("Rename pattern", |p| {
+            if let Some(pt) = p.pattern_mut(pid) {
+                pt.name = name;
+            }
+        });
     }
     row.cut_left(8.0);
     let add = ui.icon_button(
