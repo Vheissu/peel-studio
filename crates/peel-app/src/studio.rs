@@ -562,6 +562,39 @@ impl Studio {
                 Align::Start,
             );
         }
+        let gear = ui.icon_button(
+            W::new("settings-open"),
+            row.cut_right(24.0),
+            peel_ui::icons::GEAR,
+            ui.is_popup_open(W::new("settings-panel")),
+            None,
+        );
+        ui.tooltip(&gear, "Audio and MIDI");
+        if gear.clicked {
+            ui.open_popup(W::new("settings-panel"), gear.rect);
+        }
+        // MIDI activity light.
+        let activity = self.session.midi_activity();
+        let dt = ui.dt() as f64;
+        let lit = {
+            let st = ui.state::<(u64, f64)>(W::new("midi-activity"));
+            if st.0 != activity {
+                *st = (activity, 0.0);
+            }
+            st.1 += dt;
+            st.1 < 0.15 && activity > 0
+        };
+        let dot = row.cut_right(14.0);
+        let t2 = ui.theme.clone();
+        ui.scene.circle(
+            dot.center(),
+            3.0,
+            if lit { t2.play } else { t2.control_hover },
+        );
+        if lit {
+            ui.request_repaint();
+        }
+        row.cut_right(4.0);
         let help = ui.icon_button(
             W::new("keys-help"),
             row.cut_right(24.0),
@@ -635,6 +668,8 @@ impl App for Studio {
 impl Studio {
     fn update_inner(&mut self, ui: &mut Ui, win: &WindowControl) {
         self.session.tick();
+        self.session.set_live_target(self.ws.selected_channel);
+        self.session.poll_midi();
         if !self.welcome {
             self.shortcuts(ui, win);
         }
@@ -675,6 +710,13 @@ impl Studio {
             self.open_path(path);
         }
 
+        if std::env::var_os("PEEL_SETTINGS").is_some()
+            && !ui.is_popup_open(W::new("settings-panel"))
+            && ui.time() < 0.5
+        {
+            ui.open_popup(W::new("settings-panel"), Rect::ZERO);
+        }
+        crate::settings::panel(ui, &mut self.session, &mut self.prefs);
         if self.welcome {
             self.welcome(ui);
         } else if self.show_keys && crate::keys::overlay(ui) {

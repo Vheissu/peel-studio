@@ -11,6 +11,7 @@ mod playlist;
 mod prefs;
 mod rack;
 mod rename;
+mod settings;
 mod studio;
 mod transport;
 mod util;
@@ -31,7 +32,12 @@ fn main() {
     )
     .init();
     let open: Option<PathBuf> = std::env::args_os().nth(1).map(PathBuf::from);
-    let session = Session::new(template::beat_and_melody());
+    let prefs = prefs::Prefs::load();
+    let session = Session::new_with_audio(
+        template::beat_and_melody(),
+        prefs.audio_device.clone(),
+        prefs.buffer_frames,
+    );
     let options = WindowOptions {
         title: "Peel Studio".into(),
         ..Default::default()
