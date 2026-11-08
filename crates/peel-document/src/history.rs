@@ -135,6 +135,11 @@ impl Document {
         self.redo.last().map(|c| c.label.as_str())
     }
 
+    /// Labels of the redo stack, next redo last.
+    pub fn redo_labels(&self) -> impl Iterator<Item = &str> {
+        self.redo.iter().map(|c| c.label.as_str())
+    }
+
     /// Labels of the undo stack, most recent last.
     pub fn history_labels(&self) -> impl Iterator<Item = &str> {
         self.undo.iter().map(|c| c.label.as_str())

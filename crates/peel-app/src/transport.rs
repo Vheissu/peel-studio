@@ -319,10 +319,14 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
         .undo_label()
         .map(|l| format!("Undo {l}"))
         .unwrap_or_else(|| "Nothing to undo".into());
-    ui.tooltip(&undo, &undo_label);
+    ui.tooltip(&undo, &format!("{undo_label}  ·  right-click for history"));
     if undo.clicked {
         studio.session.doc.undo();
     }
+    if undo.secondary_clicked {
+        ui.open_popup(W::new("history"), undo.rect);
+    }
+    history_panel(ui, undo.rect, studio);
     right.cut_right(14.0);
 
     // Master meter + load.
@@ -681,5 +685,100 @@ fn export_panel(ui: &mut Ui, anchor: Rect, studio: &mut Studio) {
             studio.export_midi();
         }
         _ => {}
+    }
+}
+
+/// Undo history: every step in musical terms; click one to return to it.
+fn history_panel(ui: &mut Ui, anchor: Rect, studio: &mut Studio) {
+    let id = W::new("history");
+    if !ui.is_popup_open(id) {
+        return;
+    }
+    let t = ui.theme.clone();
+    let undo: Vec<String> = studio
+        .session
+        .doc
+        .history_labels()
+        .map(str::to_string)
+        .collect();
+    let redo: Vec<String> = studio
+        .session
+        .doc
+        .redo_labels()
+        .map(str::to_string)
+        .collect();
+    let row_h = 26.0;
+    let shown_undo = undo.len().min(16);
+    let shown_redo = redo.len().min(6);
+    let h = 52.0 + (shown_undo + shown_redo + 1) as f32 * row_h;
+    let r = Rect {
+        x: (anchor.right() - 280.0).max(8.0),
+        y: anchor.bottom() + 6.0,
+        w: 280.0,
+        h,
+    };
+    let mut jump: Option<i64> = None;
+    ui.popup_panel(id, r, |ui, r| {
+        let mut body = r.shrink(12.0);
+        ui.text(
+            body.cut_top(24.0),
+            "History",
+            t.heading,
+            t.text,
+            Align::Start,
+        );
+        body.cut_top(6.0);
+        // Redo entries (greyed), newest at the top, then the current state,
+        // then undo entries from most recent.
+        for (i, label) in redo.iter().rev().take(shown_redo).enumerate().rev() {
+            let row = body.cut_top(row_h);
+            let resp = ui.interact(W::new(("history-redo", i)), row);
+            if resp.hovered {
+                ui.scene.rect(row, t.radius_s, t.control_hover);
+            }
+            ui.text(
+                row.shrink2(10.0, 0.0),
+                label,
+                t.body,
+                t.text_faint,
+                Align::Start,
+            );
+            if resp.clicked {
+                jump = Some(-(redo.len() as i64 - (redo.len() - 1 - i) as i64));
+            }
+        }
+        let now = body.cut_top(row_h);
+        ui.scene.rect(now, t.radius_s, t.accent.alpha(0.14));
+        ui.text(
+            now.shrink2(10.0, 0.0),
+            "Now",
+            t.label,
+            t.accent,
+            Align::Start,
+        );
+        for (i, label) in undo.iter().rev().take(shown_undo).enumerate() {
+            let row = body.cut_top(row_h);
+            let resp = ui.interact(W::new(("history-undo", i)), row);
+            if resp.hovered {
+                ui.scene.rect(row, t.radius_s, t.control_hover);
+            }
+            ui.text(row.shrink2(10.0, 0.0), label, t.body, t.text, Align::Start);
+            if resp.clicked {
+                jump = Some(i as i64 + 1);
+            }
+        }
+    });
+    if let Some(steps) = jump {
+        // Positive: undo that many steps; negative: redo.
+        if steps > 0 {
+            for _ in 0..steps {
+                studio.session.doc.undo();
+            }
+        } else {
+            for _ in 0..(-steps) {
+                studio.session.doc.redo();
+            }
+        }
+        ui.close_popup();
     }
 }

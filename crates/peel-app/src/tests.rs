@@ -687,3 +687,25 @@ fn automating_a_fader_creates_an_editable_clip() {
     assert_eq!(points.len(), 3, "{points:?}");
     assert!(points.windows(2).all(|w| w[0].position <= w[1].position));
 }
+
+#[test]
+fn history_panel_jumps_back_several_steps() {
+    let mut h = Harness::new();
+    for bpm in [100.0, 110.0, 120.0] {
+        h.studio
+            .session
+            .doc
+            .edit(format!("Tempo {bpm}"), |p| p.set_bpm(bpm));
+    }
+    h.frame();
+    let undo = h.rect(W::new("undo")).center();
+    h.move_to(undo);
+    h.move_to(undo);
+    h.press(1);
+    h.release(1);
+    h.frame();
+    // Click the second entry (two steps back).
+    h.click(W::new(("history-undo", 1usize)));
+    assert_eq!(h.session().project().bpm(), 100.0);
+    assert_eq!(h.session().doc.redo_label(), Some("Tempo 110"));
+}
