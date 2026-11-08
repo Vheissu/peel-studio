@@ -253,49 +253,7 @@ pub(crate) fn ramp_coef(sample_rate: f32) -> f32 {
     1.0 - (-(CTRL as f32) / (0.010 * sample_rate)).exp()
 }
 
-/// Linear anti-click fade used when a voice is stolen or choked.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct Fade {
-    gain: f32,
-    step: f32,
-    fading: bool,
-}
-
-impl Fade {
-    pub(crate) const fn new() -> Fade {
-        Fade {
-            gain: 1.0,
-            step: 0.0,
-            fading: false,
-        }
-    }
-
-    pub(crate) fn reset(&mut self) {
-        self.gain = 1.0;
-        self.fading = false;
-    }
-
-    pub(crate) fn start(&mut self, sample_rate: f32, ms: f32) {
-        if !self.fading {
-            self.fading = true;
-            self.step = 1.0 / (ms * 0.001 * sample_rate).max(1.0);
-        }
-    }
-
-    /// Returns the gain for this sample and advances.
-    #[inline]
-    pub(crate) fn tick(&mut self) -> f32 {
-        if self.fading {
-            self.gain = (self.gain - self.step).max(0.0);
-        }
-        self.gain
-    }
-
-    #[inline]
-    pub(crate) fn is_done(&self) -> bool {
-        self.fading && self.gain <= 0.0
-    }
-}
+pub(crate) use peel_dsp::voice::StealFade as Fade;
 
 /// Behaviour the voice pool needs from a voice.
 pub(crate) trait PoolVoice {

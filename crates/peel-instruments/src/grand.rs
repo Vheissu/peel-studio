@@ -127,7 +127,7 @@ static PARAMS: [ParamDescriptor; 12] = [
         "Pedal",
         0.05,
         2.0,
-        0.3,
+        0.22,
         Unit::Seconds,
     ),
     ParamDescriptor::linear(
@@ -175,7 +175,7 @@ pub static PRESETS: [Preset; 6] = [
             ("string.decay", 1.0),
             ("string.aftersound", 0.5),
             ("pedal.sustain", 0.0),
-            ("pedal.damper", 0.3),
+            ("pedal.damper", 0.22),
             ("out.width", 0.6),
             ("out.level", 0.0),
         ],
@@ -390,7 +390,8 @@ impl GrandVoice {
                 break;
             }
             let envelope = body_response(fk) / kk.powf(1.15);
-            let comb = (PI * kk * x0).sin().abs();
+            // A real hammer has width, so the strike-point nulls are shallow.
+            let comb = (((PI * kk * x0).sin().powi(2) + 0.05) / 1.05).sqrt();
             amps[k - 1] = envelope * hammer(fk, fc) * comb;
             let a_ref = envelope * hammer(fk, fc_ref) * comb;
             e_ref += a_ref * a_ref;
@@ -405,7 +406,7 @@ impl GrandVoice {
         // Loudness: normalize on a fixed reference spectrum so that harder
         // hits are both louder and brighter.
         let level = lerp(0.65, 0.12 + 0.88 * vel.powf(1.6), s.dynamics);
-        let norm = 0.075 / (e_ref * n_str as f32 * 0.5).sqrt().max(1.0e-6) * level;
+        let norm = 0.09 / (e_ref * n_str as f32 * 0.5).sqrt().max(1.0e-6) * level;
 
         // Decay rates (1/s): slow for bass, fast for treble, with a frequency
         // dependent loss term.
@@ -493,11 +494,11 @@ impl GrandVoice {
         // Hammer thump.
         self.noise.reseed(seed ^ 0x9E37);
         self.noise_bp
-            .set_q((f0 * 4.0).clamp(400.0, 3_500.0), 0.9, sr);
+            .set_q((f0 * 3.0).clamp(250.0, 2_500.0), 0.9, sr);
         self.noise_bp.reset();
         self.noise_env = 1.0;
         self.noise_coef = (-6.9 / (0.03 * sr)).exp();
-        self.noise_gain = s.hammer * vel.powf(1.5) * 0.22 * level.max(0.3);
+        self.noise_gain = s.hammer * vel.powf(1.5) * 0.4 * level.max(0.3);
 
         self.age = 0;
         self.flush = 0;
@@ -626,7 +627,7 @@ impl Grand {
                 detune: 1.0,
                 decay: 1.0,
                 after: 0.5,
-                damper: 0.3,
+                damper: 0.22,
                 width: 0.6,
             },
             pedal: false,

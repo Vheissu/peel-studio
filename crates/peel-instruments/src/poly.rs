@@ -410,6 +410,7 @@ pub static PRESETS: [Preset; 7] = [
             ("filter.decay", 0.25),
             ("filter.sustain", 0.0),
             ("filter.release", 0.25),
+            ("out.gain", 3.0),
         ],
     },
     Preset {
@@ -436,6 +437,7 @@ pub static PRESETS: [Preset; 7] = [
             ("lfo.rate", 5.5),
             ("lfo.depth", 0.18),
             ("lfo.target", 0.0),
+            ("out.gain", -3.0),
         ],
     },
     Preset {
@@ -1023,8 +1025,11 @@ impl Synth for Poly {
             };
             v.pos[u] = pos;
             let (gl, gr) = pan_gains(pos * spread);
-            v.gl[u] = gl * norm;
-            v.gr[u] = gr * norm;
+            // Unused unison slots stay silent even if the unison count is
+            // raised while this note is still sounding.
+            let used = if u < n { norm } else { 0.0 };
+            v.gl[u] = gl * used;
+            v.gr[u] = gr * used;
             let phase = if u == 0 { 0.0 } else { rng.uniform() };
             v.osc1[u] = Osc::with_phase(phase);
             v.osc2[u] = Osc::with_phase(if u == 0 { 0.0 } else { rng.uniform() });

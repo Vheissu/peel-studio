@@ -301,7 +301,7 @@ impl Hat {
     }
 
     fn derive(&mut self) {
-        self.level_gain = db_to_gain(self.level.get()) * 0.6;
+        self.level_gain = db_to_gain(self.level.get()) * 0.75;
     }
 
     fn control(&mut self) {

@@ -431,6 +431,43 @@ fn poly_plays_sixteen_voices_and_steals_beyond() {
     assert!(rms(&l[8_000..12_000]) > 0.05);
 }
 
+#[test]
+fn poly_voice_steal_does_not_click() {
+    // Sixteen pure sine voices, then a seventeenth note steals one. The
+    // steepest step in the output must not jump when that happens.
+    let mut d = fresh("peel.synth.poly");
+    for (k, v) in [
+        ("unison.voices", 0.0),
+        ("osc.mix", 0.0),
+        ("osc1.wave", 0.0),
+        ("filter.type", 0.0),
+        ("filter.cutoff", 12_000.0),
+        ("filter.env_amount", 0.0),
+        ("filter.key_track", 0.0),
+        ("amp.attack", 0.001),
+        ("amp.sustain", 1.0),
+        ("out.gain", -12.0),
+    ] {
+        set(d.as_mut(), k, v);
+    }
+    let mut events: Vec<Timed> = (0..16u32)
+        .map(|i| note_on(0, 36 + 2 * i as u8, 1.0, i))
+        .collect();
+    events.push(note_on(30_000, 90, 1.0, 99));
+    let (l, _) = render(d.as_mut(), &events, 40_000, 256);
+    let step = |a: &[f32]| {
+        a.windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0, f32::max)
+    };
+    let steady = step(&l[10_000..29_000]);
+    let around = step(&l[29_900..33_000]);
+    assert!(
+        around < steady * 1.8 + 0.005,
+        "steal clicked: {around} vs steady {steady}"
+    );
+}
+
 // ------------------------------------------------------------------- bass
 
 #[test]

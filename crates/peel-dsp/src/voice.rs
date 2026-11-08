@@ -277,6 +277,64 @@ impl VoiceAllocator {
     }
 }
 
+/// Linear fade-out used when a voice is stolen or choked, so the cut never
+/// clicks. Multiply the voice output by [`StealFade::tick`] every sample and
+/// retire the voice once [`StealFade::is_done`].
+#[derive(Clone, Copy, Debug)]
+pub struct StealFade {
+    gain: f32,
+    step: f32,
+    fading: bool,
+}
+
+impl StealFade {
+    pub const fn new() -> StealFade {
+        StealFade {
+            gain: 1.0,
+            step: 0.0,
+            fading: false,
+        }
+    }
+
+    /// Back to full gain, not fading (call when a voice starts).
+    pub fn reset(&mut self) {
+        self.gain = 1.0;
+        self.fading = false;
+    }
+
+    /// Begins the fade over `ms` milliseconds. Repeated calls keep the first.
+    pub fn start(&mut self, sample_rate: f32, ms: f32) {
+        if !self.fading {
+            self.fading = true;
+            self.step = 1.0 / (ms * 0.001 * sample_rate).max(1.0);
+        }
+    }
+
+    /// Returns the gain for this sample and advances.
+    #[inline]
+    pub fn tick(&mut self) -> f32 {
+        if self.fading {
+            self.gain = (self.gain - self.step).max(0.0);
+        }
+        self.gain
+    }
+
+    pub fn is_fading(&self) -> bool {
+        self.fading
+    }
+
+    #[inline]
+    pub fn is_done(&self) -> bool {
+        self.fading && self.gain <= 0.0
+    }
+}
+
+impl Default for StealFade {
+    fn default() -> Self {
+        StealFade::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -340,6 +398,26 @@ mod tests {
         assert!(al.stolen.is_some());
         assert!(al.cut.is_some());
         assert_eq!(al.slot, al.cut.unwrap());
+    }
+
+    #[test]
+    fn steal_fade_ramps_to_silence() {
+        let mut f = StealFade::new();
+        assert_eq!(f.tick(), 1.0);
+        assert!(!f.is_done());
+        f.start(1000.0, 4.0);
+        let mut prev = 1.0;
+        let mut n = 0;
+        while !f.is_done() {
+            let g = f.tick();
+            assert!(g <= prev);
+            prev = g;
+            n += 1;
+            assert!(n < 100);
+        }
+        assert!((3..=5).contains(&n), "fade took {n} samples");
+        f.reset();
+        assert_eq!(f.tick(), 1.0);
     }
 
     #[test]

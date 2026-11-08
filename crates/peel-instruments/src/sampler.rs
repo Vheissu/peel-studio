@@ -593,6 +593,10 @@ impl Synth for Sampler {
                 0.0
             };
         let ratio = st_ratio(semis) as f64 * sample.sample_rate as f64 / self.sr as f64;
+        if !ratio.is_finite() || ratio <= 0.0 {
+            self.pool.voices[slot].active = false;
+            return;
+        }
         let (ls, le) = match sample.loop_range {
             Some((a, b)) if b > a + 1 && b <= frames => (a, b),
             _ => (0, frames),

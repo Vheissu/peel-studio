@@ -364,7 +364,7 @@ impl Clap {
 
     fn derive(&mut self) {
         (self.drive_g, self.drive_norm) = drive_curve(self.drive.get());
-        self.level_gain = db_to_gain(self.level.get()) * 0.9;
+        self.level_gain = db_to_gain(self.level.get()) * 1.05;
     }
 
     fn control(&mut self) {
