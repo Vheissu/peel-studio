@@ -1,8 +1,17 @@
 //! Opening MIDI input ports and keeping them open as devices come and go.
+//!
+//! Talking to the system's MIDI service can block: the first Core MIDI
+//! client of a process takes about three quarters of a second to create, and
+//! closing a Windows device waits for its callback to finish. So every call
+//! into `midir` that is not a callback happens on one worker thread owned by
+//! [`MidiInput`]. The methods the UI calls only queue a request or read the
+//! worker's last result, and never wait.
 
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::message::{MidiEvent, Parser};
@@ -42,9 +51,11 @@ pub enum PortSelection {
     Nothing,
 }
 
-/// Lists the MIDI input ports without opening any. Returns an empty list
-/// when the system has no MIDI support available (for example no ALSA
-/// sequencer in a container).
+/// Lists the MIDI input ports without opening any, on the calling thread.
+/// Blocks for the first Core MIDI client of the process (about 0.7 s), so
+/// call it from a tool or a worker; an application should use
+/// [`MidiInput::ports`]. Returns an empty list when the system has no MIDI
+/// support available (for example no ALSA sequencer in a container).
 pub fn list_inputs() -> Vec<MidiPortInfo> {
     match midir::MidiInput::new(CLIENT_NAME) {
         Ok(client) => scan(&client).into_iter().map(|(info, _)| info).collect(),
@@ -73,32 +84,50 @@ fn scan(client: &midir::MidiInput) -> Vec<(MidiPortInfo, midir::MidiInputPort)> 
         .collect()
 }
 
-struct Connection {
-    info: MidiPortInfo,
-    conn: midir::MidiInputConnection<Parser>,
+// ----------------------------------------------------------------------
+// Public handle
+// ----------------------------------------------------------------------
+
+#[derive(Default)]
+struct Snapshot {
+    available: Vec<MidiPortInfo>,
+    connected: Vec<MidiPortInfo>,
+    selection: PortSelection,
 }
 
-struct Failure {
-    attempts: u32,
-    retry_at: Instant,
+struct Shared {
+    snapshot: Mutex<Snapshot>,
+    /// The set of open ports changed since `poll_ports` last said so.
+    changed: AtomicBool,
+    events: AtomicU64,
+}
+
+impl Shared {
+    fn snapshot(&self) -> std::sync::MutexGuard<'_, Snapshot> {
+        self.snapshot.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+enum Command {
+    Poll,
+    Select(PortSelection),
+    CloseAll,
+    Flush(Sender<()>),
+    Quit,
 }
 
 /// Opens MIDI input ports and forwards what they receive to a handler.
 ///
-/// Created with [`MidiInput::new`], which opens every port. Call
-/// [`poll_ports`](MidiInput::poll_ports) every couple of seconds (it is
-/// cheap) to pick up keyboards plugged in later and let go of unplugged
-/// ones. Messages are parsed on each port's own callback thread and passed to
-/// the handler there, so nothing waits for the UI.
+/// [`MidiInput::new`] starts a worker thread that opens every port. Call
+/// [`poll_ports`](MidiInput::poll_ports) every couple of seconds to pick up
+/// keyboards plugged in later and let go of unplugged ones: it only queues a
+/// rescan, so it is safe on the UI thread. Messages are parsed on each port's
+/// own callback thread and passed to the handler there, so a key press never
+/// waits for the UI. Dropping the `MidiInput` closes every port.
 pub struct MidiInput {
-    handler: Arc<MidiHandler>,
-    /// Used only to list ports; every connection gets a client of its own.
-    scanner: Option<midir::MidiInput>,
-    selection: PortSelection,
-    available: Vec<MidiPortInfo>,
-    open: Vec<Connection>,
-    failures: HashMap<String, Failure>,
-    events: Arc<AtomicU64>,
+    shared: Arc<Shared>,
+    commands: Sender<Command>,
+    thread: Option<JoinHandle<()>>,
 }
 
 impl MidiInput {
@@ -111,24 +140,172 @@ impl MidiInput {
         handler: impl Fn(&MidiEvent) + Send + Sync + 'static,
         selection: PortSelection,
     ) -> MidiInput {
-        let mut input = MidiInput {
-            handler: Arc::new(handler),
-            scanner: None,
-            selection,
-            available: Vec::new(),
-            open: Vec::new(),
-            failures: HashMap::new(),
-            events: Arc::new(AtomicU64::new(0)),
+        let shared = Arc::new(Shared {
+            snapshot: Mutex::new(Snapshot {
+                selection: selection.clone(),
+                ..Snapshot::default()
+            }),
+            changed: AtomicBool::new(false),
+            events: AtomicU64::new(0),
+        });
+        let (commands, rx) = channel();
+        let worker_shared = shared.clone();
+        let handler: Arc<MidiHandler> = Arc::new(handler);
+        let thread = std::thread::Builder::new()
+            .name("peel-midi-ports".into())
+            .spawn(move || run(rx, worker_shared, handler, selection))
+            .map_err(|e| log::warn!("could not start the MIDI port thread: {e}"))
+            .ok();
+        let input = MidiInput {
+            shared,
+            commands,
+            thread,
         };
         input.poll_ports();
         input
     }
 
-    /// Re-scans the ports, closing connections whose device is gone (or no
-    /// longer selected) and opening new ones. Returns true if the set of open
-    /// ports changed. Cheap enough to call every couple of seconds; it does
-    /// not block on a device that is slow to open.
-    pub fn poll_ports(&mut self) -> bool {
+    /// Asks the worker to rescan the ports: it closes connections whose
+    /// device is gone (or no longer selected) and opens new ones. Never
+    /// blocks. Returns true if the set of open ports changed since the last
+    /// call, so the UI can refresh a device list.
+    pub fn poll_ports(&self) -> bool {
+        let _ = self.commands.send(Command::Poll);
+        self.shared.changed.swap(false, Ordering::Relaxed)
+    }
+
+    /// Chooses which ports to keep open. Takes effect on the worker thread.
+    pub fn select(&self, selection: PortSelection) {
+        self.shared.snapshot().selection = selection.clone();
+        let _ = self.commands.send(Command::Select(selection));
+    }
+
+    pub fn selection(&self) -> PortSelection {
+        self.shared.snapshot().selection.clone()
+    }
+
+    /// Every input port seen by the last scan.
+    pub fn ports(&self) -> Vec<MidiPortInfo> {
+        self.shared.snapshot().available.clone()
+    }
+
+    /// The ports that are open right now.
+    pub fn connected(&self) -> Vec<MidiPortInfo> {
+        self.shared.snapshot().connected.clone()
+    }
+
+    /// Messages received on all ports so far (for an activity light).
+    pub fn event_count(&self) -> u64 {
+        self.shared.events.load(Ordering::Relaxed)
+    }
+
+    /// Closes every port. They reopen on the next
+    /// [`poll_ports`](MidiInput::poll_ports) unless the selection is
+    /// [`PortSelection::Nothing`].
+    pub fn close_all(&self) {
+        let _ = self.commands.send(Command::CloseAll);
+    }
+
+    /// Blocks until the worker has finished everything requested so far.
+    /// For tests and command-line tools; the UI must not call it, because the
+    /// first scan can take a second.
+    pub fn flush(&self) {
+        let (tx, rx) = channel();
+        if self.commands.send(Command::Flush(tx)).is_ok() {
+            let _ = rx.recv();
+        }
+    }
+}
+
+impl Drop for MidiInput {
+    fn drop(&mut self) {
+        let _ = self.commands.send(Command::Quit);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+// ----------------------------------------------------------------------
+// Worker thread
+// ----------------------------------------------------------------------
+
+fn run(
+    rx: Receiver<Command>,
+    shared: Arc<Shared>,
+    handler: Arc<MidiHandler>,
+    selection: PortSelection,
+) {
+    let mut worker = Worker {
+        shared,
+        handler,
+        scanner: None,
+        selection,
+        open: Vec::new(),
+        failures: HashMap::new(),
+    };
+    while let Ok(first) = rx.recv() {
+        // Everything queued so far is handled together, and any number of
+        // polls collapse into one scan.
+        let mut batch = vec![first];
+        while let Ok(next) = rx.try_recv() {
+            batch.push(next);
+        }
+        let mut rescan = false;
+        let mut quit = false;
+        for command in batch {
+            match command {
+                Command::Poll => rescan = true,
+                Command::Select(selection) => {
+                    worker.selection = selection;
+                    rescan = true;
+                }
+                Command::CloseAll => {
+                    worker.close_all();
+                    rescan = false;
+                }
+                Command::Flush(done) => {
+                    if rescan {
+                        worker.poll();
+                        rescan = false;
+                    }
+                    let _ = done.send(());
+                }
+                Command::Quit => quit = true,
+            }
+        }
+        if rescan && !quit {
+            worker.poll();
+        }
+        if quit {
+            break;
+        }
+    }
+    worker.close_all();
+}
+
+struct Connection {
+    info: MidiPortInfo,
+    conn: midir::MidiInputConnection<Parser>,
+}
+
+struct Failure {
+    attempts: u32,
+    retry_at: Instant,
+}
+
+struct Worker {
+    shared: Arc<Shared>,
+    handler: Arc<MidiHandler>,
+    /// Used only to list ports; every connection gets a client of its own.
+    scanner: Option<midir::MidiInput>,
+    selection: PortSelection,
+    open: Vec<Connection>,
+    failures: HashMap<String, Failure>,
+}
+
+impl Worker {
+    fn poll(&mut self) {
         if self.scanner.is_none() {
             self.scanner = match midir::MidiInput::new(CLIENT_NAME) {
                 Ok(client) => Some(client),
@@ -139,7 +316,7 @@ impl MidiInput {
             };
         }
         let found = self.scanner.as_ref().map(scan).unwrap_or_default();
-        self.available = found.iter().map(|(info, _)| info.clone()).collect();
+        let available: Vec<MidiPortInfo> = found.iter().map(|(info, _)| info.clone()).collect();
         let wanted: Vec<&(MidiPortInfo, midir::MidiInputPort)> = found
             .iter()
             .filter(|(info, _)| match &self.selection {
@@ -161,7 +338,7 @@ impl MidiInput {
         }
         // A port that vanished gets a fresh start when it returns.
         self.failures
-            .retain(|id, _| self.available.iter().any(|a| a.id == *id));
+            .retain(|id, _| available.iter().any(|a| a.id == *id));
 
         for (info, port) in wanted {
             if self.open.iter().any(|c| c.info.id == info.id) {
@@ -174,7 +351,7 @@ impl MidiInput {
             {
                 continue;
             }
-            match self.connect(info, port) {
+            match self.connect(port) {
                 Ok(conn) => {
                     log::info!("MIDI input opened: {}", info.name);
                     self.failures.remove(&info.id);
@@ -198,12 +375,11 @@ impl MidiInput {
                 }
             }
         }
-        changed
+        self.publish(available, changed);
     }
 
     fn connect(
         &self,
-        info: &MidiPortInfo,
         port: &midir::MidiInputPort,
     ) -> Result<midir::MidiInputConnection<Parser>, String> {
         // `connect` consumes its client, so each port gets its own.
@@ -212,14 +388,14 @@ impl MidiInput {
         // the clock alone is 24 callbacks per beat.
         client.ignore(midir::Ignore::All);
         let handler = self.handler.clone();
-        let events = self.events.clone();
+        let shared = self.shared.clone();
         client
             .connect(
                 port,
-                &format!("{CLIENT_NAME} input {}", info.name),
+                &format!("{CLIENT_NAME} input"),
                 move |_stamp, bytes, parser| {
                     parser.parse(bytes, |event| {
-                        events.fetch_add(1, Ordering::Relaxed);
+                        shared.events.fetch_add(1, Ordering::Relaxed);
                         handler(&event);
                     });
                 },
@@ -228,38 +404,26 @@ impl MidiInput {
             .map_err(|e| e.to_string())
     }
 
-    /// Chooses which ports to keep open and applies it now.
-    pub fn select(&mut self, selection: PortSelection) -> bool {
-        self.selection = selection;
-        self.poll_ports()
-    }
-
-    pub fn selection(&self) -> &PortSelection {
-        &self.selection
-    }
-
-    /// Every input port seen by the last scan.
-    pub fn ports(&self) -> &[MidiPortInfo] {
-        &self.available
-    }
-
-    /// The ports that are open right now.
-    pub fn connected(&self) -> Vec<MidiPortInfo> {
-        self.open.iter().map(|c| c.info.clone()).collect()
-    }
-
-    /// Messages received on all ports so far (for an activity light).
-    pub fn event_count(&self) -> u64 {
-        self.events.load(Ordering::Relaxed)
-    }
-
-    /// Closes every port. They reopen on the next
-    /// [`poll_ports`](MidiInput::poll_ports) unless the selection is
-    /// [`PortSelection::Nothing`].
-    pub fn close_all(&mut self) {
+    fn close_all(&mut self) {
+        let any = !self.open.is_empty();
         for c in std::mem::take(&mut self.open) {
             c.conn.close();
         }
         self.failures.clear();
+        if any {
+            let available = self.shared.snapshot().available.clone();
+            self.publish(available, true);
+        }
+    }
+
+    fn publish(&self, available: Vec<MidiPortInfo>, changed: bool) {
+        let connected = self.open.iter().map(|c| c.info.clone()).collect();
+        let mut snapshot = self.shared.snapshot();
+        snapshot.available = available;
+        snapshot.connected = connected;
+        drop(snapshot);
+        if changed {
+            self.shared.changed.store(true, Ordering::Relaxed);
+        }
     }
 }

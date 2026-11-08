@@ -7,6 +7,7 @@
 
 mod compile;
 mod export;
+mod io;
 mod samples;
 pub mod template;
 
@@ -22,6 +23,9 @@ use peel_engine::{EngineCommand, EngineConfig, EngineHandle, RenderPlan, Slot, T
 
 pub use compile::{CompileContext, PlanIndex, PlayMode, compile, same_structure};
 pub use export::{ExportJob, ExportSettings, render as render_to_wav};
+pub use io::{
+    LiveTiming, MidiPortInfo, OutputDeviceInfo, PortSelection, RecordedMidi, list_output_devices,
+};
 pub use samples::SampleLoader;
 
 struct DeviceSlot {
@@ -59,30 +63,49 @@ pub struct Session {
     samples: SampleLoader,
     notice: Option<Notice>,
     missing: Vec<String>,
+    /// Audio device selection and live MIDI input (see `io.rs`).
+    io: io::IoState,
 }
 
 impl Session {
     /// Starts the audio engine (falling back to a silent clock when no
     /// output device is available) and loads `project`.
     pub fn new(project: Project) -> Session {
-        let config = EngineConfig::default();
+        Session::new_with_audio(project, None, EngineConfig::default().buffer_frames)
+    }
+
+    /// [`Session::new`] on a chosen output device and buffer size (`None`
+    /// device is the system default; see [`list_output_devices`]). A device
+    /// that is missing falls back to the default with a warning.
+    pub fn new_with_audio(
+        project: Project,
+        device: Option<String>,
+        buffer_frames: Option<u32>,
+    ) -> Session {
+        let config = EngineConfig {
+            device,
+            buffer_frames,
+            ..EngineConfig::default()
+        };
         let engine = match EngineHandle::start(config.clone()) {
             Ok(e) => e,
             Err(e) => {
                 log::error!("audio output unavailable: {e}; continuing without sound");
-                EngineHandle::start_null(config).expect("null audio engine")
+                EngineHandle::start_null(config.clone()).expect("null audio engine")
             }
         };
-        Session::with_engine(project, engine)
+        Session::with_engine(project, engine, io::IoState::new(config, false))
     }
 
-    /// A session on the silent software clock (tests, headless tools).
+    /// A session on the silent software clock (tests, headless tools). It
+    /// never opens hardware MIDI ports unless asked to.
     pub fn new_silent(project: Project) -> Session {
-        let engine = EngineHandle::start_null(EngineConfig::default()).expect("null audio engine");
-        Session::with_engine(project, engine)
+        let config = EngineConfig::default();
+        let engine = EngineHandle::start_null(config.clone()).expect("null audio engine");
+        Session::with_engine(project, engine, io::IoState::new(config, true))
     }
 
-    fn with_engine(project: Project, engine: EngineHandle) -> Session {
+    fn with_engine(project: Project, engine: EngineHandle, io: io::IoState) -> Session {
         log::info!(
             "audio: {} at {} Hz, block {}",
             engine.device_name(),
@@ -113,7 +136,9 @@ impl Session {
             samples: SampleLoader::new(),
             notice: None,
             missing: Vec::new(),
+            io,
         };
+        s.init_io();
         s.sync();
         s
     }

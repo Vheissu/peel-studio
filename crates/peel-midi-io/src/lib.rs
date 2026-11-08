@@ -47,8 +47,9 @@ mod tests {
         // Whatever the machine has (often nothing), nothing panics and the
         // open ports are a subset of the ports seen.
         let listed = list_inputs();
-        let mut midi = MidiInput::new(|_| {});
-        let seen = midi.ports().to_vec();
+        let midi = MidiInput::new(|_| {});
+        midi.flush();
+        let seen = midi.ports();
         eprintln!("listed {listed:?}, opened {:?}", midi.connected());
         for port in &seen {
             assert!(!port.id.is_empty());
@@ -57,18 +58,23 @@ mod tests {
             assert!(seen.contains(&port));
         }
         // A second scan finds nothing new.
-        midi.poll_ports();
+        midi.poll_ports(); // takes the change flag left by the first scan
+        midi.flush();
         assert!(!midi.poll_ports());
         midi.close_all();
+        midi.flush();
         assert!(midi.connected().is_empty());
     }
 
     #[test]
     fn selecting_nothing_opens_nothing() {
-        let mut midi = MidiInput::with_selection(|_| {}, PortSelection::Nothing);
+        let midi = MidiInput::with_selection(|_| {}, PortSelection::Nothing);
+        midi.flush();
         assert!(midi.connected().is_empty());
         midi.select(PortSelection::Only("no such port".into()));
+        midi.flush();
         assert!(midi.connected().is_empty());
+        assert_eq!(midi.selection(), PortSelection::Only("no such port".into()));
         assert_eq!(midi.event_count(), 0);
     }
 
@@ -102,7 +108,7 @@ mod tests {
 
         let received: Arc<Mutex<Vec<MidiEvent>>> = Arc::default();
         let sink = received.clone();
-        let mut midi = MidiInput::new(move |event| sink.lock().unwrap().push(*event));
+        let midi = MidiInput::new(move |event| sink.lock().unwrap().push(*event));
         let ours = |midi: &MidiInput| midi.connected().iter().any(|p| p.name.contains(name));
         wait_until("the virtual keyboard to connect", || {
             midi.poll_ports();
@@ -150,11 +156,12 @@ mod tests {
     fn a_connected_keyboard_delivers_notes() {
         let notes = Arc::new(AtomicUsize::new(0));
         let counter = notes.clone();
-        let mut midi = MidiInput::new(move |event| {
+        let midi = MidiInput::new(move |event| {
             if matches!(event, MidiEvent::NoteOn { .. }) {
                 counter.fetch_add(1, Ordering::Relaxed);
             }
         });
+        midi.flush();
         eprintln!("connected: {:?}", midi.connected());
         assert!(!midi.connected().is_empty(), "no MIDI input found");
         let start = Instant::now();
