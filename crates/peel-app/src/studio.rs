@@ -659,6 +659,39 @@ impl Studio {
             self.show_keys = true;
         }
         row.cut_right(8.0);
+        // Audio health: a lost or failing device gets a visible restart.
+        if !self.session.audio_is_healthy() {
+            let r = row.cut_right(118.0);
+            let resp = ui.interact_button(W::new("audio-restart"), r, "Restart audio");
+            ui.scene.rect(
+                r.shrink2(0.0, 2.0),
+                t.radius_s,
+                t.record.alpha(if resp.hovered { 0.3 } else { 0.18 }),
+            );
+            let mut inner = r.shrink2(8.0, 0.0);
+            ui.icon(
+                inner.cut_left(14.0),
+                peel_ui::icons::LIGHTNING,
+                12.0,
+                t.record,
+            );
+            inner.cut_left(4.0);
+            ui.text(inner, "Restart audio", t.caption, t.record, Align::Start);
+            let why = self
+                .session
+                .audio_warning()
+                .unwrap_or("The audio device stopped")
+                .to_string();
+            ui.tooltip(&resp, &why);
+            if resp.clicked {
+                let device = self.prefs.audio_device.clone();
+                if let Err(e) = self.session.restart_audio(device, self.prefs.buffer_frames) {
+                    self.session
+                        .notify(format!("Could not start audio: {e}"), true);
+                }
+            }
+            row.cut_right(8.0);
+        }
         let right = format!(
             "{}  ·  {:.0} kHz  ·  octave {}",
             self.session.device_name(),
