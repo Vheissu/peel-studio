@@ -1,0 +1,19 @@
+[package]
+name = "peel-session"
+description = "Control-side session: document, engine sync and plan compilation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+peel-time.workspace = true
+peel-document.workspace = true
+peel-dsp.workspace = true
+peel-devices.workspace = true
+peel-engine.workspace = true
+peel-media.workspace = true
+peel-project.workspace = true
+log.workspace = true

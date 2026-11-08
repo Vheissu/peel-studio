@@ -1,0 +1,16 @@
+[package]
+name = "peel-ui"
+description = "GPU widget toolkit for Peel Studio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+wgpu.workspace = true
+winit.workspace = true
+glyphon.workspace = true
+bytemuck.workspace = true
+log.workspace = true

@@ -1,0 +1,26 @@
+[package]
+name = "peel-app"
+description = "Peel Studio desktop application"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "peel-studio"
+path = "src/main.rs"
+
+[dependencies]
+peel-ui.workspace = true
+peel-session.workspace = true
+peel-document.workspace = true
+peel-devices.workspace = true
+peel-dsp.workspace = true
+peel-engine.workspace = true
+winit.workspace = true
+wgpu.workspace = true
+pollster.workspace = true
+log.workspace = true
+env_logger.workspace = true

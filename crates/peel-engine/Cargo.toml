@@ -1,0 +1,17 @@
+[package]
+name = "peel-engine"
+description = "Realtime audio engine for Peel Studio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+peel-dsp.workspace = true
+peel-time.workspace = true
+rtrb.workspace = true
+cpal.workspace = true
+log.workspace = true
+thiserror.workspace = true
