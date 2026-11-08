@@ -39,6 +39,7 @@ use crate::audio::AudioState;
 use crate::clock::{Origin, loop_samples};
 use crate::command::{EngineCommand, Retired};
 use crate::events::{ActiveNote, ActiveNotes, OffResult, Staging};
+use crate::input::{InputInjector, InputShared, MonitorReceiver, new_processor};
 use crate::live::{LiveInput, LiveShared, LiveState, LiveTiming, RecordedReceiver};
 use crate::mixer::{Mixer, mix_ramped, peak, sanitize_peak, scale_ramped, slew, target_gains};
 use crate::monitor::{Metronome, Preview};
@@ -125,7 +126,11 @@ pub struct Engine {
     audio: AudioState,
     metronome: Metronome,
     preview: Preview,
-    /// Metronome and preview are audible (off for exports).
+    /// Audio input shared with the input callback and the control thread.
+    input: Arc<InputShared>,
+    /// Where monitored input arrives from the input callback, if connected.
+    input_monitor: Option<Box<MonitorReceiver>>,
+    /// Metronome, preview and input monitoring are audible (off for exports).
     monitoring: bool,
 
     measure_cpu: bool,
@@ -195,6 +200,8 @@ impl Engine {
             audio: AudioState::new(sample_rate),
             metronome: Metronome::new(sample_rate),
             preview: Preview::new(sample_rate),
+            input: Arc::new(InputShared::new(sample_rate)),
+            input_monitor: None,
             monitoring: true,
             measure_cpu: true,
             timer: None,
@@ -232,6 +239,49 @@ impl Engine {
 
     pub(crate) fn live_shared(&self) -> &std::sync::Arc<LiveShared> {
         self.live.shared()
+    }
+
+    /// The audio input state this engine shares with an input stream: meter,
+    /// capture, monitoring and timing. See [`crate::input`].
+    pub fn input_shared(&self) -> &Arc<InputShared> {
+        &self.input
+    }
+
+    /// Connects an input that no device feeds and returns the injector that
+    /// feeds it, for engines driven directly (tests, tools). With a device
+    /// engine use [`EngineHandle::open_injected_input`](crate::EngineHandle::open_injected_input).
+    /// Monitoring works when `sample_rate` equals the engine's.
+    pub fn open_injected_input(
+        &mut self,
+        telemetry: &Arc<Telemetry>,
+        sample_rate: u32,
+        channels: u16,
+    ) -> InputInjector {
+        let out_rate = self.sample_rate.round() as u32;
+        let (processor, parts) = new_processor(
+            &self.input,
+            telemetry,
+            sample_rate,
+            channels.max(1),
+            out_rate,
+        );
+        self.input.attach(
+            parts.sample_rate,
+            parts.channels,
+            parts.capture,
+            parts.monitor.is_some(),
+        );
+        self.handle_command(EngineCommand::SetInputMonitor(parts.monitor.map(Box::new)));
+        InputInjector::new(processor)
+    }
+
+    /// Tells the input side how the output callback is timed, so a take can
+    /// be placed against what the player hears (see [`crate::latency`]).
+    /// `callback_ns` and `lead_ns` are zero when the host reports no timing.
+    /// Realtime-safe.
+    #[inline]
+    pub fn note_output_timing(&self, callback_ns: u64, lead_ns: u64, frames: usize) {
+        self.input.note_output_timing(callback_ns, lead_ns, frames);
     }
 
     /// Content position in quarter notes at the next sample to be rendered.
@@ -509,6 +559,11 @@ impl Engine {
                 }
             }
             EngineCommand::Panic => self.panic(),
+            EngineCommand::SetInputMonitor(monitor) => {
+                if let Some(old) = std::mem::replace(&mut self.input_monitor, monitor) {
+                    self.retirer.retire(Retired::Monitor(old));
+                }
+            }
         }
     }
 
@@ -1279,6 +1334,9 @@ impl Engine {
         if self.monitoring {
             self.metronome.mix_into(out_l, out_r);
             self.preview.mix_into(out_l, out_r, &mut self.retirer);
+            if let Some(monitor) = self.input_monitor.as_mut() {
+                monitor.mix_into(&self.input, out_l, out_r);
+            }
         }
     }
 }

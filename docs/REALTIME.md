@@ -24,6 +24,14 @@ ENG-RT-010 of the specification.
   most 512 events per block, applies the sustain pedal from fixed arrays and
   reports each note to a third ring for recording. Note-ons stop being
   accepted before the ring is full, so note-offs always fit.
+- Audio input: the input stream's callback runs `InputProcessor::process`
+  under the same rules as the output callback. It writes into two bounded
+  SPSC rings (a capture ring that a writer thread drains to disk, and a
+  monitor FIFO that the output callback reads), updates atomics (peak, take
+  counters, timing) and never allocates, locks or logs. A full ring drops
+  frames and counts them; an empty monitor FIFO plays silence and counts an
+  underrun. The control side connects the FIFO to the engine with a
+  command, so replacing it retires the old one through the retire queue.
 - Engine to control: `Retired` objects (old plans, devices, samples) through a
   second bounded queue. The control thread drops them.
 - Telemetry: plain atomics in `Telemetry` (`Relaxed`; peaks are a running
@@ -49,6 +57,9 @@ never dropped.
   slice indexing that can be out of bounds for legal parameter ranges.
 
 ## Checking
+
+`cargo test -p peel-engine --features rt-check` runs the live, input and
+engine paths under the same check (`tests/rt_alloc*.rs`).
 
 Debug builds of `peel-app` can be run with `--features rt-check`, which
 installs `assert_no_alloc` around the callback and reports any allocation

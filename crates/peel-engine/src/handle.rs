@@ -16,6 +16,8 @@ use rtrb::{Consumer, Producer, PushError, RingBuffer};
 use crate::EngineConfig;
 use crate::command::{EngineCommand, Retired};
 use crate::engine::Engine;
+use crate::input::{InputInjector, InputShared, new_processor};
+use crate::input_stream::{InputError, InputInfo, InputRequest, open_stream};
 use crate::live::{
     LiveInput, LiveShared, LiveStats, LiveTarget, LiveTiming, RecordedNote, RecordedReceiver,
 };
@@ -48,6 +50,7 @@ pub struct EngineHandle {
     // Declared first so the stream (and with it the engine) is dropped before
     // the queue ends that the control thread keeps.
     backend: Backend,
+    input: InputSide,
     commands: Producer<EngineCommand>,
     retired: Consumer<Retired>,
     telemetry: Arc<Telemetry>,
@@ -77,6 +80,26 @@ struct LiveSide {
     shared: Arc<LiveShared>,
     input: Option<LiveInput>,
     recorded: Option<RecordedReceiver>,
+    /// Audio input state (meter, capture ring, monitoring) of the engine.
+    audio_input: Arc<InputShared>,
+}
+
+/// The audio input of one engine: the open stream, if any.
+struct InputSide {
+    /// Held only to keep the input callback running until it is dropped.
+    stream: Option<cpal::Stream>,
+    info: Option<InputInfo>,
+    shared: Arc<InputShared>,
+}
+
+impl InputSide {
+    fn new(live: &LiveSide) -> InputSide {
+        InputSide {
+            stream: None,
+            info: None,
+            shared: live.audio_input.clone(),
+        }
+    }
 }
 
 impl EngineHandle {
@@ -103,6 +126,7 @@ impl EngineHandle {
                 );
                 Ok(EngineHandle {
                     backend: Backend::Cpal(opened.stream),
+                    input: InputSide::new(&opened.live),
                     commands: opened.commands,
                     retired: opened.retired,
                     telemetry,
@@ -155,6 +179,7 @@ impl EngineHandle {
         let null = NullBackend::spawn(engine, sample_rate, buffer_frames as usize)?;
         Ok(EngineHandle {
             backend: Backend::Null(null),
+            input: InputSide::new(&live),
             commands,
             retired,
             telemetry,
@@ -239,8 +264,102 @@ impl EngineHandle {
     /// plan, device and sample inside it. Commands sent afterwards go
     /// nowhere. Used to release a device before opening another engine on it.
     pub fn stop_audio(&mut self) {
+        self.close_input();
         self.backend = Backend::Stopped;
         self.healthy.store(false, Ordering::Relaxed);
+    }
+
+    // ---- audio input ----
+
+    /// The audio input state: input meter, capture ring, monitoring and
+    /// timing. It belongs to this engine and stays valid whether or not an
+    /// input is open.
+    pub fn input(&self) -> &Arc<InputShared> {
+        &self.input.shared
+    }
+
+    /// What the open input is, if one is open.
+    pub fn input_info(&self) -> Option<&InputInfo> {
+        self.input.info.as_ref()
+    }
+
+    /// Opens an audio input device and starts capturing its callbacks into
+    /// [`input`](EngineHandle::input), replacing any input that was open.
+    ///
+    /// This is the call that makes the operating system ask for microphone
+    /// permission, so make it in response to the user choosing an input (or
+    /// arming a track). `request.device` of `None` is the system default
+    /// input ([`InputRequest::from_config`] takes it from
+    /// [`EngineConfig::input_device`]). The stream opens at the output's sample rate when the device can, which is what
+    /// software monitoring needs; otherwise at the device's own rate (a take
+    /// is then recorded at that rate and monitoring is unavailable, see
+    /// [`InputShared::monitor_supported`]).
+    ///
+    /// The device must exist: a missing one is an error, never a silent
+    /// substitution. Errors carry a message that says what to do next.
+    pub fn open_input(&mut self, request: &InputRequest) -> Result<InputInfo, InputError> {
+        self.close_input();
+        let out_rate = self.sample_rate.round() as u32;
+        let shared = self.input.shared.clone();
+        let telemetry = self.telemetry.clone();
+        let mut parts = None;
+        let opened = open_stream(request, out_rate, &shared, |rate, channels| {
+            let (processor, p) = new_processor(&shared, &telemetry, rate, channels, out_rate);
+            parts = Some(p);
+            processor
+        })?;
+        if let Some(parts) = parts {
+            self.attach_input(parts);
+        }
+        self.input.stream = Some(opened.stream);
+        self.input.info = Some(opened.info.clone());
+        Ok(opened.info)
+    }
+
+    /// Opens an input that no device feeds: the returned [`InputInjector`]
+    /// pushes frames through the same capture, meter and monitor path a
+    /// device callback uses. For tests and headless tools. Replaces any open
+    /// input.
+    pub fn open_injected_input(&mut self, sample_rate: u32, channels: u16) -> InputInjector {
+        self.close_input();
+        let out_rate = self.sample_rate.round() as u32;
+        let (processor, parts) = new_processor(
+            &self.input.shared,
+            &self.telemetry,
+            sample_rate,
+            channels.max(1),
+            out_rate,
+        );
+        self.attach_input(parts);
+        self.input.info = Some(InputInfo {
+            device_name: "Injected input".into(),
+            sample_rate,
+            channels: channels.max(1),
+            buffer_frames: None,
+        });
+        InputInjector::new(processor)
+    }
+
+    fn attach_input(&mut self, parts: crate::input::InputParts) {
+        let supported = parts.monitor.is_some();
+        self.input
+            .shared
+            .attach(parts.sample_rate, parts.channels, parts.capture, supported);
+        // A full queue only loses monitoring, never recording.
+        let _ = self.send(EngineCommand::SetInputMonitor(parts.monitor.map(Box::new)));
+    }
+
+    /// Stops and closes the input. Safe to call when none is open.
+    pub fn close_input(&mut self) {
+        let was_open = self.input.shared.is_open();
+        // Dropping the stream joins its callback, so nothing touches the
+        // rings after this line.
+        self.input.stream = None;
+        self.input.info = None;
+        self.input.shared.detach();
+        if was_open {
+            let _ = self.send(EngineCommand::SetInputMonitor(None));
+        }
     }
 
     // ---- live input ----
@@ -310,6 +429,7 @@ fn make_parts(
         shared: engine.live_shared().clone(),
         input: engine.take_live_input(),
         recorded: engine.take_recorded(),
+        audio_input: engine.input_shared().clone(),
     };
     (engine, cmd_tx, ret_rx, live)
 }
@@ -336,6 +456,9 @@ impl NullBackend {
             .spawn(move || {
                 let mut left = vec![0.0f32; block];
                 let mut right = vec![0.0f32; block];
+                // No device clock to report; the block size still tells
+                // input how long an output callback is.
+                engine.note_output_timing(0, 0, block);
                 let period = Duration::from_secs_f64(block as f64 / sample_rate as f64);
                 let mut deadline = Instant::now() + period;
                 while !flag.load(Ordering::Relaxed) {
@@ -456,7 +579,7 @@ pub fn list_output_devices() -> Vec<OutputDeviceInfo> {
         .collect()
 }
 
-fn device_name(device: &cpal::Device) -> String {
+pub(crate) fn device_name(device: &cpal::Device) -> String {
     device
         .description()
         .map(|d| d.name().to_string())
@@ -496,7 +619,7 @@ fn describe_device(
 }
 
 /// Sorts sample-rate ranges and joins the ones that overlap.
-fn merge_ranges(mut ranges: Vec<(u32, u32)>) -> Vec<(u32, u32)> {
+pub(crate) fn merge_ranges(mut ranges: Vec<(u32, u32)>) -> Vec<(u32, u32)> {
     ranges.sort_unstable();
     let mut merged: Vec<(u32, u32)> = Vec::new();
     for (lo, hi) in ranges {
@@ -508,7 +631,7 @@ fn merge_ranges(mut ranges: Vec<(u32, u32)>) -> Vec<(u32, u32)> {
     merged
 }
 
-fn common_rates(ranges: &[(u32, u32)]) -> Vec<u32> {
+pub(crate) fn common_rates(ranges: &[(u32, u32)]) -> Vec<u32> {
     COMMON_RATES
         .into_iter()
         .filter(|r| ranges.iter().any(|&(lo, hi)| (lo..=hi).contains(r)))
@@ -524,7 +647,7 @@ fn union_buffer_sizes(sizes: impl Iterator<Item = (u32, u32)>) -> Option<(u32, u
 
 /// Index of the device `wanted` names among `(id, name)` pairs: an id match
 /// first, then an exact name, then a name ignoring case.
-fn match_device(devices: &[(String, String)], wanted: &str) -> Option<usize> {
+pub(crate) fn match_device(devices: &[(String, String)], wanted: &str) -> Option<usize> {
     devices
         .iter()
         .position(|(id, _)| id == wanted)
@@ -773,9 +896,17 @@ where
     let mut right = vec![0.0f32; max_block];
     let clamp = !T::FORMAT.is_float();
     let channels = channels.max(1);
-    move |data: &mut [T], _info: &cpal::OutputCallbackInfo| {
+    move |data: &mut [T], info: &cpal::OutputCallbackInfo| {
         crate::rt::guard(|| {
             let frames = data.len() / channels;
+            let ts = info.timestamp();
+            engine.note_output_timing(
+                ts.callback.as_nanos() as u64,
+                ts.playback
+                    .saturating_duration_since(ts.callback)
+                    .as_nanos() as u64,
+                frames,
+            );
             engine.begin_callback_frames(frames);
             let mut done = 0;
             while done < frames {

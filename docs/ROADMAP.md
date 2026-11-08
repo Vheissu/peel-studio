@@ -28,7 +28,7 @@ processing, persistence and tests all exist.
 | Accessibility | AccessKit tree, keyboard focus traversal, named controls | Done |
 | Automation | Clips for device parameters, track volume and pan | Done |
 | Mixer routing | Bus outputs, post-fader sends, loop-free validation | Done |
-| Audio recording | Input devices, armed lanes, durable takes | In progress |
+| Audio recording | Input devices and channels, input meter, monitoring, armed lanes, durable takes placed with latency compensation | Engine and session done, UI in progress |
 | CLAP plugins | Isolated scanning, hosting as native devices, saved state, offline export | Done |
 
 ## Phase 2: recording and deeper editing

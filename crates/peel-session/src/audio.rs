@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use peel_document::{Clip, ClipContent, Id, MixerTrack, PALETTE, Project, Time};
+use peel_document::{AudioAsset, Clip, ClipContent, Id, MixerTrack, PALETTE, Project, Time};
 use peel_dsp::SampleBuffer;
 use peel_media::Peaks;
 use peel_time::TempoMap;
@@ -146,7 +146,63 @@ fn route_for_lane(
     id
 }
 
+/// One audio clip to place on the Playlist.
+pub(crate) struct Placement {
+    pub lane: Id,
+    pub start: Time,
+    pub length: Time,
+    /// Where in the file the clip's first audible frame lies, in quarter
+    /// notes (see [`Clip::offset`](peel_document::Clip)).
+    pub offset: Time,
+}
+
 impl Session {
+    /// Adds `placements` of one asset as clips, in a single undoable step
+    /// named `label`, and registers the asset first if it is `new_asset`.
+    /// Every clip routes like [`add_audio_clip`](Session::add_audio_clip)'s
+    /// does. Placements on lanes that no longer exist are skipped. Returns
+    /// the ids of the clips added, in placement order.
+    pub(crate) fn place_audio_clips(
+        &mut self,
+        label: &str,
+        new_asset: Option<AudioAsset>,
+        asset: Id,
+        placements: &[Placement],
+    ) -> Vec<Id> {
+        // Adding a file again is an explicit retry for one that failed before.
+        self.audio.failed.remove(&asset);
+        let ids: Vec<Id> = placements.iter().map(|_| Id::new()).collect();
+        let mut placed = Vec::new();
+        self.doc.edit(label, |p| {
+            if let Some(a) = new_asset {
+                p.assets.push(a);
+            }
+            for (pl, id) in placements.iter().zip(&ids) {
+                let Some((name, color)) = p
+                    .arrangement()
+                    .tracks
+                    .iter()
+                    .find(|t| t.id == pl.lane)
+                    .map(|t| (t.name.clone(), t.color))
+                else {
+                    continue;
+                };
+                let track = route_for_lane(p, pl.lane, &name, color);
+                p.arrangement_mut().clips.push(Clip {
+                    id: *id,
+                    track: pl.lane,
+                    start: pl.start,
+                    length: pl.length,
+                    offset: pl.offset,
+                    muted: false,
+                    content: ClipContent::audio(asset, track),
+                });
+                placed.push(*id);
+            }
+        });
+        placed
+    }
+
     /// Places an audio file on a Playlist lane as a clip, as one undoable
     /// step.
     ///
@@ -167,15 +223,16 @@ impl Session {
         start: Time,
         path: &Path,
     ) -> Result<Id, String> {
-        let (lane_name, lane_color) = self
+        if !self
             .doc
             .project()
             .arrangement()
             .tracks
             .iter()
-            .find(|t| t.id == track_lane)
-            .map(|t| (t.name.clone(), t.color))
-            .ok_or("That playlist track no longer exists")?;
+            .any(|t| t.id == track_lane)
+        {
+            return Err("That playlist track no longer exists".into());
+        }
         let start = start.max(Time::ZERO);
 
         let mut asset = self.reference_audio_file(path)?;
@@ -189,28 +246,24 @@ impl Session {
         let tempo = TempoMap::from_segments(&self.doc.project().tempo);
         let length = clip_length(&tempo, start, info.seconds);
 
-        let clip_id = Id::new();
         let asset_id = asset.id;
-        // Adding a file again is an explicit retry for one that failed before.
-        self.audio.failed.remove(&asset_id);
-        self.doc.edit("Add audio clip", |p| {
-            if !known {
-                p.assets.push(asset);
-            }
-            let track = route_for_lane(p, track_lane, &lane_name, lane_color);
-            p.arrangement_mut().clips.push(Clip {
-                id: clip_id,
-                track: track_lane,
+        let placed = self.place_audio_clips(
+            "Add audio clip",
+            (!known).then_some(asset),
+            asset_id,
+            &[Placement {
+                lane: track_lane,
                 start,
                 length,
                 offset: Time::ZERO,
-                muted: false,
-                content: ClipContent::audio(asset_id, track),
-            });
-        });
+            }],
+        );
         // Start decoding now instead of at the next frame.
         self.sync();
-        Ok(clip_id)
+        placed
+            .first()
+            .copied()
+            .ok_or_else(|| "That playlist track no longer exists".to_string())
     }
 
     /// Waveform summary of an audio asset, for drawing clips with

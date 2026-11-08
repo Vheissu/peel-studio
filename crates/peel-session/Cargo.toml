@@ -21,6 +21,7 @@ log.workspace = true
 blake3.workspace = true
 peel-host-clap = { path = "../peel-host-clap" }
 base64 = "0.23"
+dirs.workspace = true
 
 [dev-dependencies]
 midir = "0.11"

@@ -10,6 +10,7 @@ mod compile;
 mod export;
 mod io;
 mod plugins;
+mod record;
 mod samples;
 pub mod template;
 
@@ -30,7 +31,11 @@ pub use export::{ExportJob, ExportSettings, render as render_to_wav};
 pub use io::{
     LiveTiming, MidiPortInfo, OutputDeviceInfo, PortSelection, RecordedMidi, list_output_devices,
 };
+pub use peel_engine::{
+    InputChannels, InputDeviceInfo, InputInfo, InputInjector, LatencyReport, list_input_devices,
+};
 pub use plugins::{PluginRegistry, type_id_for as plugin_type_id};
+pub use record::{MonitorStatus, RecordingStatus};
 pub use samples::SampleLoader;
 
 struct DeviceSlot {
@@ -74,6 +79,8 @@ pub struct Session {
     missing: Vec<String>,
     /// Audio device selection and live MIDI input (see `io.rs`).
     io: io::IoState,
+    /// Audio input, armed lanes and recording (see `record.rs`).
+    rec: record::RecordState,
 }
 
 impl Session {
@@ -163,6 +170,7 @@ impl Session {
             notice: None,
             missing: Vec::new(),
             io,
+            rec: record::RecordState::default(),
         };
         s.init_io();
         s.sync();
@@ -184,6 +192,7 @@ impl Session {
             self.synced = None;
         }
         self.plugins.idle();
+        self.poll_recording();
         for (asset, result) in self.samples.poll() {
             match result {
                 Ok(buf) => {
@@ -452,7 +461,7 @@ impl Session {
             );
         }
         let samples = self.clip_samples();
-        let (plan, index) = compile(
+        let (mut plan, index) = compile(
             self.doc.project(),
             &CompileContext {
                 mode: self.mode,
@@ -461,6 +470,12 @@ impl Session {
                 samples: &samples,
             },
         );
+        if self.recording_free_runs() {
+            // A take is one straight recording: the transport must not wrap
+            // at the loop or stop at the end of the arrangement under it.
+            plan.loop_range = None;
+            plan.length_beats = f64::INFINITY;
+        }
         match &self.plan {
             Some(old) if same_structure(old, &plan) => {
                 for (i, (a, b)) in old.channels.iter().zip(&plan.channels).enumerate() {
@@ -604,6 +619,9 @@ impl Session {
 
     /// Stops and returns to where playback started.
     pub fn stop(&mut self) {
+        // Stopping the transport ends a recording: its clips are claimed with
+        // `stop_recording`.
+        self.finish_recording(true);
         let back = if self.playing { self.play_start } else { 0.0 };
         let _ = self.engine.send(EngineCommand::Stop { return_to: back });
         self.playing = false;
@@ -795,6 +813,7 @@ impl Session {
     /// Replaces the document (new project, template, open).
     pub fn replace_project(&mut self, project: Project) {
         self.stop();
+        self.forget_lanes();
         self.doc.replace(project);
         self.path = None;
         self.mode = PlayMode::Pattern(

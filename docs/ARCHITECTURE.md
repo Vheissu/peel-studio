@@ -32,7 +32,7 @@ the specification each crate owns.
 | `peel-effects` | Native effects | engine, GUI, document |
 | `peel-devices` | Registry of every native device type | engine, GUI |
 | `peel-engine` | Audio callback, transport, sequencer, mixer graph, telemetry, offline render | document, GUI |
-| `peel-media` | Decoding, resampling, WAV export, waveform peaks | engine, GUI |
+| `peel-media` | Decoding, resampling, WAV export, crash-safe WAV recording, waveform peaks | engine, GUI |
 | `peel-project` | `.peelproj` save/load, atomic writes, asset collection | engine, GUI |
 | `peel-midi` | Standard MIDI File import/export | engine, GUI |
 | `peel-midi-io` | Hardware MIDI input: port discovery and hotplug, message parsing | engine, GUI, document |
@@ -109,6 +109,28 @@ the right frame. Regions fade over about a millisecond at their edges, and a
 cut by stop, seek, loop wrap or plan swap fades the sounding regions out
 over a few milliseconds. Export renders the same plan offline. Pattern mode
 plays no audio clips.
+
+## Audio input and recording
+
+An input device is opened only when the user chooses one or arms a lane
+(that is when the operating system asks for microphone permission). The
+input stream's callback copies the chosen channels, as a stereo pair, into
+a bounded capture ring of about two seconds, measures the peak for the input
+meter, and optionally copies the frames into a small monitor FIFO that the
+output callback adds to its output after the master. The callback never
+allocates or blocks; a full ring drops frames, counts them and pads the take
+with silence so the rest stays on the timeline.
+
+`Session::start_recording` starts a writer thread that drains the ring into
+a WAV file while the take is captured: the header is valid from the first
+byte and is refreshed every 100 ms, so a crash loses almost nothing and a
+stalled UI loses nothing. The first input callback after the transport runs
+snapshots the playhead and the callback timings; the clip position is the
+playhead moved back by the output and input latency (`peel_engine::latency`,
+one function). `Session::stop_recording` finishes the file, imports it into
+the project's managed media if the project is saved, and adds one audio clip
+per armed lane in a single undoable edit. While a take runs, the transport
+ignores the loop range and the end of the song.
 
 ## Process model
 

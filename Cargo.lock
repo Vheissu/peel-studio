@@ -2536,6 +2536,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "blake3",
+ "dirs",
  "log",
  "midir",
  "peel-devices",
