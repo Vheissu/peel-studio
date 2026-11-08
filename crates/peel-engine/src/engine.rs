@@ -38,12 +38,15 @@ use rtrb::{Consumer, Producer};
 use crate::clock::{Origin, loop_samples};
 use crate::command::{EngineCommand, Retired};
 use crate::events::{ActiveNote, ActiveNotes, OffResult, Staging};
+use crate::live::{LiveInput, LiveShared, LiveState, LiveTiming, RecordedReceiver};
 use crate::mixer::{Mixer, mix_ramped, peak, sanitize_peak, scale_ramped, slew, target_gains};
 use crate::monitor::{Metronome, Preview};
 use crate::plan::{RenderPlan, SeqKind};
 use crate::retire::Retirer;
 use crate::telemetry::Telemetry;
 use crate::{EngineConfig, LIVE_VOICE_BASE, MAX_TRACKS};
+
+mod live_io;
 
 /// Commands applied per block. The rest stay queued for the next block, which
 /// bounds the time a burst (project load) can add to one callback.
@@ -98,6 +101,8 @@ pub struct Engine {
     commands: Option<Consumer<EngineCommand>>,
     retirer: Retirer,
     telemetry: Arc<Telemetry>,
+    /// Live input queue, sustain pedal and callback timing.
+    live: LiveState,
 
     slots: Vec<Option<Box<dyn Device>>>,
     bypass: Vec<BypassState>,
@@ -155,6 +160,7 @@ impl Engine {
             ramp_step: 1.0 / (RAMP_SECONDS * sample_rate).max(1.0),
             commands,
             retirer: Retirer::new(retire, telemetry.clone()),
+            live: LiveState::new(telemetry.clone(), sample_rate),
             telemetry,
             slots: (0..device_slots).map(|_| None).collect(),
             bypass: vec![
@@ -201,6 +207,26 @@ impl Engine {
         self.transport.playing
     }
 
+    /// Takes the producer end of the live input queue (once). Move it to the
+    /// MIDI thread; see [`LiveInput`].
+    pub fn take_live_input(&mut self) -> Option<LiveInput> {
+        self.live.take_input()
+    }
+
+    /// Takes the consumer end of the ring of recorded live notes (once).
+    pub fn take_recorded(&mut self) -> Option<RecordedReceiver> {
+        self.live.take_record()
+    }
+
+    /// Chooses how live events are placed inside a block.
+    pub fn set_live_timing(&mut self, timing: LiveTiming) {
+        self.live.shared().set_timing(timing);
+    }
+
+    pub(crate) fn live_shared(&self) -> &std::sync::Arc<LiveShared> {
+        self.live.shared()
+    }
+
     /// Content position in quarter notes at the next sample to be rendered.
     pub fn position_beats(&self) -> f64 {
         self.transport.position
@@ -238,9 +264,9 @@ impl Engine {
     /// Renders `left.len().min(right.len())` frames, splitting into
     /// `max_block` chunks, and updates the CPU load telemetry.
     pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
-        self.begin_callback();
-        self.render(left, right);
         let frames = left.len().min(right.len());
+        self.begin_callback_frames(frames);
+        self.render(left, right);
         self.end_callback(frames);
     }
 
@@ -249,9 +275,19 @@ impl Engine {
     /// calls.
     #[inline]
     pub fn begin_callback(&mut self) {
+        self.begin_callback_frames(0);
+    }
+
+    /// [`begin_callback`](Engine::begin_callback) for a callback that will
+    /// render `frames` frames in total (0 if unknown). Knowing the size lets
+    /// live events be placed in the right chunk of a long callback.
+    #[inline]
+    pub fn begin_callback_frames(&mut self, frames: usize) {
         if self.measure_cpu {
             self.timer = Some(Instant::now());
         }
+        let now = self.live.now_ns();
+        self.live.begin_callback(now, frames);
     }
 
     /// Finishes timing a callback that produced `frames` frames: updates the
@@ -440,7 +476,7 @@ impl Engine {
                 key,
                 velocity,
                 on,
-            } => self.live_note(slot, key, velocity, on),
+            } => self.live_note(slot, key, velocity, on, 0),
             EngineCommand::Preview { sample, gain } => {
                 if self.monitoring {
                     self.preview.start(sample, gain, &mut self.retirer);
@@ -452,7 +488,8 @@ impl Engine {
         }
     }
 
-    fn live_note(&mut self, slot: u32, key: u8, velocity: f32, on: bool) {
+    /// Starts or releases a live note `offset` frames into the block.
+    fn live_note(&mut self, slot: u32, key: u8, velocity: f32, on: bool, offset: u32) {
         let s = slot as usize;
         let key = key.min(127);
         let voice = LIVE_VOICE_BASE + key as u32;
@@ -467,7 +504,7 @@ impl Engine {
                     &mut self.active,
                     &self.telemetry,
                     s,
-                    0,
+                    offset,
                     EventKind::NoteOff {
                         key,
                         velocity: 0.0,
@@ -480,7 +517,7 @@ impl Engine {
                 velocity: clean_velocity(velocity),
                 voice,
             };
-            if self.active.is_full() || !self.stage.push_on(s, 0, ev) {
+            if self.active.is_full() || !self.stage.push_on(s, offset, ev) {
                 self.telemetry.dropped_notes.fetch_add(1, Ordering::Relaxed);
                 return;
             }
@@ -497,7 +534,7 @@ impl Engine {
                 &mut self.active,
                 &self.telemetry,
                 s,
-                0,
+                offset,
                 EventKind::NoteOff {
                     key,
                     velocity: clean_velocity(velocity),
@@ -509,6 +546,7 @@ impl Engine {
 
     fn panic(&mut self) {
         self.active.clear();
+        self.live.reset();
         for s in 0..self.slots.len() {
             if self.slots[s].is_some() {
                 self.stage.push_control(s, 0, EventKind::AllSoundOff);
@@ -679,6 +717,7 @@ impl Engine {
         let frames = left.len();
         self.retirer.flush();
         self.drain_commands();
+        self.drain_live(frames);
 
         let block_start = self.engine_sample;
         let block_end = block_start + frames as i64;

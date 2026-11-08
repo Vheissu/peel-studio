@@ -98,8 +98,9 @@ impl Staging {
         self.bufs.get(slot).map_or(&[], |b| b.events.as_slice())
     }
 
-    /// Adds a note-on (or any non-release event). Returns false when the
-    /// soft capacity is exhausted; the caller counts the dropped note.
+    /// Adds a note-on (or any non-release event) after everything at or
+    /// before its offset. Returns false when the soft capacity is exhausted;
+    /// the caller counts the dropped note.
     pub fn push_on(&mut self, slot: usize, offset: u32, kind: EventKind) -> bool {
         let Some(buf) = self.bufs.get_mut(slot) else {
             return false;
@@ -107,7 +108,12 @@ impl Staging {
         if buf.events.len() >= buf.soft_cap {
             return false;
         }
-        buf.events.push(DeviceEvent { offset, kind });
+        // Live input can stage an event later in the block than the sequence
+        // events that follow it, so keep the list sorted by inserting after
+        // everything at or before `offset` (a plain push in the common case).
+        let pos = buf.events.partition_point(|e| e.offset <= offset);
+        // `len < soft_cap <= capacity`, so this never reallocates.
+        buf.events.insert(pos, DeviceEvent { offset, kind });
         self.mark(slot);
         true
     }
@@ -144,7 +150,7 @@ impl Staging {
                 }
             }
         }
-        let mut pos = buf.events.len();
+        let mut pos = buf.events.partition_point(|e| e.offset <= offset);
         while pos > 0 {
             let prev = &buf.events[pos - 1];
             if prev.offset != offset {
