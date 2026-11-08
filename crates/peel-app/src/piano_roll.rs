@@ -525,7 +525,7 @@ fn grid(
             Some(sc) => {
                 if !sc.contains(k as u8) {
                     ui.scene.rect(row, 0.0, t.bg.mix(t.panel, 0.25));
-                } else if (k as i32 - sc.root as i32).rem_euclid(12) == 0 {
+                } else if (k - sc.root as i32).rem_euclid(12) == 0 {
                     ui.scene.rect(row, 0.0, t.accent.alpha(0.07));
                 }
             }
