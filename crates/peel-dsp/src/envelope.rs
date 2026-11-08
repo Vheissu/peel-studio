@@ -239,6 +239,12 @@ impl Decay {
     pub fn is_idle(&self) -> bool {
         !self.rising && self.level == 0.0
     }
+
+    /// True once the attack is over and the level has fallen below
+    /// `threshold`.
+    pub fn is_below(&self, threshold: f32) -> bool {
+        !self.rising && self.level < threshold
+    }
 }
 
 impl Default for Decay {

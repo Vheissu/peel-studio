@@ -231,6 +231,16 @@ impl VoiceAllocator {
         }
     }
 
+    /// Marks a voice as fading (for example when it is choked), so it stops
+    /// counting against polyphony.
+    pub fn mark_fading(&mut self, slot: usize) {
+        if let Some(s) = self.slots.get_mut(slot)
+            && s.state != VoiceState::Free
+        {
+            s.state = VoiceState::Fading;
+        }
+    }
+
     /// Marks every held voice releasing.
     pub fn release_all(&mut self) {
         for s in &mut self.slots {

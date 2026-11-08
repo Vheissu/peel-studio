@@ -64,7 +64,10 @@ impl SvfMode {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SvfOut {
     pub low: f32,
+    /// Band-pass whose peak gain equals the quality factor.
     pub band: f32,
+    /// Band-pass normalized to unity gain at the center frequency.
+    pub band_unity: f32,
     pub high: f32,
     pub notch: f32,
 }
@@ -74,7 +77,7 @@ impl SvfOut {
     pub fn select(&self, mode: SvfMode) -> f32 {
         match mode {
             SvfMode::LowPass => self.low,
-            SvfMode::BandPass => self.band,
+            SvfMode::BandPass => self.band_unity,
             SvfMode::HighPass => self.high,
             SvfMode::Notch => self.notch,
         }
@@ -133,6 +136,15 @@ impl Svf {
         self.ic2 = 0.0;
     }
 
+    /// Copies the coefficients (not the state) from another filter, so a
+    /// stereo pair can share one coefficient computation.
+    pub fn copy_coeffs(&mut self, other: &Svf) {
+        self.k = other.k;
+        self.a1 = other.a1;
+        self.a2 = other.a2;
+        self.a3 = other.a3;
+    }
+
     /// Filters one sample, returning every response.
     #[inline]
     pub fn tick(&mut self, x: f32) -> SvfOut {
@@ -148,11 +160,13 @@ impl Svf {
         if self.ic2.abs() < 1.0e-25 {
             self.ic2 = 0.0;
         }
+        let kv1 = self.k * v1;
         SvfOut {
             low: v2,
             band: v1,
-            high: x - self.k * v1 - v2,
-            notch: x - self.k * v1,
+            band_unity: kv1,
+            high: x - kv1 - v2,
+            notch: x - kv1,
         }
     }
 
@@ -216,6 +230,15 @@ impl Ladder {
 
     pub fn reset(&mut self) {
         self.s = [0.0; 4];
+    }
+
+    /// Copies the coefficients (not the state) from another ladder.
+    pub fn copy_coeffs(&mut self, other: &Ladder) {
+        self.big_g = other.big_g;
+        self.g4 = other.g4;
+        self.k = other.k;
+        self.drive = other.drive;
+        self.comp = other.comp;
     }
 
     #[inline]
@@ -326,7 +349,7 @@ mod tests {
         let notch = gain_at(|x| f.process(x, SvfMode::Notch), 2_000.0);
         assert!(hp_low < 0.02, "hp low {hp_low}");
         assert!((hp_high - 1.0).abs() < 0.1, "hp high {hp_high}");
-        assert!(bp_center > 0.2, "bp {bp_center}");
+        assert!((bp_center - 1.0).abs() < 0.05, "bp {bp_center}");
         assert!(notch < 0.05, "notch {notch}");
     }
 
