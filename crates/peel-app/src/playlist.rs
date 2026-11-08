@@ -258,10 +258,27 @@ pub fn draw(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) {
 fn header(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) {
     let t = ui.theme.clone();
     let mut row = r.shrink2(14.0, 6.0);
-    let mut title = row.cut_left(110.0);
-    ui.icon(title.cut_left(18.0), icons::COLUMNS, 15.0, t.accent);
-    title.cut_left(6.0);
-    ui.text(title, "Playlist", t.label, t.text, Align::Start);
+    // Arrangement picker (the playlist's title).
+    let arr_name = s.project().arrangement().name.clone();
+    let title_w = ui.measure(&arr_name, t.label).x.min(150.0) + 50.0;
+    let title = row.cut_left(title_w);
+    row.cut_left(8.0);
+    let tresp = ui.interact_button(W::new("arrangement-picker"), title, &arr_name);
+    if tresp.hovered {
+        ui.scene.rect(title, t.radius_m, t.control_hover);
+        ui.set_cursor(CursorIcon::Pointer);
+    }
+    let mut tr = title.shrink2(8.0, 0.0);
+    ui.icon(tr.cut_left(18.0), icons::COLUMNS, 15.0, t.accent);
+    tr.cut_left(6.0);
+    ui.icon(tr.cut_right(12.0), icons::CARET_DOWN, 11.0, t.text_dim);
+    let shown = ui.fit_text(&arr_name, t.label, tr.w);
+    ui.text(tr, &shown, t.label, t.text, Align::Start);
+    ui.tooltip(&tresp, "Arrangements");
+    if tresp.clicked {
+        ui.open_popup(W::new("arrangement-menu"), title);
+    }
+    arrangement_menu(ui, title, s);
     for (tool, icon, tip) in [
         (Tool::Draw, icons::PENCIL, "Draw"),
         (Tool::Paint, icons::BRUSH, "Paint"),
@@ -2037,4 +2054,105 @@ pub fn slice_clip(s: &mut Session, c: &Clip, at: Time) -> Option<Id> {
         arr.clips.push(right);
     });
     Some(right_id)
+}
+
+fn arrangement_menu(ui: &mut Ui, anchor: Rect, s: &mut Session) {
+    let id = W::new("arrangement-menu");
+    let list: Vec<(Id, String)> = s
+        .project()
+        .arrangements
+        .iter()
+        .map(|a| (a.id, a.name.clone()))
+        .collect();
+    let active = s.project().active_arrangement;
+    let mut items: Vec<MenuItem> = list
+        .iter()
+        .map(|(aid, n)| MenuItem::new(n.clone()).checked(*aid == active))
+        .collect();
+    items.push(MenuItem::Separator);
+    let base = items.len();
+    items.push(MenuItem::new("New arrangement"));
+    items.push(MenuItem::new("Duplicate arrangement"));
+    items.push(MenuItem::new("Rename arrangement"));
+    items.push(MenuItem::new("Delete arrangement").enabled(list.len() > 1));
+    if let Some(i) = ui.menu(id, vec2(anchor.x, anchor.bottom() + 4.0), &items) {
+        if i < list.len() {
+            let target = list[i].0;
+            s.doc
+                .edit("Switch arrangement", |p| p.active_arrangement = target);
+        } else if i == base {
+            let n = list.len() + 1;
+            let arr = peel_document::Arrangement {
+                id: Id::new(),
+                name: format!("Arrangement {n}"),
+                tracks: (1..=8)
+                    .map(|k| Track {
+                        id: Id::new(),
+                        name: format!("Track {k}"),
+                        color: None,
+                        muted: false,
+                    })
+                    .collect(),
+                clips: Vec::new(),
+                markers: Vec::new(),
+                loop_range: None,
+            };
+            let aid = arr.id;
+            s.doc.edit("New arrangement", |p| {
+                p.arrangements.push(std::sync::Arc::new(arr));
+                p.active_arrangement = aid;
+            });
+        } else if i == base + 1 {
+            // Copies share patterns and media; lanes and clips get new ids.
+            let src = s.project().arrangement().as_ref().clone();
+            let mut lane_map = HashMap::new();
+            let tracks: Vec<Track> = src
+                .tracks
+                .iter()
+                .map(|t| {
+                    let nid = Id::new();
+                    lane_map.insert(t.id, nid);
+                    Track {
+                        id: nid,
+                        ..t.clone()
+                    }
+                })
+                .collect();
+            let clips: Vec<Clip> = src
+                .clips
+                .iter()
+                .map(|c| Clip {
+                    id: Id::new(),
+                    track: lane_map.get(&c.track).copied().unwrap_or(c.track),
+                    ..c.clone()
+                })
+                .collect();
+            let arr = peel_document::Arrangement {
+                id: Id::new(),
+                name: format!("{} copy", src.name),
+                tracks,
+                clips,
+                markers: src.markers.clone(),
+                loop_range: src.loop_range,
+            };
+            let aid = arr.id;
+            s.doc.edit("Duplicate arrangement", |p| {
+                p.arrangements.push(std::sync::Arc::new(arr));
+                p.active_arrangement = aid;
+            });
+        } else if i == base + 2 {
+            let name = s.project().arrangement().name.clone();
+            crate::rename::open(ui, W::new("arrangement-rename"), anchor, &name);
+        } else if i == base + 3 {
+            s.doc.edit("Delete arrangement", |p| {
+                let gone = p.active_arrangement;
+                p.arrangements.retain(|a| a.id != gone);
+                p.active_arrangement = p.arrangements[0].id;
+            });
+        }
+    }
+    if let Some(name) = crate::rename::show(ui, W::new("arrangement-rename")) {
+        s.doc
+            .edit("Rename arrangement", |p| p.arrangement_mut().name = name);
+    }
 }

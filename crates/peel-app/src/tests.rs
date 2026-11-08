@@ -993,3 +993,31 @@ fn slicing_a_clip_keeps_the_music_identical() {
     );
     assert_eq!(extra.len(), 6, "three piano and three pad notes chased");
 }
+
+#[test]
+fn duplicating_an_arrangement_shares_patterns() {
+    let mut h = Harness::new();
+    let original = h.session().project().arrangement().as_ref().clone();
+    h.click(W::new("arrangement-picker"));
+    h.frame();
+    // Items: one arrangement, separator, then New, Duplicate, ...
+    h.click(W::new("arrangement-menu").with(("item", 3usize)));
+    let p = h.session().project();
+    assert_eq!(p.arrangements.len(), 2);
+    let copy = p.arrangement();
+    assert_ne!(copy.id, original.id, "the copy is active");
+    assert_eq!(copy.clips.len(), original.clips.len());
+    assert!(
+        copy.clips
+            .iter()
+            .all(|c| original.clips.iter().all(|o| o.id != c.id)),
+        "new clip ids"
+    );
+    let beat = p.patterns[0].id;
+    assert_eq!(
+        p.pattern_usage(beat),
+        2,
+        "both arrangements use the same Beat pattern"
+    );
+    assert!(peel_document::validate(p).iter().all(|i| !i.is_error()));
+}
