@@ -113,3 +113,11 @@ fn a_missing_plugin_is_reported_not_fatal() {
     s.tick();
     assert_eq!(s.missing_devices(), ["clap:com.example.not-installed"]);
 }
+
+#[test]
+fn plugin_parameters_use_the_plugins_own_text() {
+    let (s, dev) = session_with_gain(1.5);
+    let desc = peel_devices::descriptor(GAIN_TYPE).expect("descriptor once loaded");
+    let gain = desc.param_by_key("7").expect("gain param");
+    assert_eq!(s.param_text(dev, gain, 1.5), "1.50x");
+}

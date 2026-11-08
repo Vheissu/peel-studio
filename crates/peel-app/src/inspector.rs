@@ -677,7 +677,13 @@ fn device_panel(
                 );
                 let mut inner = rr.shrink2(10.0, 0.0);
                 ui.icon(inner.cut_right(14.0), icons::CARET_DOWN, 11.0, t.text_dim);
-                ui.text(inner, &p.format(value), t.label, t.text, Align::Start);
+                ui.text(
+                    inner,
+                    &s.param_text(dev.id, p, value),
+                    t.label,
+                    t.text,
+                    Align::Start,
+                );
                 if resp.clicked {
                     ui.open_popup(id.with("m"), rr);
                 }
@@ -720,7 +726,7 @@ fn device_panel(
                         t.text_dim,
                         Align::Center,
                     );
-                    ui.tooltip(&resp, &p.format(value));
+                    ui.tooltip(&resp, &s.param_text(dev.id, p, value));
                     if resp.clicked {
                         s.set_param(
                             dev.id,
@@ -743,7 +749,7 @@ fn device_panel(
                         accent,
                         bipolar,
                         p.name,
-                        &p.format(value),
+                        &s.param_text(dev.id, p, value),
                     );
                     let menu = W::new(("param-menu", dev.id, p.id));
                     if resp.secondary_clicked {

@@ -173,6 +173,11 @@ impl PluginRegistry {
         Ok(dev)
     }
 
+    /// The plugin's own display text for a parameter value.
+    pub fn param_text(&self, device: Id, id: peel_dsp::ParamId, value: f32) -> Option<String> {
+        self.handles.get(&device)?.param_text(id, value)
+    }
+
     pub fn forget(&mut self, device: Id) {
         self.handles.remove(&device);
     }

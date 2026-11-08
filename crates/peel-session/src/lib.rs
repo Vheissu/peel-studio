@@ -310,6 +310,15 @@ impl Session {
         self.plugins.is_scanning()
     }
 
+    /// Display text for a device parameter value: the plugin's own text for
+    /// plugins, the descriptor's formatting otherwise.
+    pub fn param_text(&self, device: Id, p: &peel_dsp::ParamDescriptor, value: f32) -> String {
+        self.plugins
+            .param_text(device, p.id, value)
+            .filter(|t| !t.trim().is_empty())
+            .unwrap_or_else(|| p.format(value))
+    }
+
     /// Looks for newly installed plugins in the background.
     pub fn rescan_plugins(&mut self) {
         self.plugins.rescan();
