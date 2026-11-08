@@ -325,12 +325,7 @@ fn per_note_expression_and_audio_are_reported_as_lost() {
         length: Time::beats(4),
         offset: Time::ZERO,
         muted: false,
-        content: ClipContent::Audio {
-            asset,
-            gain_db: 0.0,
-            reversed: false,
-            track: master,
-        },
+        content: ClipContent::audio(asset, master),
     });
     let out = export_arrangement(&p, &ExportOptions::default()).unwrap();
     assert_eq!(out.report.notes_with_pan, 1);

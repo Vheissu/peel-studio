@@ -5,6 +5,9 @@
 //! queue. The engine never edits a plan's structure; realtime parameter
 //! commands only adjust gains, pans and mutes in place.
 
+use std::sync::Arc;
+
+use peel_dsp::SampleBuffer;
 use peel_time::TempoMap;
 
 /// Index into [`RenderPlan::channels`].
@@ -30,6 +33,9 @@ pub struct RenderPlan {
     pub loop_range: Option<(f64, f64)>,
     /// Instrument channels.
     pub channels: Vec<ChannelRoute>,
+    /// Audio file regions, in any order. Each plays into its own mixer
+    /// track (see [`AudioRegion`]).
+    pub audio: Vec<AudioRegion>,
     /// Mixer tracks in processing order: every track appears after all of
     /// the tracks that feed it. The master is `tracks[master]`.
     pub tracks: Vec<TrackRoute>,
@@ -48,10 +54,66 @@ impl RenderPlan {
             length_beats: 4.0,
             loop_range: Some((0.0, 4.0)),
             channels: Vec::new(),
+            audio: Vec::new(),
             tracks: vec![TrackRoute::new(None, 0)],
             master: 0,
             beats_per_bar: 4,
         }
+    }
+}
+
+/// A stretch of decoded audio placed on the timeline.
+///
+/// The region sounds from `start_beat` to `end_beat`. Its position in time
+/// comes from the plan's tempo map, but the audio itself always plays at its
+/// native speed (there is no time stretching): a tempo change moves the
+/// region's edges, never the pitch or speed of what is inside.
+///
+/// The engine derives everything from the transport's absolute sample anchor
+/// every block, so seeking or looping into the middle of a region starts at
+/// the right source frame, and the result does not depend on how the host
+/// splits the stream.
+#[derive(Clone, Debug)]
+pub struct AudioRegion {
+    /// Destination mixer track. Regions pointing past the plan's tracks are
+    /// ignored.
+    pub track: TrackIndex,
+    /// Decoded audio. It should already be at the engine sample rate (then
+    /// it plays bit for bit); any other rate is played with linear
+    /// interpolation. The control side owns the allocation: the engine only
+    /// borrows it, and hands every extra reference it takes back through the
+    /// retirement queue.
+    pub sample: Arc<SampleBuffer>,
+    /// Musical position of the first audible frame (quarter notes).
+    pub start_beat: f64,
+    /// Musical position where the region ends (quarter notes, exclusive).
+    pub end_beat: f64,
+    /// Seconds into `sample` of the frame that sounds at `start_beat`.
+    /// Negative values leave silence before the sample begins.
+    pub source_start_seconds: f64,
+    /// Linear gain.
+    pub gain: f32,
+    /// Play the window `[source_start, source_start + length)` backwards.
+    pub reversed: bool,
+    /// Linear fade from silence over this many quarter notes after
+    /// `start_beat`.
+    pub fade_in_beats: f64,
+    /// Linear fade to silence over this many quarter notes before
+    /// `end_beat`.
+    pub fade_out_beats: f64,
+}
+
+impl PartialEq for AudioRegion {
+    fn eq(&self, other: &AudioRegion) -> bool {
+        self.track == other.track
+            && Arc::ptr_eq(&self.sample, &other.sample)
+            && self.start_beat == other.start_beat
+            && self.end_beat == other.end_beat
+            && self.source_start_seconds == other.source_start_seconds
+            && self.gain == other.gain
+            && self.reversed == other.reversed
+            && self.fade_in_beats == other.fade_in_beats
+            && self.fade_out_beats == other.fade_out_beats
     }
 }
 

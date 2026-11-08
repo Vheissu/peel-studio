@@ -44,6 +44,21 @@
 //! are released only by their own note-off or by `Panic`. Plan note voice ids
 //! must be below [`LIVE_VOICE_BASE`].
 //!
+//! # Audio regions
+//!
+//! [`RenderPlan::audio`] holds [`AudioRegion`]s: decoded audio placed on the
+//! timeline, played into a mixer track at its native speed. The engine
+//! resolves every overlapping region against the transport's absolute sample
+//! anchor each block, so a region lands on its exact sample, seeking or
+//! looping into the middle of one starts at the right source frame, and the
+//! output does not depend on the block size. Regions fade in and out over
+//! about a millisecond at their edges; when the transport stops, seeks, wraps
+//! the loop or swaps the plan, the regions sounding at that moment fade out
+//! over a few milliseconds (and in-progress regions fade in) instead of
+//! clicking. Samples are borrowed from the plan; a fading region keeps its
+//! own reference and returns it as [`Retired::Sample`], so nothing is freed
+//! on the audio thread.
+//!
 //! # Realtime allocation checking
 //!
 //! With the `rt-check` feature the cpal callback runs inside
@@ -59,6 +74,7 @@
 //! An allocation on the audio thread then aborts the process in debug
 //! builds, with a stack trace under a debugger.
 
+mod audio;
 mod clock;
 pub mod command;
 mod engine;
@@ -77,7 +93,8 @@ pub use engine::Engine;
 pub use handle::{EngineError, EngineHandle};
 pub use offline::OfflineEngine;
 pub use plan::{
-    ChannelIndex, ChannelRoute, RenderPlan, SeqEvent, SeqKind, Slot, TrackIndex, TrackRoute,
+    AudioRegion, ChannelIndex, ChannelRoute, RenderPlan, SeqEvent, SeqKind, Slot, TrackIndex,
+    TrackRoute,
 };
 pub use telemetry::Telemetry;
 

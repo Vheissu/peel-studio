@@ -155,12 +155,25 @@ pub fn validate(p: &Project) -> Vec<Issue> {
                         issues.push(Issue::error("clip references a missing pattern"));
                     }
                 }
-                ClipContent::Audio { asset, track, .. } => {
+                ClipContent::Audio {
+                    asset,
+                    track,
+                    gain_db,
+                    fade_in,
+                    fade_out,
+                    ..
+                } => {
                     if p.asset(*asset).is_none() {
                         issues.push(Issue::warning("audio clip references a missing asset"));
                     }
                     if !track_ids.contains(track) {
                         issues.push(Issue::error("audio clip routes to a missing mixer track"));
+                    }
+                    if fade_in.is_negative() || fade_out.is_negative() {
+                        issues.push(Issue::error("audio clip with a negative fade"));
+                    }
+                    if !gain_db.is_finite() {
+                        issues.push(Issue::error("audio clip with a non-finite gain"));
                     }
                 }
             }

@@ -191,6 +191,107 @@ mod tests {
         assert_eq!(back, p);
     }
 
+    fn audio_json(extra: &str) -> String {
+        let (asset, track) = (Id::new(), Id::new());
+        format!(
+            r#"{{"type":"audio","asset":"{asset}","track":"{track}"{extra}}}"#,
+            asset = asset,
+            track = track
+        )
+    }
+
+    #[test]
+    fn audio_clips_from_before_fades_still_load() {
+        // Projects saved before fades existed have neither field.
+        let old: ClipContent = serde_json::from_str(&audio_json("")).unwrap();
+        let ClipContent::Audio {
+            fade_in,
+            fade_out,
+            gain_db,
+            reversed,
+            ..
+        } = old
+        else {
+            panic!("audio clip");
+        };
+        assert_eq!((fade_in, fade_out), (Time::ZERO, Time::ZERO));
+        assert_eq!((gain_db, reversed), (0.0, false));
+    }
+
+    #[test]
+    fn audio_clip_fades_round_trip_and_zero_fades_are_not_written() {
+        let plain = ClipContent::audio(Id::new(), Id::new());
+        let json = serde_json::to_string(&plain).unwrap();
+        assert!(!json.contains("fade"), "{json}");
+
+        let ClipContent::Audio {
+            asset,
+            gain_db,
+            reversed,
+            track,
+            ..
+        } = plain
+        else {
+            panic!("audio clip");
+        };
+        let faded = ClipContent::Audio {
+            asset,
+            gain_db,
+            reversed,
+            track,
+            fade_in: Time::new(1, 3),
+            fade_out: Time::new(5, 4),
+        };
+        let json = serde_json::to_string(&faded).unwrap();
+        assert!(
+            json.contains("fade_in") && json.contains("fade_out"),
+            "{json}"
+        );
+        assert_eq!(serde_json::from_str::<ClipContent>(&json).unwrap(), faded);
+    }
+
+    #[test]
+    fn validation_rejects_negative_audio_fades() {
+        let mut p = with_channel();
+        let track = p.mixer.tracks[0].id;
+        let asset = AudioAsset {
+            id: Id::new(),
+            hash: "00".into(),
+            name: "a.wav".into(),
+            path: "a.wav".into(),
+            managed: false,
+            sample_rate: 48_000,
+            channels: 1,
+            frames: 48_000,
+        };
+        let lane = p.arrangement().tracks[0].id;
+        let clip = |fade_in: Time| Clip {
+            id: Id::new(),
+            track: lane,
+            start: Time::ZERO,
+            length: Time::beats(2),
+            offset: Time::ZERO,
+            muted: false,
+            content: ClipContent::Audio {
+                asset: asset.id,
+                gain_db: 0.0,
+                reversed: false,
+                track,
+                fade_in,
+                fade_out: Time::ZERO,
+            },
+        };
+        p.assets.push(asset.clone());
+        p.arrangement_mut().clips.push(clip(Time::new(1, 2)));
+        assert!(
+            validate(&p).iter().all(|i| !i.is_error()),
+            "{:?}",
+            validate(&p)
+        );
+        p.arrangement_mut().clips.push(clip(Time::new(-1, 2)));
+        assert!(validate(&p).iter().any(Issue::is_error));
+    }
+
     #[test]
     fn detects_dangling_references() {
         let mut p = with_channel();

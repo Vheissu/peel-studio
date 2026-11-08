@@ -5,6 +5,7 @@
 //! realtime-friendly edits (gains, parameters) into direct engine commands
 //! so a fader move never rebuilds the plan.
 
+mod audio;
 mod compile;
 mod export;
 mod samples;
@@ -20,7 +21,9 @@ use peel_dsp::SampleBuffer;
 use peel_dsp::util::db_to_gain;
 use peel_engine::{EngineCommand, EngineConfig, EngineHandle, RenderPlan, Slot, Telemetry};
 
-pub use compile::{CompileContext, PlanIndex, PlayMode, compile, same_structure};
+pub use compile::{
+    CompileContext, PlanIndex, PlayMode, clip_source_start_seconds, compile, same_structure,
+};
 pub use export::{ExportJob, ExportSettings, render as render_to_wav};
 pub use samples::SampleLoader;
 
@@ -50,7 +53,10 @@ pub struct Session {
     next_meter: u16,
     plan: Option<RenderPlan>,
     index: PlanIndex,
-    synced: Option<(u64, PlayMode)>,
+    /// Document revision, mode and audio generation the engine was last
+    /// synced to.
+    synced: Option<(u64, PlayMode, u64)>,
+    audio: audio::AudioState,
     mode: PlayMode,
     selected_pattern: Id,
     playing: bool,
@@ -102,6 +108,7 @@ impl Session {
             plan: None,
             index: PlanIndex::default(),
             synced: None,
+            audio: audio::AudioState::default(),
             mode,
             selected_pattern: match mode {
                 PlayMode::Pattern(p) => p,
@@ -130,8 +137,14 @@ impl Session {
         self.engine.collect_garbage();
         for (asset, result) in self.samples.poll() {
             match result {
-                Ok(buf) => self.install_sample(asset, buf),
-                Err(e) => self.notify(format!("Could not load sample: {e}"), true),
+                Ok(buf) => {
+                    self.install_sample(asset, buf);
+                    self.audio_loaded(asset);
+                }
+                Err(e) => {
+                    self.audio_failed(asset);
+                    self.notify(format!("Could not load sample: {e}"), true);
+                }
             }
         }
         if let Some((buf, gain)) = self.samples.poll_preview() {
@@ -144,7 +157,7 @@ impl Session {
     }
 
     fn sync(&mut self) {
-        let key = (self.doc.revision(), self.mode);
+        let key = (self.doc.revision(), self.mode, self.audio.generation);
         if self.synced == Some(key) {
             return;
         }
@@ -322,12 +335,14 @@ impl Session {
                     .map_or(Id::NIL, |p| p.id),
             );
         }
+        let samples = self.clip_samples();
         let (plan, index) = compile(
             self.doc.project(),
             &CompileContext {
                 mode: self.mode,
                 slots: &slots,
                 meters: &self.meters,
+                samples: &samples,
             },
         );
         match &self.plan {
@@ -663,6 +678,10 @@ impl Session {
         }
         self.synced = None;
         self.plan = None;
+        self.audio.failed.clear();
+        let keep: std::collections::HashSet<Id> =
+            self.doc.project().assets.iter().map(|a| a.id).collect();
+        self.samples.retain_assets(&keep);
         self.sync();
     }
 
@@ -675,7 +694,12 @@ impl Session {
             .iter()
             .filter_map(|a| self.samples.cached(a.id).map(|b| (a.id, b)))
             .collect();
-        ExportJob::start(self.doc.project().clone(), samples, settings)
+        ExportJob::start(
+            self.doc.project().clone(),
+            samples,
+            self.export_loads(),
+            settings,
+        )
     }
 
     /// Imports an audio file as an asset referenced in place (not copied).

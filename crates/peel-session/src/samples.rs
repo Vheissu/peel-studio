@@ -8,14 +8,18 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 
 use peel_document::Id;
 use peel_dsp::SampleBuffer;
+use peel_media::Peaks;
 
 enum Request {
     Asset(Id, PathBuf, f32),
     Preview(PathBuf, f32, f32),
 }
 
+/// A decoded asset with its waveform summary, both built on the worker.
+type Loaded = (Arc<SampleBuffer>, Arc<Peaks>);
+
 enum Done {
-    Asset(Id, Result<Arc<SampleBuffer>, String>),
+    Asset(Id, Result<Loaded, String>),
     Preview(Arc<SampleBuffer>, f32),
 }
 
@@ -23,6 +27,7 @@ pub struct SampleLoader {
     tx: Sender<Request>,
     rx: Receiver<Done>,
     cache: HashMap<Id, Arc<SampleBuffer>>,
+    peaks: HashMap<Id, Arc<Peaks>>,
     pending: HashSet<Id>,
     preview: Option<(Arc<SampleBuffer>, f32)>,
 }
@@ -37,8 +42,13 @@ impl SampleLoader {
                 while let Ok(req) = req_rx.recv() {
                     match req {
                         Request::Asset(id, path, rate) => {
+                            // Decoding and the peak pyramid both stay off the
+                            // UI thread.
                             let r = peel_media::load_for_engine(&path, rate)
-                                .map(Arc::new)
+                                .map(|buf| {
+                                    let peaks = Arc::new(Peaks::compute(&buf));
+                                    (Arc::new(buf), peaks)
+                                })
                                 .map_err(|e| e.to_string());
                             if done_tx.send(Done::Asset(id, r)).is_err() {
                                 break;
@@ -59,6 +69,7 @@ impl SampleLoader {
             tx,
             rx,
             cache: HashMap::new(),
+            peaks: HashMap::new(),
             pending: HashSet::new(),
             preview: None,
         }
@@ -79,6 +90,23 @@ impl SampleLoader {
         self.cache.get(&id).cloned()
     }
 
+    /// Forgets decoded assets that are not in `keep` (after a project is
+    /// replaced). The engine keeps whatever it is still playing.
+    pub fn retain_assets(&mut self, keep: &HashSet<Id>) {
+        self.cache.retain(|id, _| keep.contains(id));
+        self.peaks.retain(|id, _| keep.contains(id));
+    }
+
+    /// Waveform summary of a decoded asset.
+    pub fn peaks(&self, id: Id) -> Option<Arc<Peaks>> {
+        self.peaks.get(&id).cloned()
+    }
+
+    /// True while a load for `id` has been requested and not finished.
+    pub fn is_pending(&self, id: Id) -> bool {
+        self.pending.contains(&id)
+    }
+
     /// Newly finished asset loads.
     pub fn poll(&mut self) -> Vec<(Id, Result<Arc<SampleBuffer>, String>)> {
         let mut out = Vec::new();
@@ -86,10 +114,14 @@ impl SampleLoader {
             match done {
                 Done::Asset(id, r) => {
                     self.pending.remove(&id);
-                    if let Ok(buf) = &r {
-                        self.cache.insert(id, buf.clone());
-                    }
-                    out.push((id, r));
+                    out.push((
+                        id,
+                        r.map(|(buf, peaks)| {
+                            self.cache.insert(id, buf.clone());
+                            self.peaks.insert(id, peaks);
+                            buf
+                        }),
+                    ));
                 }
                 Done::Preview(buf, gain) => self.preview = Some((buf, gain)),
             }

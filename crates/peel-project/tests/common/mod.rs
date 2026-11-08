@@ -201,6 +201,8 @@ pub fn rich_project(managed_asset: Option<peel_document::AudioAsset>) -> Project
                 gain_db: -2.25,
                 reversed: true,
                 track: lead_track.id,
+                fade_in: Time::new(1, 4),
+                fade_out: Time::new(3, 8),
             },
         });
     }

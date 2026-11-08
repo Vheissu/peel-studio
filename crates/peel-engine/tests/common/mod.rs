@@ -267,6 +267,7 @@ pub fn plan(
         sequence,
         length_beats,
         loop_range,
+        audio: Vec::new(),
         channels: (0..channels)
             .map(|c| ChannelRoute {
                 slot: c as u32,
