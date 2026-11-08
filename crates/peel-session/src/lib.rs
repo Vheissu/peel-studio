@@ -732,3 +732,56 @@ pub fn find_device_mut(p: &mut Project, id: Id) -> Option<&mut DeviceInstance> {
         .flat_map(|t| t.inserts.iter_mut())
         .find(|d| d.id == id)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn save_and_reopen_round_trip() {
+        let dir = std::env::temp_dir().join(format!("peel-session-test-{}", Id::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("Groove.peelproj");
+        let mut a = Session::new_silent(template::beat_and_melody());
+        let saved = a.save(Some(path.clone())).expect("save");
+        assert_eq!(saved, path);
+        assert!(!a.doc.is_dirty());
+        assert_eq!(a.project().meta.title, "Groove");
+
+        let mut b = Session::new_silent(template::empty());
+        b.open(&path).expect("open");
+        let (pa, pb) = (a.project(), b.project());
+        assert_eq!(pa.channels, pb.channels);
+        assert_eq!(pa.patterns, pb.patterns);
+        assert_eq!(pa.arrangements, pb.arrangements);
+        assert_eq!(pa.mixer, pb.mixer);
+        assert_eq!(pa.bpm(), pb.bpm());
+        assert!(b.missing_devices().is_empty(), "{:?}", b.missing_devices());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn export_renders_audio() {
+        let dir = std::env::temp_dir().join(format!("peel-export-test-{}", Id::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("mix.wav");
+        let project = template::beat_and_melody();
+        let settings = ExportSettings {
+            path: out.clone(),
+            sample_rate: 44_100,
+            bits: 16,
+            tail_seconds: 1.0,
+        };
+        let progress = std::sync::atomic::AtomicU32::new(0);
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        render_to_wav(&project, &HashMap::new(), &settings, &progress, &cancel).expect("render");
+        let buf = peel_media::decode_file(&out).expect("decode");
+        assert_eq!(buf.sample_rate, 44_100.0);
+        let secs = buf.duration_seconds();
+        let expected = 32.0 * 60.0 / 118.0 + 1.0;
+        assert!((secs - expected).abs() < 0.05, "{secs} vs {expected}");
+        let peak = buf.left().iter().fold(0.0f32, |m, x| m.max(x.abs()));
+        assert!(peak > 0.1 && peak <= 1.0, "peak {peak}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
