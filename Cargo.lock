@@ -1849,6 +1849,7 @@ dependencies = [
  "peel-devices",
  "peel-document",
  "peel-dsp",
+ "peel-effects",
  "peel-media",
  "peel-midi",
  "peel-project",

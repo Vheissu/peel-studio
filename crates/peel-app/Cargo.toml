@@ -28,3 +28,4 @@ dirs.workspace = true
 peel-project.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+peel-effects.workspace = true

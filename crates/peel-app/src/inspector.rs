@@ -498,6 +498,9 @@ fn panel_height(desc: &DeviceDescriptor, w: f32) -> f32 {
     if desc.type_id == "peel.sampler" {
         h += 80.0;
     }
+    if desc.type_id == "peel.fx.eq" {
+        h += 140.0;
+    }
     for (_, params) in groups(desc) {
         h += 22.0;
         let (wide, knobs): (Vec<&ParamDescriptor>, Vec<&ParamDescriptor>) =
@@ -586,6 +589,9 @@ fn device_panel(
     if desc.type_id == "peel.sampler" {
         sample_view(ui, &mut body, dev, s);
     }
+    if desc.type_id == "peel.fx.eq" {
+        eq_view(ui, &mut body, dev, desc, s);
+    }
 
     let mut content_h = panel_height(desc, body.w);
     if !presets.is_empty() {
@@ -593,6 +599,9 @@ fn device_panel(
     }
     if desc.type_id == "peel.sampler" {
         content_h -= 80.0;
+    }
+    if desc.type_id == "peel.fx.eq" {
+        content_h -= 140.0;
     }
     let scroll_id = W::new(("insp-dev-scroll", dev.id));
     let off = if content_h > body.h {
@@ -630,7 +639,13 @@ fn device_panel(
             let value = dev.params.get(p.key).copied().unwrap_or(p.default);
             let mut sel = value.round().max(0.0) as usize;
             let short: Vec<&str> = p.choices.to_vec();
-            if p.choices.len() <= 5 {
+            // Segmented when every label fits its cell, otherwise a menu.
+            let cell_w = (row.w - 56.0 - 4.0) / p.choices.len().max(1) as f32;
+            let fits = p
+                .choices
+                .iter()
+                .all(|c| ui.measure(c, t.label).x + 10.0 <= cell_w);
+            if p.choices.len() <= 5 && fits {
                 let mut rr = row;
                 let lbl = rr.cut_left(56.0);
                 ui.text(lbl, p.name, t.caption, t.text_dim, Align::Start);
@@ -848,4 +863,150 @@ fn sample_view(ui: &mut Ui, body: &mut Rect, dev: &DeviceInstance, s: &mut Sessi
         t.text_dim,
         Align::Start,
     );
+}
+
+const EQ_DB: f32 = 18.0;
+const BAND_COLORS: [u32; 4] = [0xE8735A, 0xF2B66D, 0x5FBF9A, 0x6E9FE0];
+
+/// Interactive EQ curve: drag a band's handle to set its frequency and
+/// gain, scroll over it to change Q, double-click to switch it on or off.
+fn eq_view(
+    ui: &mut Ui,
+    body: &mut Rect,
+    dev: &DeviceInstance,
+    desc: &'static DeviceDescriptor,
+    s: &mut Session,
+) {
+    let t = ui.theme.clone();
+    let r = body.cut_top(132.0);
+    body.cut_top(8.0);
+    ui.scene.rect(r, t.radius_m, t.bg);
+    let plot = r.shrink2(8.0, 10.0);
+    let (f_lo, f_hi) = (20.0f32, 20_000.0f32);
+    let x_of = |f: f32| plot.x + plot.w * (f / f_lo).ln() / (f_hi / f_lo).ln();
+    let f_of = |x: f32| f_lo * (f_hi / f_lo).powf(((x - plot.x) / plot.w).clamp(0.0, 1.0));
+    let y_of = |db: f32| plot.center().y - db.clamp(-EQ_DB, EQ_DB) / EQ_DB * plot.h * 0.5;
+    let db_of = |y: f32| ((plot.center().y - y) / (plot.h * 0.5) * EQ_DB).clamp(-EQ_DB, EQ_DB);
+    // Grid: decades and the 0 dB line.
+    for f in [100.0, 1000.0, 10_000.0] {
+        ui.scene.vline(x_of(f), plot.y, plot.bottom(), t.grid_beat);
+    }
+    for f in [50.0, 200.0, 500.0, 2000.0, 5000.0] {
+        ui.scene.vline(x_of(f), plot.y, plot.bottom(), t.grid_step);
+    }
+    ui.scene.hline(plot.x, plot.right(), y_of(0.0), t.grid_bar);
+    ui.scene
+        .hline(plot.x, plot.right(), y_of(12.0), t.grid_step);
+    ui.scene
+        .hline(plot.x, plot.right(), y_of(-12.0), t.grid_step);
+    for (f, label) in [(100.0, "100"), (1000.0, "1k"), (10_000.0, "10k")] {
+        ui.text_at(
+            vec2(x_of(f) + 3.0, plot.bottom() - 14.0),
+            label,
+            t.caption.size(10.0),
+            t.text_faint,
+        );
+    }
+    let params: Vec<f32> = desc
+        .params
+        .iter()
+        .map(|p| dev.params.get(p.key).copied().unwrap_or(p.default))
+        .collect();
+    let sr = s.sample_rate().max(8000.0);
+    let n = (plot.w / 3.0) as usize;
+    let pts: Vec<peel_ui::Vec2> = (0..=n)
+        .map(|i| {
+            let x = plot.x + plot.w * i as f32 / n as f32;
+            vec2(
+                x,
+                y_of(peel_effects::eq::eq_response_db(&params, sr, f_of(x))),
+            )
+        })
+        .collect();
+    ui.scene.push_clip(r);
+    for w in pts.windows(2) {
+        let y0 = y_of(0.0);
+        let top = w[0].y.min(y0);
+        let h = (w[0].y - y0).abs();
+        ui.scene.rect(
+            Rect {
+                x: w[0].x,
+                y: top,
+                w: (w[1].x - w[0].x).max(1.0),
+                h,
+            },
+            0.0,
+            t.accent.alpha(0.08),
+        );
+    }
+    ui.scene.polyline(&pts, 2.0, t.accent);
+    // Band handles.
+    for band in 1..=4u32 {
+        let key = |k: &str| format!("band{band}.{k}");
+        let get = |k: &str| {
+            let k = key(k);
+            dev.params
+                .get(&k)
+                .copied()
+                .or_else(|| desc.param_by_key(&k).map(|p| p.default))
+                .unwrap_or(0.0)
+        };
+        let (freq, gain, q, on) = (get("freq"), get("gain"), get("q"), get("enable") >= 0.5);
+        let c = peel_ui::Color::hex(BAND_COLORS[band as usize - 1]);
+        let center = vec2(x_of(freq.clamp(f_lo, f_hi)), y_of(gain));
+        let id = W::new(("eq-band", dev.id, band));
+        let resp = ui.interact(id, Rect::from_center(center, 18.0, 18.0));
+        let hot = resp.hovered || resp.active;
+        if on {
+            ui.scene
+                .circle_stroke(center, if hot { 7.5 } else { 6.0 }, c, 1.5, t.bg);
+        } else {
+            ui.scene.circle_stroke(center, 5.5, t.bg, 1.5, c.alpha(0.7));
+        }
+        ui.text(
+            Rect::from_center(center, 12.0, 12.0),
+            &band.to_string(),
+            t.caption.size(9.5),
+            if on { t.text_on_accent } else { c },
+            Align::Center,
+        );
+        if hot {
+            ui.set_cursor(peel_ui::CursorIcon::Grab);
+            ui.tooltip(
+                &resp,
+                &format!("{:.0} Hz  {:+.1} dB  Q {:.2}", freq, gain, q),
+            );
+        }
+        if resp.double_clicked {
+            s.set_param(
+                dev.id,
+                &key("enable"),
+                if on { 0.0 } else { 1.0 },
+                id.0 ^ 0xe0,
+            );
+            s.doc.end_gesture();
+        } else if resp.dragging
+            && let Some(p) = ui.pointer()
+        {
+            if !on {
+                s.set_param(dev.id, &key("enable"), 1.0, id.0);
+            }
+            s.set_param(dev.id, &key("freq"), f_of(p.x).round(), id.0);
+            s.set_param(
+                dev.id,
+                &key("gain"),
+                (db_of(p.y) * 10.0).round() / 10.0,
+                id.0,
+            );
+        }
+        if resp.released {
+            s.doc.end_gesture();
+        }
+        if resp.hovered && ui.input.scroll.y != 0.0 {
+            let nq = (q * (1.0 + ui.input.scroll.y * 0.004)).clamp(0.1, 18.0);
+            ui.input.scroll.y = 0.0;
+            s.set_param(dev.id, &key("q"), nq, id.0 ^ 0x51);
+        }
+    }
+    ui.scene.pop_clip();
 }

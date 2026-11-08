@@ -182,6 +182,14 @@ impl Studio {
             Ok("mixer") => self.ws.dock = DockTab::Mixer,
             _ => {}
         }
+        if std::env::var_os("PEEL_EQ").is_some() {
+            let master = self.session.project().mixer.tracks[0].id;
+            let eq = peel_session::template::device("peel.fx.eq", Some("Vocal Presence"));
+            self.session
+                .doc
+                .edit("Add EQ", |p| p.mixer.tracks[0].inserts.insert(0, eq));
+            self.ws.focus = Some(Focus::Track(master));
+        }
         if std::env::var_os("PEEL_EXPORT").is_some() {
             self.ws.export_panel = true;
         }
