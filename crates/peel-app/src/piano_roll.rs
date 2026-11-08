@@ -107,7 +107,15 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
     };
     ws.selected_channel = Some(channel.id);
 
-    let quantize = header(ui, tools, &channel, ws);
+    let mut actions = header(ui, tools, &channel, ws);
+    let quantize = actions.quantize;
+    // `PEEL_NOTE_TOOLS=<tool index>` opens the note tools for screenshots.
+    if let Ok(v) = std::env::var("PEEL_NOTE_TOOLS")
+        && !std::mem::replace(ui.state::<bool>(W::new("debug-note-tools")), true)
+    {
+        crate::note_tools::select(ui, v.parse().unwrap_or(0));
+        actions.note_tools = ui.widget_rect(W::new("roll-note-tools"));
+    }
 
     let mut area = r.shrink2(8.0, 0.0);
     area.cut_bottom(8.0);
@@ -215,6 +223,19 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
     keyboard_shortcuts(
         ui, s, ws, pid, &channel, &notes, &pattern, paste_at, quantize,
     );
+    if let Some(anchor) = actions.note_tools {
+        let targets: Vec<Note> = if ws.roll.selection.is_empty() {
+            notes.clone()
+        } else {
+            notes
+                .iter()
+                .filter(|n| ws.roll.selection.contains(&n.id))
+                .copied()
+                .collect()
+        };
+        crate::note_tools::open(ui, anchor, s, ws, pid, targets);
+    }
+    crate::note_tools::panel(ui, s, ws);
 
     // Playhead.
     if s.is_playing() && matches!(s.mode(), PlayMode::Pattern(p) if p == pid) {
@@ -266,7 +287,14 @@ fn note_rect(v: &View, n: &Note) -> Rect {
     }
 }
 
-fn header(ui: &mut Ui, tools: Rect, ch: &Channel, ws: &mut Workspace) -> bool {
+/// What the header asked for this frame.
+struct HeaderActions {
+    quantize: bool,
+    /// The note tools button was clicked (its rect anchors the panel).
+    note_tools: Option<Rect>,
+}
+
+fn header(ui: &mut Ui, tools: Rect, ch: &Channel, ws: &mut Workspace) -> HeaderActions {
     let t = ui.theme.clone();
     let mut row = tools;
     // Channel chip.
@@ -497,7 +525,19 @@ fn header(ui: &mut Ui, tools: Rect, ch: &Channel, ws: &mut Workspace) -> bool {
         None,
     );
     ui.tooltip(&q, "Quantize to the grid (selection, or all notes)");
-    q.clicked
+    row.cut_right(2.0);
+    let nt = ui.icon_button(
+        W::new("roll-note-tools"),
+        row.cut_right(30.0),
+        icons::SPARKLE,
+        crate::note_tools::is_open(ui),
+        None,
+    );
+    ui.tooltip(&nt, "Note tools: legato, chop, arpeggiate, strum and more");
+    HeaderActions {
+        quantize: q.clicked,
+        note_tools: nt.clicked.then_some(nt.rect),
+    }
 }
 
 fn grid(

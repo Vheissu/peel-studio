@@ -797,7 +797,7 @@ fn device_panel(
 
 /// A knob with its name below; shows the value while hovered or dragged.
 #[allow(clippy::too_many_arguments)]
-fn knob_cell(
+pub(crate) fn knob_cell(
     ui: &mut Ui,
     id: W,
     cell: Rect,

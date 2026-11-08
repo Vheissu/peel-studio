@@ -2391,6 +2391,7 @@ dependencies = [
  "dirs",
  "env_logger",
  "log",
+ "peel-compose",
  "peel-devices",
  "peel-document",
  "peel-dsp",

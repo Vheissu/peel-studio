@@ -1280,3 +1280,61 @@ fn dragging_a_tension_handle_bends_an_automation_segment() {
     h.release(0);
     assert_eq!(points(&h)[0].tension, 0.0);
 }
+
+#[test]
+fn note_tools_preview_cancel_and_apply() {
+    let mut h = Harness::new();
+    let p = h.session().project().clone();
+    let chords = p.patterns.iter().find(|x| x.name == "Chords").unwrap().id;
+    let piano = p.channels.iter().find(|c| c.name == "Piano").unwrap().id;
+    h.studio.session.select_pattern(chords);
+    h.studio.ws.selected_channel = Some(piano);
+    h.click(W::new(("dock-tab", "Piano roll")));
+    h.frame();
+    let shape = |h: &Harness| {
+        let mut v: Vec<(Time, u8, Time)> = h
+            .session()
+            .project()
+            .pattern(chords)
+            .unwrap()
+            .notes_for(piano)
+            .map(|n| (n.start, n.key, n.length))
+            .collect();
+        v.sort();
+        v
+    };
+    let original = shape(&h);
+    let undo_before = h.session().doc.undo_label().map(str::to_string);
+    // Open: the first tool previews at once.
+    h.click(W::new("roll-note-tools"));
+    assert!(crate::note_tools::is_open(&h.ui));
+    // Arpeggiate turns each chord into a run of single notes.
+    h.click(W::new(("note-tool", 3usize)));
+    let arp = shape(&h);
+    assert!(
+        arp.len() > original.len(),
+        "{} vs {}",
+        arp.len(),
+        original.len()
+    );
+    let mut onsets: Vec<Time> = arp.iter().map(|x| x.0).collect();
+    onsets.dedup();
+    assert_eq!(onsets.len(), arp.len(), "one note at a time");
+    // Cancel restores exactly, with no undo step left behind.
+    h.click(W::new("note-tool-cancel"));
+    assert!(!crate::note_tools::is_open(&h.ui));
+    assert_eq!(shape(&h), original);
+    assert_eq!(
+        h.session().doc.undo_label().map(str::to_string),
+        undo_before
+    );
+    // Chop and apply: one undo step that restores the original.
+    h.click(W::new("roll-note-tools"));
+    h.click(W::new(("note-tool", 2usize)));
+    h.click(W::new("note-tool-apply"));
+    let chopped = shape(&h);
+    assert!(chopped.len() > original.len());
+    assert_eq!(h.session().doc.undo_label(), Some("Chop"));
+    h.studio.session.doc.undo();
+    assert_eq!(shape(&h), original);
+}
