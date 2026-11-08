@@ -89,15 +89,26 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
         }
     }
     row.cut_left(4.0);
+    let armed = studio.recorder.armed;
     let rec = ui.icon_button_fill(
         W::new("rec"),
         row.cut_left(38.0),
         icons::RECORD,
-        false,
+        armed,
         t.record,
         15.0,
     );
-    ui.tooltip(&rec, "Recording arrives with audio input support");
+    ui.tooltip(
+        &rec,
+        if armed {
+            "Recording notes into the pattern"
+        } else {
+            "Record notes into the pattern"
+        },
+    );
+    if rec.clicked {
+        studio.recorder.armed = !armed;
+    }
     row.cut_left(12.0);
 
     // Position readout.

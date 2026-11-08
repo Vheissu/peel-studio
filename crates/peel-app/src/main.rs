@@ -10,6 +10,7 @@ mod piano_roll;
 mod playlist;
 mod prefs;
 mod rack;
+mod recorder;
 mod rename;
 mod settings;
 mod studio;

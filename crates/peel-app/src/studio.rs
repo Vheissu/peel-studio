@@ -18,6 +18,7 @@ pub struct Studio {
     pub prefs: Prefs,
     pub welcome: bool,
     pub show_keys: bool,
+    pub recorder: crate::recorder::Recorder,
     recovered: Vec<peel_project::AutosaveEntry>,
     last_autosave: std::time::Instant,
     autosaved_revision: u64,
@@ -59,6 +60,7 @@ impl Studio {
             prefs,
             welcome: welcome || std::env::var_os("PEEL_WELCOME").is_some(),
             show_keys: std::env::var_os("PEEL_KEYS").is_some(),
+            recorder: Default::default(),
             recovered,
             last_autosave: std::time::Instant::now(),
             autosaved_revision: revision,
@@ -422,6 +424,9 @@ impl Studio {
         for (code, key) in ons {
             self.ws.held.insert(code, (channel, key));
             self.session.live_note(channel, key, 0.8, true);
+            let beat = self.session.position();
+            self.recorder
+                .note(&mut self.session, channel, key, 0.8, true, beat);
         }
         let released: Vec<KeyCode> = ui
             .input
@@ -432,6 +437,9 @@ impl Studio {
         for code in released {
             if let Some((ch, key)) = self.ws.held.remove(&code) {
                 self.session.live_note(ch, key, 0.0, false);
+                let beat = self.session.position();
+                self.recorder
+                    .note(&mut self.session, ch, key, 0.0, false, beat);
             }
         }
     }
@@ -712,6 +720,7 @@ impl Studio {
         self.session.tick();
         self.session.set_live_target(self.ws.selected_channel);
         self.session.poll_midi();
+        self.recorder.frame(&mut self.session);
         if !self.welcome {
             self.shortcuts(ui, win);
         }
