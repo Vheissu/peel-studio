@@ -580,6 +580,50 @@ pub fn current_pattern(session: &Session) -> Id {
 
 impl App for Studio {
     fn update(&mut self, ui: &mut Ui, win: &WindowControl) {
+        let frame_start = std::time::Instant::now();
+        self.update_inner(ui, win);
+        if std::env::var_os("PEEL_FRAME_STATS").is_some() {
+            let us = frame_start.elapsed().as_micros() as u64;
+            let shapes = ui.scene.shape_count();
+            let st = ui.state::<(u64, u64, u64)>(W::new("frame-stats"));
+            st.0 += 1;
+            st.1 += us;
+            st.2 = st.2.max(us);
+            if st.0 == 120 {
+                log::info!(
+                    "UI build: avg {} us, max {} us, {} shapes",
+                    st.1 / 120,
+                    st.2,
+                    shapes
+                );
+                *st = (0, 0, 0);
+            }
+        }
+    }
+
+    fn close_requested(&mut self) -> bool {
+        true
+    }
+
+    fn shutdown(&mut self) {
+        self.session.panic();
+        // Unsaved work stays recoverable; a clean session leaves nothing.
+        if self.session.doc.is_dirty() {
+            self.autosave(true);
+        } else if !cfg!(test) {
+            let _ = peel_project::discard_autosave(
+                &crate::prefs::autosave_dir(),
+                self.session.project().id,
+            );
+        }
+        self.prefs.octave = self.ws.octave;
+        self.prefs.sample_dir = self.ws.sample_dir.clone();
+        self.prefs.save();
+    }
+}
+
+impl Studio {
+    fn update_inner(&mut self, ui: &mut Ui, win: &WindowControl) {
         self.session.tick();
         if !self.welcome {
             self.shortcuts(ui, win);
@@ -639,26 +683,6 @@ impl App for Studio {
             self.session.project().meta.title,
             dirty
         ));
-    }
-
-    fn close_requested(&mut self) -> bool {
-        true
-    }
-
-    fn shutdown(&mut self) {
-        self.session.panic();
-        // Unsaved work stays recoverable; a clean session leaves nothing.
-        if self.session.doc.is_dirty() {
-            self.autosave(true);
-        } else if !cfg!(test) {
-            let _ = peel_project::discard_autosave(
-                &crate::prefs::autosave_dir(),
-                self.session.project().id,
-            );
-        }
-        self.prefs.octave = self.ws.octave;
-        self.prefs.sample_dir = self.ws.sample_dir.clone();
-        self.prefs.save();
     }
 }
 
