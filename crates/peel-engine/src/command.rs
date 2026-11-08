@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use peel_dsp::{Device, ParamId, SampleBuffer};
 
+use crate::input::MonitorReceiver;
 use crate::plan::{ChannelIndex, RenderPlan, Slot, TrackIndex};
 
 /// Control-to-engine messages. Sent through a bounded lock-free queue and
@@ -92,6 +93,9 @@ pub enum EngineCommand {
     },
     /// Release every voice everywhere and reset sustain (does not edit data).
     Panic,
+    /// Connect (or, with `None`, disconnect) the monitor FIFO that an audio
+    /// input feeds. The previous one is retired. See [`crate::input`].
+    SetInputMonitor(Option<Box<MonitorReceiver>>),
 }
 
 /// Engine-to-control messages carrying objects that must be freed off the
@@ -100,4 +104,5 @@ pub enum Retired {
     Plan(Box<RenderPlan>),
     Device(Box<dyn Device>),
     Sample(Arc<SampleBuffer>),
+    Monitor(Box<MonitorReceiver>),
 }

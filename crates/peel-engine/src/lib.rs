@@ -69,6 +69,17 @@
 //! every note that arrives is also copied, with the transport position, into a
 //! ring the control thread drains with [`EngineHandle::drain_recorded`].
 //!
+//! # Audio input
+//!
+//! [`list_input_devices`] enumerates inputs and [`EngineHandle::open_input`]
+//! opens one (which is when the operating system asks for microphone
+//! permission). The input callback copies the chosen channels into a bounded
+//! capture ring that a writer thread drains to disk, measures a peak for the
+//! input meter, and can feed a small FIFO that the output callback mixes in
+//! for software monitoring. See [`input`] for the threading and overflow
+//! rules and [`latency`] for how a take is lined up with what the player
+//! heard.
+//!
 //! # Audio devices
 //!
 //! [`list_output_devices`] enumerates what the system offers and
@@ -98,6 +109,9 @@ pub mod command;
 mod engine;
 mod events;
 mod handle;
+pub mod input;
+mod input_stream;
+pub mod latency;
 pub mod live;
 mod mixer;
 mod monitor;
@@ -110,6 +124,12 @@ pub mod telemetry;
 pub use command::{EngineCommand, Retired};
 pub use engine::Engine;
 pub use handle::{EngineError, EngineHandle, OutputDeviceInfo, list_output_devices};
+pub use input::{
+    CallbackTiming, CaptureState, InputChannels, InputFailure, InputInjector, InputProcessor,
+    InputShared, MonitorReceiver, MonitorStats,
+};
+pub use input_stream::{InputDeviceInfo, InputError, InputInfo, InputRequest, list_input_devices};
+pub use latency::{CaptureStart, LatencyReport, take_start_beat};
 pub use live::{
     LIVE_TARGET_NONE, LiveInput, LiveStats, LiveTarget, LiveTiming, RecordedNote, RecordedReceiver,
 };
@@ -140,6 +160,11 @@ pub struct EngineConfig {
     /// [`list_output_devices`]. `None`, or a device that is not found, uses
     /// the system default (the latter with a logged warning).
     pub device: Option<String>,
+    /// Input device [`EngineHandle::open_input`] uses when its request does
+    /// not name one (`None` is the system default input). Starting the engine
+    /// never opens an input: that is what triggers the microphone permission
+    /// prompt, so it waits until the user asks.
+    pub input_device: Option<String>,
     /// Largest block the engine processes at once; device callbacks larger
     /// than this are split.
     pub max_block: usize,
@@ -157,6 +182,7 @@ impl Default for EngineConfig {
             sample_rate: None,
             buffer_frames: Some(256),
             device: None,
+            input_device: None,
             max_block: 256,
             device_slots: telemetry::MAX_SLOTS,
             command_capacity: 8192,
