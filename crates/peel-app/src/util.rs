@@ -3,6 +3,12 @@
 use peel_document::{Color as DocColor, Time, TimeSignature};
 use peel_ui::Color;
 
+/// Names for the twelve palette colors, in palette order.
+pub const COLOR_NAMES: [&str; 12] = [
+    "Tomato", "Amber", "Mustard", "Olive", "Jade", "Teal", "Blue", "Lavender", "Rose", "Salmon",
+    "Beige", "Steel",
+];
+
 /// Document color to UI color.
 pub fn col(c: DocColor) -> Color {
     Color::from_rgb8(c.r, c.g, c.b)

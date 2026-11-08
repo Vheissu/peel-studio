@@ -483,14 +483,9 @@ fn channel_button(
     let first_color = items.len();
     for (i, pc) in PALETTE.iter().enumerate() {
         items.push(
-            MenuItem::new(
-                [
-                    "Tomato", "Amber", "Mustard", "Olive", "Jade", "Teal", "Blue", "Lavender",
-                    "Rose", "Salmon", "Beige", "Steel",
-                ][i],
-            )
-            .swatch(col(*pc))
-            .checked(*pc == ch.color),
+            MenuItem::new(crate::util::COLOR_NAMES[i])
+                .swatch(col(*pc))
+                .checked(*pc == ch.color),
         );
     }
     items.push(MenuItem::Separator);

@@ -761,3 +761,35 @@ fn adding_a_send_routes_a_track_to_a_bus() {
     // The bus can no longer send back to the piano track (that would loop).
     assert!(super::inspector_reaches(h.session().project(), piano, bus));
 }
+
+#[test]
+fn deleting_a_mixer_track_reroutes_its_channel() {
+    let mut h = Harness::new();
+    h.click(W::new(("dock-tab", "Mixer")));
+    h.frame();
+    let kick_track = h
+        .session()
+        .project()
+        .mixer
+        .tracks
+        .iter()
+        .find(|t| t.name == "Kick")
+        .unwrap()
+        .id;
+    let name = h.rect(W::new(("strip-name", kick_track))).center();
+    h.move_to(name);
+    h.move_to(name);
+    h.press(1);
+    h.release(1);
+    h.frame();
+    let delete_index = 2 + 1 + peel_document::PALETTE.len() + 1;
+    h.click(W::new(("strip-menu", kick_track)).with(("item", delete_index)));
+    let p = h.session().project();
+    assert!(p.mixer.track(kick_track).is_none());
+    let kick = p.channels.iter().find(|c| c.name == "Kick").unwrap();
+    assert_eq!(
+        kick.track, p.mixer.tracks[0].id,
+        "kick now plays through the master"
+    );
+    assert!(peel_document::validate(p).iter().all(|i| !i.is_error()));
+}

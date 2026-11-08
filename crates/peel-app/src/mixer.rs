@@ -155,6 +155,9 @@ fn strip(
         },
         Align::Center,
     );
+    if !is_master {
+        strip_menu(ui, name_r, tr, s, ws);
+    }
     col_r.cut_top(4.0);
 
     // Insert slots.
@@ -480,5 +483,82 @@ fn automate_menu(
     ) == Some(0)
     {
         crate::playlist::create_automation(s, ws, target, value);
+    }
+}
+
+/// Right-click a strip's name: rename, recolor or delete the track.
+fn strip_menu(ui: &mut Ui, name_r: Rect, tr: &MixerTrack, s: &mut Session, ws: &mut Workspace) {
+    let resp = ui.interact(W::new(("strip-name", tr.id)), name_r);
+    let menu = W::new(("strip-menu", tr.id));
+    if resp.secondary_clicked {
+        ui.open_popup(menu, name_r);
+    }
+    if resp.double_clicked {
+        crate::rename::open(ui, W::new(("strip-rename", tr.id)), name_r, &tr.name);
+    }
+    let mut items = vec![
+        MenuItem::new("Rename"),
+        MenuItem::Separator,
+        MenuItem::Heading("Color".into()),
+    ];
+    let first_color = items.len();
+    for (c, name) in peel_document::PALETTE.iter().zip(crate::util::COLOR_NAMES) {
+        items.push(MenuItem::new(name).swatch(col(*c)).checked(*c == tr.color));
+    }
+    items.push(MenuItem::Separator);
+    let delete = items.len();
+    items.push(MenuItem::new("Delete track"));
+    let tid = tr.id;
+    match ui.menu(menu, vec2(name_r.x, name_r.bottom() + 4.0), &items) {
+        Some(0) => crate::rename::open(ui, W::new(("strip-rename", tid)), name_r, &tr.name),
+        Some(i) if i >= first_color && i < first_color + peel_document::PALETTE.len() => {
+            let color = peel_document::PALETTE[i - first_color];
+            s.doc.edit("Recolor mixer track", |p| {
+                if let Some(t) = p.mixer.track_mut(tid) {
+                    t.color = color;
+                }
+            });
+        }
+        Some(i) if i == delete => {
+            let name = tr.name.clone();
+            s.doc.edit(format!("Delete {name}"), |p| {
+                let master = p.mixer.tracks[0].id;
+                p.mixer.tracks.retain(|t| t.id != tid);
+                for t in p.mixer.tracks.iter_mut() {
+                    if t.output == Some(tid) {
+                        t.output = None;
+                    }
+                    t.sends.retain(|sd| sd.target != tid);
+                }
+                for c in p.channels.iter_mut() {
+                    if c.track == tid {
+                        c.track = master;
+                    }
+                }
+                for a in p.arrangements.iter_mut() {
+                    let a = std::sync::Arc::make_mut(a);
+                    for c in a.clips.iter_mut() {
+                        if let peel_document::ClipContent::Audio { track, .. } = &mut c.content
+                            && *track == tid
+                        {
+                            *track = master;
+                        }
+                    }
+                    // Automation of the deleted track has nothing to drive.
+                    a.clips.retain(|c| !matches!(&c.content, peel_document::ClipContent::Automation { target: peel_document::AutomationTarget::TrackGain { track } | peel_document::AutomationTarget::TrackPan { track }, .. } if *track == tid));
+                }
+            });
+            if ws.focus == Some(Focus::Track(tid)) {
+                ws.focus = None;
+            }
+        }
+        _ => {}
+    }
+    if let Some(name) = crate::rename::show(ui, W::new(("strip-rename", tid))) {
+        s.doc.edit("Rename mixer track", |p| {
+            if let Some(t) = p.mixer.track_mut(tid) {
+                t.name = name;
+            }
+        });
     }
 }
