@@ -17,6 +17,8 @@ log.workspace = true
 pollster.workspace = true
 thiserror.workspace = true
 png = "0.18"
+accesskit = "0.25.2"
+accesskit_winit = "0.34.2"
 
 [dev-dependencies]
 env_logger.workspace = true

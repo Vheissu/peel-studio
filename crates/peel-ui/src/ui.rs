@@ -12,6 +12,8 @@ use std::hash::{Hash, Hasher};
 
 use winit::window::CursorIcon;
 
+use crate::a11y::A11y;
+use crate::focus::{Adjust, FocusStop};
 use crate::geom::{Color, Rect, Vec2, vec2};
 use crate::input::{Button, Input};
 use crate::scene::{Align, LayerId, Scene};
@@ -69,6 +71,8 @@ pub struct Response {
     pub released: bool,
     /// A value changed this frame (set by value widgets).
     pub changed: bool,
+    /// The widget holds keyboard focus (Tab or assistive technology).
+    pub focused: bool,
 }
 
 impl Response {
@@ -80,6 +84,7 @@ impl Response {
         self.secondary_clicked |= o.secondary_clicked;
         self.changed |= o.changed;
         self.dragging |= o.dragging;
+        self.focused |= o.focused;
         self
     }
 }
@@ -109,15 +114,29 @@ pub struct Ui {
     hover: Option<Id>,
     active: Option<Id>,
     active_drag_dist: f32,
-    focus: Option<Id>,
+    pub(crate) focus: Option<Id>,
+    /// Keyboard focus (Tab or assistive technology), see `focus.rs`.
+    pub(crate) kb_focus: Option<Id>,
+    pub(crate) kb_entered: Option<Id>,
+    pub(crate) kb_target: Option<Id>,
+    pub(crate) kb_adjust: Adjust,
+    pub(crate) kb_activate: bool,
+    pub(crate) focus_stops: Vec<FocusStop>,
+    pub(crate) prev_focus_stops: Vec<FocusStop>,
+    pub(crate) a11y: A11y,
     state: HashMap<Id, Box<dyn Any>>,
     anims: HashMap<Id, Anim>,
     cursor: CursorIcon,
     repaint: bool,
     tooltip: Option<(Id, String)>,
     hover_since: (Option<Id>, f64),
-    popup: Option<(Id, Rect)>,
+    pub(crate) popup: Option<(Id, Rect)>,
     popup_opened_this_frame: bool,
+    /// Keyboard focus before the popup took it, restored when it closes.
+    popup_return_focus: Option<Id>,
+    /// The popup was opened from the keyboard: focus its first row.
+    popup_focus_pending: bool,
+    popup_took_focus: bool,
     dnd: Option<DragPayload>,
     dnd_dropped: bool,
 }
@@ -138,6 +157,14 @@ impl Ui {
             active: None,
             active_drag_dist: 0.0,
             focus: None,
+            kb_focus: None,
+            kb_entered: None,
+            kb_target: None,
+            kb_adjust: Adjust::default(),
+            kb_activate: false,
+            focus_stops: Vec::new(),
+            prev_focus_stops: Vec::new(),
+            a11y: A11y::default(),
             state: HashMap::new(),
             anims: HashMap::new(),
             cursor: CursorIcon::Default,
@@ -146,6 +173,9 @@ impl Ui {
             hover_since: (None, 0.0),
             popup: None,
             popup_opened_this_frame: false,
+            popup_return_focus: None,
+            popup_focus_pending: false,
+            popup_took_focus: false,
             dnd: None,
             dnd_dropped: false,
         }
@@ -161,6 +191,9 @@ impl Ui {
         self.input.set_scale(scale);
         std::mem::swap(&mut self.hits, &mut self.prev_hits);
         self.hits.clear();
+        std::mem::swap(&mut self.focus_stops, &mut self.prev_focus_stops);
+        self.focus_stops.clear();
+        self.a11y.begin_frame();
         self.cursor = CursorIcon::Default;
         self.repaint = false;
         self.tooltip = None;
@@ -192,9 +225,10 @@ impl Ui {
             let outside = self.input.pressed.iter().any(|p| *p)
                 && self.input.pointer.is_none_or(|p| !r.contains(p));
             if outside {
-                self.popup = None;
+                self.dismiss_popup();
             }
         }
+        self.process_keyboard();
     }
 
     pub fn end_frame(&mut self) {
@@ -213,10 +247,12 @@ impl Ui {
                     && k.key == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
             });
             if esc {
-                self.popup = None;
+                self.dismiss_popup();
                 self.repaint = true;
             }
         }
+        self.finish_keyboard();
+        self.a11y_end_frame();
         self.text.end_frame();
         self.input.end_frame();
     }
@@ -308,6 +344,10 @@ impl Ui {
         self.focus.is_some()
     }
 
+    pub(crate) fn focus_id(&self) -> Option<Id> {
+        self.focus
+    }
+
     // ---- persistent widget state ----
 
     pub fn state<T: 'static + Default>(&mut self, id: Id) -> &mut T {
@@ -384,6 +424,7 @@ impl Ui {
         if hovered {
             self.repaint |= self.input.had_event;
         }
+        self.interact_extras(id, &mut r);
         r
     }
 
@@ -536,7 +577,13 @@ impl Ui {
 
     pub fn with_layer<R>(&mut self, layer: LayerId, f: impl FnOnce(&mut Ui) -> R) -> R {
         let prev = self.scene.set_layer(layer);
+        // Widgets on another layer (popups) are not children of the widget
+        // that is open on this one.
+        let stack = (layer != prev).then(|| self.a11y.clear_stack());
         let r = f(self);
+        if let Some(stack) = stack {
+            self.a11y.restore_stack(stack);
+        }
         self.scene.set_layer(prev);
         r
     }
@@ -552,6 +599,7 @@ impl Ui {
 
     /// Shows `text` after the pointer rests on the response for a moment.
     pub fn tooltip(&mut self, r: &Response, text: &str) {
+        self.a11y_tooltip(r.id, text);
         if r.hovered && self.active.is_none() && self.popup.is_none() && self.dnd.is_none() {
             let rest = self.time - self.hover_since.1;
             if rest > 0.55 {
@@ -603,11 +651,36 @@ impl Ui {
         self.popup = Some((id, rect));
         self.popup_opened_this_frame = true;
         self.repaint = true;
+        // Opened from the keyboard: the popup takes focus, and gives it
+        // back to the opener when it closes.
+        self.popup_return_focus = self.kb_focus;
+        self.popup_focus_pending = self.kb_focus.is_some();
+        self.popup_took_focus = false;
     }
 
     pub fn close_popup(&mut self) {
-        self.popup = None;
+        self.dismiss_popup();
         self.repaint = true;
+    }
+
+    fn dismiss_popup(&mut self) {
+        self.popup = None;
+        if std::mem::take(&mut self.popup_took_focus) {
+            let back = self.popup_return_focus.take();
+            self.set_kb_focus(back);
+        }
+        self.popup_focus_pending = false;
+    }
+
+    /// Moves keyboard focus into a popup that was opened from the keyboard.
+    /// `first` is its first focusable row.
+    pub(crate) fn popup_take_focus(&mut self, first: Option<Id>) {
+        if std::mem::take(&mut self.popup_focus_pending)
+            && let Some(id) = first
+        {
+            self.popup_took_focus = true;
+            self.set_kb_focus(Some(id));
+        }
     }
 
     pub fn is_popup_open(&self, id: Id) -> bool {

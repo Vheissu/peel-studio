@@ -6,7 +6,12 @@ use std::f32::consts::PI;
 use winit::keyboard::{Key, NamedKey};
 use winit::window::CursorIcon;
 
+use accesskit::Action;
+
+use crate::a11y::{RANK_ICON, RANK_TEXT, Role, Semantics, adjust_norm};
+use crate::focus::FocusKind;
 use crate::geom::{Color, Rect, Vec2, vec2};
+use crate::icons;
 use crate::input::Button;
 use crate::scene::{Align, LayerId};
 use crate::text::TextStyle;
@@ -137,7 +142,14 @@ struct MeterState {
     level: [f32; 2],
     hold: [f32; 2],
     hold_time: [f64; 2],
+    /// Level last reported to assistive technology, in whole dB steps, and
+    /// when. Reported rarely so a moving meter does not flood the reader.
+    spoken_db: Option<i32>,
+    spoken_at: f64,
 }
+
+/// Keyboard step of a splitter, in logical pixels.
+const SPLITTER_STEP: f32 = 16.0;
 
 /// Linear peak to a 0..=1 meter position (-60 dB .. +6 dB).
 pub fn meter_pos(peak: f32) -> f32 {
@@ -154,6 +166,10 @@ impl Ui {
     /// Text button.
     pub fn button(&mut self, id: Id, r: Rect, label: &str) -> Response {
         let resp = self.interact(id, r);
+        self.focusable(id, r, FocusKind::Activate);
+        self.a11y_node(id, r, RANK_TEXT, || {
+            Semantics::new(Role::Button).label(label)
+        });
         let t = self.theme.clone();
         let hot = self.animate_bool(id, resp.hovered);
         let fill = if resp.active {
@@ -166,12 +182,17 @@ impl Ui {
         if resp.hovered {
             self.set_cursor(CursorIcon::Pointer);
         }
+        self.focus_ring(id, r, t.radius_m);
         resp
     }
 
     /// Primary (amber) button.
     pub fn button_primary(&mut self, id: Id, r: Rect, label: &str) -> Response {
         let resp = self.interact(id, r);
+        self.focusable(id, r, FocusKind::Activate);
+        self.a11y_node(id, r, RANK_TEXT, || {
+            Semantics::new(Role::Button).label(label)
+        });
         let t = self.theme.clone();
         let hot = self.animate_bool(id, resp.hovered);
         let fill = if resp.active {
@@ -184,6 +205,7 @@ impl Ui {
         if resp.hovered {
             self.set_cursor(CursorIcon::Pointer);
         }
+        self.focus_ring(id, r, t.radius_m);
         resp
     }
 
@@ -197,6 +219,8 @@ impl Ui {
         on_color: Option<Color>,
     ) -> Response {
         let resp = self.interact(id, r);
+        self.focusable(id, r, FocusKind::Activate);
+        self.describe_icon_button(id, r, icon, on);
         let t = self.theme.clone();
         let hot = self.animate_bool(id, resp.hovered);
         let accent = on_color.unwrap_or(t.accent);
@@ -216,6 +240,7 @@ impl Ui {
         if resp.hovered {
             self.set_cursor(CursorIcon::Pointer);
         }
+        self.focus_ring(id, r, t.radius_m);
         resp
     }
 
@@ -230,6 +255,8 @@ impl Ui {
         size: f32,
     ) -> Response {
         let resp = self.interact(id, r);
+        self.focusable(id, r, FocusKind::Activate);
+        self.describe_icon_button(id, r, icon, on);
         let t = self.theme.clone();
         let hot = self.animate_bool(id, resp.hovered);
         if on {
@@ -248,12 +275,32 @@ impl Ui {
         if resp.hovered {
             self.set_cursor(CursorIcon::Pointer);
         }
+        self.focus_ring(id, r, t.radius_m);
         resp
+    }
+
+    /// An icon button is named after its icon until a tooltip or an explicit
+    /// name says better. It reads as pressed when `on`.
+    fn describe_icon_button(&mut self, id: Id, r: Rect, icon: &str, on: bool) {
+        self.a11y_node(id, r, RANK_ICON, || {
+            let mut s = Semantics::new(Role::Button);
+            if on {
+                s = s.toggled(true);
+            }
+            match icons::name(icon) {
+                Some(n) => s.label(n),
+                None => s,
+            }
+        });
     }
 
     /// Small round LED switch.
     pub fn led(&mut self, id: Id, r: Rect, on: bool, color: Color) -> Response {
         let resp = self.interact(id, r);
+        self.focusable(id, r, FocusKind::Activate);
+        self.a11y_node(id, r, RANK_ICON, || {
+            Semantics::new(Role::Switch).toggled(on)
+        });
         let t = self.theme.clone();
         let c = r.center();
         let rad = (r.w.min(r.h) * 0.5 - 1.0).clamp(3.0, 6.0);
@@ -271,6 +318,7 @@ impl Ui {
         if resp.hovered {
             self.set_cursor(CursorIcon::Pointer);
         }
+        self.focus_ring(id, r, r.w.min(r.h) * 0.5);
         resp
     }
 
@@ -281,6 +329,8 @@ impl Ui {
         let inner = r.shrink(2.0);
         let cells = inner.columns(options.len(), 2.0);
         let mut changed = false;
+        self.a11y_node(id, r, RANK_TEXT, || Semantics::new(Role::RadioGroup));
+        self.a11y_push(id);
         let sel_x = self.animate(id.with("sel"), *selected as f32, 22.0);
         if let Some(first) = cells.first() {
             let step = first.w + 2.0;
@@ -290,8 +340,38 @@ impl Ui {
             };
             self.scene.rect(sr, t.radius_s, t.control_hover);
         }
+        let mut refocus = None;
         for (i, (cell, label)) in cells.iter().zip(options).enumerate() {
-            let resp = self.interact(id.with(i), *cell);
+            let seg = id.with(i);
+            let resp = self.interact(seg, *cell);
+            // Only the selected option is a tab stop; arrow keys move the
+            // selection (and focus) like a radio group.
+            if *selected == i {
+                self.focusable(seg, *cell, FocusKind::Choice);
+                let steps = self.take_adjust(seg).steps;
+                if steps != 0 && !options.is_empty() {
+                    let n = options.len() as i32;
+                    let next = (i as i32 + steps).rem_euclid(n) as usize;
+                    if next != i {
+                        refocus = Some(next);
+                    }
+                }
+            }
+            let is_icon = label
+                .chars()
+                .next()
+                .is_some_and(|c| ('\u{e000}'..='\u{f8ff}').contains(&c));
+            let selected_now = *selected == i;
+            self.a11y_node(seg, *cell, RANK_TEXT, || {
+                let name: &str = if is_icon {
+                    icons::name(label).unwrap_or("")
+                } else {
+                    label
+                };
+                Semantics::new(Role::RadioButton)
+                    .label(name)
+                    .toggled(selected_now)
+            });
             if resp.clicked && *selected != i {
                 *selected = i;
                 changed = true;
@@ -303,11 +383,7 @@ impl Ui {
             } else {
                 t.text_dim
             };
-            if label
-                .chars()
-                .next()
-                .is_some_and(|c| ('\u{e000}'..='\u{f8ff}').contains(&c))
-            {
+            if is_icon {
                 self.icon(*cell, label, 15.0, color);
             } else {
                 self.text(*cell, label, t.label, color, Align::Center);
@@ -315,7 +391,14 @@ impl Ui {
             if resp.hovered {
                 self.set_cursor(CursorIcon::Pointer);
             }
+            self.focus_ring(seg, *cell, t.radius_s);
         }
+        if let Some(next) = refocus {
+            *selected = next;
+            changed = true;
+            self.set_kb_focus(Some(id.with(next)));
+        }
+        self.a11y_pop(id);
         changed
     }
 
@@ -334,6 +417,11 @@ impl Ui {
         bipolar: bool,
     ) -> Response {
         let mut resp = self.interact(id, r);
+        self.focusable(id, r, FocusKind::Adjust);
+        let adj = self.take_adjust(id);
+        if adjust_norm(&adj, norm, default) {
+            resp.changed = true;
+        }
         if resp.double_clicked {
             *norm = default;
             resp.changed = true;
@@ -355,7 +443,23 @@ impl Ui {
             self.set_cursor(CursorIcon::NsResize);
         }
         self.draw_knob(id, r, *norm, color, bipolar, resp.hovered || resp.active);
+        self.focus_ring(id, r, r.w.min(r.h) * 0.5);
+        self.describe_norm(id, r, *norm, None);
         resp
+    }
+
+    /// Describes a 0..=1 control as a slider reporting percent.
+    fn describe_norm(&mut self, id: Id, r: Rect, norm: f32, vertical: Option<bool>) {
+        self.a11y_node(id, r, 0, || {
+            let pct = f64::from(norm.clamp(0.0, 1.0)) * 100.0;
+            let mut s = Semantics::new(Role::Slider)
+                .numeric(pct, 0.0, 100.0, 1.0)
+                .value(format!("{pct:.0}%"));
+            if let Some(v) = vertical {
+                s = s.vertical(v);
+            }
+            s
+        });
     }
 
     pub fn draw_knob(
@@ -410,6 +514,11 @@ impl Ui {
         color: Color,
     ) -> Response {
         let mut resp = self.interact(id, r);
+        self.focusable(id, r, FocusKind::Adjust);
+        let adj = self.take_adjust(id);
+        if adjust_norm(&adj, norm, default) {
+            resp.changed = true;
+        }
         let cap_h = 22.0;
         let travel = (r.h - cap_h).max(1.0);
         if resp.double_clicked {
@@ -496,6 +605,8 @@ impl Ui {
             1.0,
             t.text.alpha(0.85),
         );
+        self.focus_ring(id, r, t.radius_m);
+        self.describe_norm(id, r, *norm, Some(true));
         resp
     }
 
@@ -509,6 +620,11 @@ impl Ui {
         color: Color,
     ) -> Response {
         let mut resp = self.interact(id, r);
+        self.focusable(id, r, FocusKind::Adjust);
+        let adj = self.take_adjust(id);
+        if adjust_norm(&adj, norm, default) {
+            resp.changed = true;
+        }
         if resp.double_clicked {
             *norm = default;
             resp.changed = true;
@@ -540,6 +656,8 @@ impl Ui {
         if resp.hovered {
             self.set_cursor(CursorIcon::EwResize);
         }
+        self.focus_ring(id, r, t.radius_s);
+        self.describe_norm(id, r, *norm, Some(false));
         resp
     }
 
@@ -558,9 +676,18 @@ impl Ui {
         color: Color,
         fmt: impl Fn(f64) -> String,
     ) -> Response {
+        // Keyboard: arrow keys step by about five pixels of dragging, and
+        // Enter types a value.
+        let step = (per_px * 5.0).max(f64::EPSILON);
+        self.focusable(id, r, FocusKind::Spin);
+        self.a11y_node(id, r, 0, || {
+            Semantics::new(Role::SpinButton)
+                .numeric(*value, min, max, step)
+                .value(fmt(*value))
+        });
         if self.state::<TextEditState>(id.with("edit")).editing {
             let mut s = std::mem::take(&mut self.state::<TextEditState>(id.with("edit")).buffer);
-            let resp = self.text_edit_inner(id.with("edit"), r, &mut s, style);
+            let resp = self.text_edit_inner(id.with("edit"), id, r, &mut s, style);
             let done = resp.changed;
             self.state::<TextEditState>(id.with("edit")).buffer = s.clone();
             if done {
@@ -590,7 +717,15 @@ impl Ui {
         }
         let mut resp = self.interact(id, r);
         let t = self.theme.clone();
-        if resp.double_clicked {
+        let adj = self.take_adjust(id);
+        if adj.any() {
+            let nv = adj.apply(*value, min, max, step, None, 1.0);
+            if nv != *value {
+                *value = nv;
+                resp.changed = true;
+            }
+        }
+        if resp.double_clicked || self.take_activate(id) {
             let text = fmt(*value);
             let st = self.state::<TextEditState>(id.with("edit"));
             st.editing = true;
@@ -620,6 +755,7 @@ impl Ui {
         }
         let s = fmt(*value);
         self.text(r, &s, style, color, Align::Center);
+        self.focus_ring(id, r, t.radius_s);
         resp
     }
 
@@ -639,6 +775,21 @@ impl Ui {
     pub fn text_edit(&mut self, id: Id, r: Rect, text: &mut String, placeholder: &str) -> Response {
         let style = self.theme.body;
         let t = self.theme.clone();
+        self.focusable(id, r, FocusKind::Text);
+        self.a11y_node(id, r, RANK_ICON, || {
+            let mut s = Semantics::new(Role::TextInput).value(text.as_str());
+            if !placeholder.is_empty() {
+                s = s.placeholder(placeholder).label(placeholder);
+            }
+            s
+        });
+        // Tabbing (or an assistive technology) onto the field, or Enter on
+        // it, starts editing.
+        let entered = self.take_kb_entered(id);
+        let activated = self.take_activate(id);
+        if !self.has_focus(id) && (entered || activated) {
+            self.focus_text_edit(id, true);
+        }
         let focused = self.has_focus(id);
         self.scene.rect_stroke(
             r,
@@ -660,7 +811,7 @@ impl Ui {
                 Align::Start,
             );
         }
-        let resp = self.text_edit_inner(id, r.shrink2(8.0, 0.0), text, style);
+        let mut resp = self.text_edit_inner(id, id, r.shrink2(8.0, 0.0), text, style);
         if !focused && resp.pressed {
             self.request_focus(id);
             let n = text.chars().count();
@@ -668,12 +819,39 @@ impl Ui {
             st.cursor = n;
             st.editing = true;
         }
+        // Text sent by an assistive technology: *SetValue* replaces the
+        // content and commits it; *ReplaceSelectedText* types at the cursor.
+        if let Some(a) = self.take_action(id, Action::SetValue)
+            && let Some(accesskit::ActionData::Value(v)) = a.data
+        {
+            *text = v.to_string();
+            resp.changed = true;
+        }
+        if let Some(a) = self.take_action(id, Action::ReplaceSelectedText)
+            && let Some(accesskit::ActionData::Value(v)) = a.data
+        {
+            let st = self.state::<TextEditState>(id);
+            if st.select_all || !st.editing {
+                text.clear();
+                st.cursor = 0;
+                st.select_all = false;
+            }
+            let at = st.cursor.min(text.chars().count());
+            let byte = text.char_indices().nth(at).map_or(text.len(), |(b, _)| b);
+            text.insert_str(byte, &v);
+            st.cursor = at + v.chars().count();
+        }
+        if !focused {
+            self.focus_ring(id, r, t.radius_m);
+        }
         resp
     }
 
+    /// `nav_from` is the focus stop Tab moves on from when the field commits.
     fn text_edit_inner(
         &mut self,
         id: Id,
+        nav_from: Id,
         r: Rect,
         text: &mut String,
         style: TextStyle,
@@ -712,6 +890,7 @@ impl Ui {
                 .map(|k| k.key.clone())
                 .collect();
             let command = self.input.modifiers.command();
+            let mut tab = None;
             for k in &keys {
                 match k {
                     Key::Named(NamedKey::Backspace) => {
@@ -758,12 +937,22 @@ impl Ui {
                         let st = self.state::<TextEditState>(id);
                         st.editing = false;
                     }
+                    // Tab commits like Enter and moves on.
+                    Key::Named(NamedKey::Tab) => {
+                        resp.changed = true;
+                        self.clear_focus();
+                        tab = Some(self.input.modifiers.shift);
+                    }
                     Key::Character(c) if command && c.as_str() == "a" => select_all = true,
                     _ => {}
                 }
             }
             for k in self.input.keys.iter_mut() {
                 k.consumed = true;
+            }
+            if let Some(back) = tab {
+                self.set_kb_focus(Some(nav_from));
+                self.kb_move(if back { -1 } else { 1 });
             }
             let st = self.state::<TextEditState>(id);
             st.cursor = st_cursor;
@@ -838,6 +1027,9 @@ impl Ui {
         if animating {
             self.request_repaint();
         }
+        if self.accessibility_active() {
+            self.describe_meter(id, r, peaks.0.max(peaks.1), now);
+        }
         let bars = r.columns(2, 2.0);
         for (i, b) in bars.iter().enumerate() {
             self.scene.rect(*b, 1.5, t.bg);
@@ -880,6 +1072,36 @@ impl Ui {
                 );
             }
         }
+    }
+
+    /// A level meter for assistive technology: whole 3 dB steps, reported at
+    /// most once a second so a moving meter does not flood the reader.
+    fn describe_meter(&mut self, id: Id, r: Rect, peak: f32, now: f64) {
+        let db = if peak <= 0.001 {
+            -60
+        } else {
+            ((20.0 * peak.log10() / 3.0).round() as i32 * 3).clamp(-60, 6)
+        };
+        let st = self.state::<MeterState>(id);
+        let speak = match st.spoken_db {
+            None => true,
+            Some(old) => old != db && now - st.spoken_at >= 1.0,
+        };
+        if speak {
+            st.spoken_db = Some(db);
+            st.spoken_at = now;
+        }
+        let shown = st.spoken_db.unwrap_or(-60);
+        self.a11y_node(id, r, 0, || {
+            let text = if shown <= -60 {
+                "silent".to_string()
+            } else {
+                format!("{shown} dB")
+            };
+            Semantics::new(Role::Meter)
+                .numeric(f64::from(shown), -60.0, 6.0, 3.0)
+                .value(text)
+        });
     }
 
     // ---- scrolling and splitting ----
@@ -959,6 +1181,14 @@ impl Ui {
     /// A draggable divider. Returns the pointer delta along its axis.
     pub fn splitter(&mut self, id: Id, r: Rect, vertical_bar: bool) -> f32 {
         let resp = self.interact(id, r);
+        self.focusable(id, r, FocusKind::Spin);
+        self.a11y_node(id, r, 0, || {
+            Semantics::new(Role::Splitter).vertical(vertical_bar)
+        });
+        // Arrow keys and assistive technology nudge it by a fixed step.
+        let adj = self.take_adjust(id);
+        let fine = if adj.fine { 0.25 } else { 1.0 };
+        let nudge = (adj.steps as f32 + adj.pages as f32 * 4.0) * SPLITTER_STEP * fine;
         let t = self.theme.clone();
         if resp.hovered || resp.active {
             self.set_cursor(if vertical_bar {
@@ -966,6 +1196,8 @@ impl Ui {
             } else {
                 CursorIcon::NsResize
             });
+        }
+        if resp.hovered || resp.active || resp.focused {
             let line = if vertical_bar {
                 Rect {
                     x: r.center().x - 1.0,
@@ -982,10 +1214,10 @@ impl Ui {
             self.scene.rect(
                 line,
                 0.0,
-                t.focus.alpha(if resp.active { 0.8 } else { 0.4 }),
+                t.focus.alpha(if resp.active || resp.focused { 0.8 } else { 0.4 }),
             );
         }
-        if resp.dragging {
+        let dragged = if resp.dragging {
             if vertical_bar {
                 resp.drag_delta.x
             } else {
@@ -993,7 +1225,8 @@ impl Ui {
             }
         } else {
             0.0
-        }
+        };
+        dragged + nudge
     }
 
     // ---- menus ----
@@ -1038,6 +1271,15 @@ impl Ui {
         self.with_layer(LayerId::POPUP, |ui| {
             ui.scene.push_clip_absolute(Rect::EVERYTHING);
             ui.interact(id.with("bg"), r);
+            // Not `id` itself: the button that opened the menu may use it.
+            let node = id.with("a11y-menu");
+            ui.a11y_node(node, r, 0, || Semantics::new(Role::Menu).vertical(true));
+            ui.a11y_push(node);
+            // Opened from the keyboard: start on the first usable row.
+            let first = items.iter().enumerate().find_map(|(i, it)| {
+                matches!(it, MenuItem::Item { enabled: true, .. }).then(|| id.with(("item", i)))
+            });
+            ui.popup_take_focus(first);
             ui.scene
                 .shadow(r.translate(vec2(0.0, 6.0)), t.radius_l, 14.0, t.shadow);
             ui.scene
@@ -1058,9 +1300,32 @@ impl Ui {
                             w: r.w - 8.0,
                             h: row_h,
                         };
-                        let resp = ui.interact(id.with(("item", i)), row);
-                        if resp.hovered && *enabled {
+                        let item_id = id.with(("item", i));
+                        let resp = ui.interact(item_id, row);
+                        if *enabled {
+                            ui.focusable(item_id, row, FocusKind::Menu);
+                        }
+                        ui.a11y_node(item_id, row, RANK_TEXT, || {
+                            let role = if *checked {
+                                Role::MenuItemCheckBox
+                            } else {
+                                Role::MenuItem
+                            };
+                            let mut s = Semantics::new(role)
+                                .label(label.as_str())
+                                .disabled(!*enabled);
+                            if *checked {
+                                s = s.toggled(true);
+                            }
+                            if let Some(sc) = shortcut {
+                                s = s.shortcut(sc.as_str());
+                            }
+                            s
+                        });
+                        if (resp.hovered || resp.focused) && *enabled {
                             ui.scene.rect(row, t.radius_s, t.control_hover);
+                        }
+                        if resp.hovered && *enabled {
                             ui.set_cursor(CursorIcon::Pointer);
                         }
                         let tc = if *enabled { t.text } else { t.text_faint };
@@ -1098,6 +1363,7 @@ impl Ui {
                                 Align::End,
                             );
                         }
+                        ui.focus_ring(item_id, row, t.radius_s);
                         if resp.clicked && *enabled {
                             clicked = Some(i);
                         }
@@ -1123,11 +1389,15 @@ impl Ui {
                             w: r.w - 24.0,
                             h: 24.0,
                         };
+                        ui.a11y_node(id.with(("heading", i)), row, RANK_TEXT, || {
+                            Semantics::new(Role::Label).label(label.as_str())
+                        });
                         ui.text(row, label, t.caption, t.text_faint, Align::Start);
                         cy += 24.0;
                     }
                 }
             }
+            ui.a11y_pop(node);
             ui.scene.pop_clip();
         });
         if clicked.is_some() {
@@ -1156,7 +1426,15 @@ impl Ui {
             ui.scene
                 .rect_stroke(r, t.radius_l, t.raised, 1.0, t.line_strong);
             ui.scene.push_clip(r);
+            let node = id.with("a11y-panel");
+            ui.a11y_node(node, r, 0, || Semantics::new(Role::Dialog));
+            ui.a11y_push(node);
+            let first = ui.focus_stops.len();
             let out = f(ui, r);
+            // Opened from the keyboard: land on the first control inside.
+            let take = ui.focus_stops.get(first).map(|s| s.id);
+            ui.popup_take_focus(take);
+            ui.a11y_pop(node);
             ui.scene.pop_clip();
             ui.scene.pop_clip();
             out
