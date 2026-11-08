@@ -4,7 +4,7 @@
 //! and loop iteration (`a + (p - o + k*L)`), so repeated instances never
 //! accumulate rounding drift. Every realized note gets a unique voice id.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -54,23 +54,12 @@ pub fn compile(p: &Project, ctx: &CompileContext) -> (RenderPlan, PlanIndex) {
         index.tracks.insert(p.mixer.tracks[ti].id, pi as u16);
     }
     let any_solo = p.mixer.tracks.iter().any(|t| t.solo);
-    // A track is audible under solo if it is soloed or feeds a soloed track.
-    let feeds_solo = |id: Id| -> bool {
-        let mut cur = Some(id);
-        let mut guard = 0;
-        while let Some(c) = cur {
-            let Some(t) = p.mixer.track(c) else { break };
-            if t.solo {
-                return true;
-            }
-            if c == master_id || guard > 64 {
-                break;
-            }
-            cur = Some(t.output.unwrap_or(master_id));
-            guard += 1;
-        }
-        false
+    let audible = if any_solo {
+        solo_audible(p)
+    } else {
+        HashSet::new()
     };
+    let feeds_solo = |id: Id| audible.contains(&id);
     let tracks: Vec<TrackRoute> = order
         .iter()
         .map(|&ti| {
@@ -447,6 +436,50 @@ pub fn same_structure(a: &RenderPlan, b: &RenderPlan) -> bool {
                 && x.sends.len() == y.sends.len()
                 && x.sends.iter().zip(&y.sends).all(|(m, n)| m.dest == n.dest)
         })
+}
+
+/// Tracks heard while something is soloed: each soloed track, everything
+/// that feeds it, and everything it feeds through outputs and sends (buses,
+/// returns, the master). Other tracks are muted at their own faders, so an
+/// unrelated source cannot leak through a shared bus or return. Sidechain
+/// keys are not audible connections and keep working regardless.
+fn solo_audible(p: &Project) -> HashSet<Id> {
+    let audible_feeds = |id: Id| -> Vec<Id> {
+        let Some(t) = p.mixer.track(id) else {
+            return Vec::new();
+        };
+        let mut v = Vec::new();
+        if id != p.mixer.tracks[0].id {
+            v.push(t.output.unwrap_or(p.mixer.tracks[0].id));
+        }
+        v.extend(t.sends.iter().map(|s| s.target));
+        v
+    };
+    let mut out = HashSet::new();
+    for s in p.mixer.tracks.iter().filter(|t| t.solo) {
+        // Downstream.
+        let mut stack = vec![s.id];
+        while let Some(c) = stack.pop() {
+            if out.insert(c) {
+                stack.extend(audible_feeds(c));
+            }
+        }
+        // Upstream: every track whose audible path reaches the soloed one.
+        for t in &p.mixer.tracks {
+            let mut stack = vec![t.id];
+            let mut seen = HashSet::new();
+            while let Some(c) = stack.pop() {
+                if c == s.id {
+                    out.insert(t.id);
+                    break;
+                }
+                if seen.insert(c) {
+                    stack.extend(audible_feeds(c));
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Mixer tracks (indices into `p.mixer.tracks`) ordered so every track
@@ -1029,5 +1062,81 @@ mod tests {
             gain_db: 0.0,
         });
         assert!(peel_document::validate(&p).iter().any(|i| i.is_error()));
+    }
+
+    fn track(name: &str) -> MixerTrack {
+        MixerTrack {
+            id: Id::new(),
+            name: name.into(),
+            color: PALETTE[3],
+            gain_db: 0.0,
+            pan: 0.0,
+            muted: false,
+            solo: false,
+            inserts: vec![],
+            output: None,
+            sends: vec![],
+        }
+    }
+
+    /// Muted flags by track name under the project's solo settings.
+    fn muted(p: &Project) -> HashMap<String, bool> {
+        let (slots, meters) = ctx_for(p);
+        let (plan, index) = compile(
+            p,
+            &CompileContext {
+                mode: PlayMode::Song,
+                slots: &slots,
+                meters: &meters,
+                samples: &HashMap::new(),
+            },
+        );
+        p.mixer
+            .tracks
+            .iter()
+            .map(|t| {
+                (
+                    t.name.clone(),
+                    plan.tracks[index.tracks[&t.id] as usize].muted,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn solo_keeps_the_path_to_the_master_and_the_returns() {
+        // A and B both send to Verb; A plays through Bus; C is unrelated.
+        let (mut p, _, _) = project();
+        let (bus, verb, b, c) = (track("Bus"), track("Verb"), track("B"), track("C"));
+        let a = p.mixer.tracks[1].id;
+        p.mixer.tracks[1].output = Some(bus.id);
+        p.mixer.tracks[1].sends.push(peel_document::MixerSend {
+            target: verb.id,
+            gain_db: -6.0,
+        });
+        let mut b = b;
+        b.sends.push(peel_document::MixerSend {
+            target: verb.id,
+            gain_db: -6.0,
+        });
+        p.mixer.tracks.extend([bus, verb, b, c]);
+        assert!(peel_document::validate(&p).iter().all(|i| !i.is_error()));
+        p.mixer.track_mut(a).unwrap().solo = true;
+        let m = muted(&p);
+        assert!(!m["A"], "soloed");
+        assert!(!m["Bus"], "on the soloed track's way to the master");
+        assert!(!m["Verb"], "the soloed track's return");
+        assert!(
+            m["B"],
+            "another source on the shared return is muted, so it cannot leak"
+        );
+        assert!(m["C"]);
+        // Soloing the return brings in its sources.
+        p.mixer.track_mut(a).unwrap().solo = false;
+        let verb_id = p.mixer.tracks.iter().find(|t| t.name == "Verb").unwrap().id;
+        p.mixer.track_mut(verb_id).unwrap().solo = true;
+        let m = muted(&p);
+        assert!(!m["A"] && !m["B"] && !m["Verb"]);
+        assert!(m["C"]);
     }
 }
