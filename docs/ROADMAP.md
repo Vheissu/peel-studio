@@ -25,6 +25,8 @@ processing, persistence and tests all exist.
 | Packaging | macOS app bundle and DMG, release workflow for macOS, Windows and Linux | Done |
 | Hardware MIDI input | Live playing with sustain, device hotplug, note recording | Done |
 | Markers and arrangements | Arrangement markers, alternate arrangements, slice tool | Done |
+| Tempo and curves | Tempo changes and ramps in the Playlist, curved automation segments | Done |
+| Audio clips | Gain, reverse, normalize and routing in the inspector | Done |
 | Audio device selection | Choose output and buffer size | Done |
 | Accessibility | AccessKit tree, keyboard focus traversal, named controls | Done |
 | Automation | Clips for device parameters, track volume and pan | Done |
@@ -35,8 +37,7 @@ processing, persistence and tests all exist.
 ## Phase 2: recording and deeper editing
 
 Take lanes and comping, sample and waveform editor, time stretching,
-tempo automation UI, automation curves (tension), dedicated Core Audio /
-WASAPI / ASIO backends, engine process isolation.
+dedicated Core Audio / WASAPI / ASIO backends, engine process isolation.
 
 ## Phase 3: plugins
 
