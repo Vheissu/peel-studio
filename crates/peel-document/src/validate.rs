@@ -176,6 +176,34 @@ pub fn validate(p: &Project) -> Vec<Issue> {
                         issues.push(Issue::error("audio clip with a non-finite gain"));
                     }
                 }
+                ClipContent::Automation { target, points } => {
+                    let target_ok = match target {
+                        crate::AutomationTarget::Param { device, .. } => {
+                            p.channels.iter().any(|c| c.device.id == *device)
+                                || p.mixer
+                                    .tracks
+                                    .iter()
+                                    .any(|t| t.inserts.iter().any(|d| d.id == *device))
+                        }
+                        crate::AutomationTarget::TrackGain { track }
+                        | crate::AutomationTarget::TrackPan { track } => track_ids.contains(track),
+                    };
+                    if !target_ok {
+                        // Kept with its envelope so it can be rebound.
+                        issues.push(Issue::warning(
+                            "automation clip targets a missing parameter",
+                        ));
+                    }
+                    if points
+                        .iter()
+                        .any(|pt| !(0.0..=1.0).contains(&pt.value) || !pt.value.is_finite())
+                    {
+                        issues.push(Issue::error("automation point out of range"));
+                    }
+                    if points.windows(2).any(|w| w[1].position < w[0].position) {
+                        issues.push(Issue::error("automation points out of order"));
+                    }
+                }
             }
         }
     }

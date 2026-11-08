@@ -30,6 +30,7 @@ enum Drag {
     TrimStart,
     FadeIn,
     FadeOut,
+    AutoPoint,
 }
 
 /// Which part of a clip the pointer is over.
@@ -40,10 +41,14 @@ enum Part {
     Right,
     FadeIn,
     FadeOut,
+    /// The envelope area of an automation clip.
+    AutoBody,
 }
 
 #[derive(Clone, Default)]
 struct DragState {
+    /// Breakpoint being dragged in an automation clip.
+    auto_point: Option<usize>,
     kind: Drag,
     clip: Option<Clip>,
     /// Every clip being moved, as it was when the drag started.
@@ -643,6 +648,7 @@ fn clips(
                 {
                     Part::FadeOut
                 }
+                (ClipContent::Automation { .. }, false) => Part::AutoBody,
                 _ if p.x > cr.right() - edge => Part::Right,
                 _ if p.x < cr.x + edge => Part::Left,
                 _ => Part::Body,
@@ -654,6 +660,7 @@ fn clips(
         match (ws.playlist.tool, &hit) {
             (Tool::Erase, _) => ui.set_cursor(CursorIcon::Crosshair),
             (_, Some((_, Part::Body))) => ui.set_cursor(CursorIcon::Grab),
+            (_, Some((_, Part::AutoBody))) => ui.set_cursor(CursorIcon::Crosshair),
             (_, Some(_)) => ui.set_cursor(CursorIcon::EwResize),
             _ => {}
         }
@@ -674,6 +681,54 @@ fn clips(
         };
         match (ws.playlist.tool, hit.clone()) {
             (Tool::Erase, _) => st.kind = Drag::Erase,
+            (tool, Some((c, Part::AutoBody))) if tool != Tool::Erase => {
+                ws.playlist.selection.clear();
+                ws.playlist.selection.insert(c.id);
+                if let Some(lane) = lane_of.get(&c.track)
+                    && let ClipContent::Automation { points, .. } = &c.content
+                {
+                    let body = auto_body(clip_rect(v, *lane, &c));
+                    let near = points.iter().position(|pt| {
+                        let (x, y) = auto_point_xy(v, &c, body, pt);
+                        (x - p.x).abs() <= 7.0 && (y - p.y).abs() <= 7.0
+                    });
+                    let index = match near {
+                        Some(i) => i,
+                        None => {
+                            let grid = if ui.input.modifiers.alt {
+                                Time::new(1, 960)
+                            } else {
+                                auto_snap(snap)
+                            };
+                            let pos =
+                                Time::from_f64(beat - c.start.as_f64() + c.offset.as_f64(), 960)
+                                    .round_to(grid)
+                                    .max(Time::ZERO);
+                            let value = ((body.bottom() - p.y) / body.h).clamp(0.0, 1.0);
+                            let at = points.partition_point(|x| x.position <= pos);
+                            let cid = c.id;
+                            s.doc.edit_gesture(st.gesture, "Add automation point", |p| {
+                                if let Some(cl) =
+                                    p.arrangement_mut().clips.iter_mut().find(|x| x.id == cid)
+                                    && let ClipContent::Automation { points, .. } = &mut cl.content
+                                {
+                                    points.insert(
+                                        at,
+                                        peel_document::AutomationPoint {
+                                            position: pos,
+                                            value,
+                                        },
+                                    );
+                                }
+                            });
+                            at
+                        }
+                    };
+                    st.kind = Drag::AutoPoint;
+                    st.clip = Some(c);
+                    st.auto_point = Some(index);
+                }
+            }
             (_, Some((c, part))) => {
                 let edge = part != Part::Body;
                 if !ws.playlist.selection.contains(&c.id) {
@@ -732,6 +787,7 @@ fn clips(
                         Part::Left => Drag::TrimStart,
                         Part::FadeIn => Drag::FadeIn,
                         Part::FadeOut => Drag::FadeOut,
+                        Part::AutoBody => Drag::Move,
                     };
                     st.clip = Some(c);
                 }
@@ -765,7 +821,32 @@ fn clips(
 
     // Right click opens the clip menu.
     let menu_id = W::new("pl-clip-menu");
+    let mut deleted_point = false;
     if resp.secondary_clicked
+        && let Some((c, Part::AutoBody)) = &hit
+        && let Some(lane) = lane_of.get(&c.track)
+        && let ClipContent::Automation { points, .. } = &c.content
+        && let Some(p) = pointer
+    {
+        let body = auto_body(clip_rect(v, *lane, c));
+        if let Some(i) = points.iter().position(|pt| {
+            let (x, y) = auto_point_xy(v, c, body, pt);
+            (x - p.x).abs() <= 7.0 && (y - p.y).abs() <= 7.0
+        }) {
+            let cid = c.id;
+            s.doc.edit("Delete automation point", |p| {
+                if let Some(cl) = p.arrangement_mut().clips.iter_mut().find(|x| x.id == cid)
+                    && let ClipContent::Automation { points, .. } = &mut cl.content
+                    && points.len() > 1
+                {
+                    points.remove(i);
+                }
+            });
+            deleted_point = true;
+        }
+    }
+    if resp.secondary_clicked
+        && !deleted_point
         && let Some((c, _)) = &hit
     {
         ws.playlist.selection.clear();
@@ -790,7 +871,28 @@ fn clips(
             MenuItem::Separator,
             MenuItem::new("Delete clip").shortcut("Del"),
         ];
-        if let ClipContent::Audio { reversed, .. } = c.content {
+        if let ClipContent::Automation { .. } = c.content {
+            let items = [
+                MenuItem::new(if c.muted { "Unmute clip" } else { "Mute clip" }),
+                MenuItem::Separator,
+                MenuItem::new("Delete clip").shortcut("Del"),
+            ];
+            let cid = c.id;
+            match ui.menu(menu_id, at, &items) {
+                Some(0) => s
+                    .doc
+                    .edit(if c.muted { "Unmute clip" } else { "Mute clip" }, |p| {
+                        if let Some(x) = p.arrangement_mut().clips.iter_mut().find(|x| x.id == cid)
+                        {
+                            x.muted = !x.muted;
+                        }
+                    }),
+                Some(2) => s.doc.edit("Delete clip", |p| {
+                    p.arrangement_mut().clips.retain(|x| x.id != cid)
+                }),
+                _ => {}
+            }
+        } else if let ClipContent::Audio { reversed, .. } = c.content {
             let audio_items = [
                 MenuItem::new(if reversed { "Play forwards" } else { "Reverse" }),
                 MenuItem::new(if c.muted { "Unmute clip" } else { "Mute clip" }),
@@ -941,6 +1043,45 @@ fn clips(
                             }
                         });
                         ui.set_cursor(CursorIcon::Grabbing);
+                    }
+                }
+                Drag::AutoPoint => {
+                    if let (Some(orig), Some(i)) = (&st.clip, st.auto_point)
+                        && let Some(lane) = lane_of.get(&orig.track)
+                        && let ClipContent::Automation { points, .. } = &orig.content
+                    {
+                        let body = auto_body(clip_rect(v, *lane, orig));
+                        let grid = if ui.input.modifiers.alt {
+                            Time::new(1, 960)
+                        } else {
+                            auto_snap(snap)
+                        };
+                        let lo = if i > 0 {
+                            points[i - 1].position
+                        } else {
+                            Time::ZERO
+                        };
+                        let hi = points
+                            .get(i + 1)
+                            .map(|x| x.position)
+                            .unwrap_or(orig.offset + orig.length);
+                        let pos =
+                            Time::from_f64(beat - orig.start.as_f64() + orig.offset.as_f64(), 960)
+                                .round_to(grid)
+                                .clamp(lo, hi);
+                        let value = ((body.bottom() - p.y) / body.h).clamp(0.0, 1.0);
+                        let cid = orig.id;
+                        s.doc
+                            .edit_gesture(st.gesture, "Move automation point", |p| {
+                                if let Some(cl) =
+                                    p.arrangement_mut().clips.iter_mut().find(|x| x.id == cid)
+                                    && let ClipContent::Automation { points, .. } = &mut cl.content
+                                    && let Some(pt) = points.get_mut(i)
+                                {
+                                    pt.position = pos;
+                                    pt.value = value;
+                                }
+                            });
                     }
                 }
                 Drag::TrimStart => {
@@ -1136,6 +1277,26 @@ fn clips(
         let lane_muted_any = tracks.get(lane).is_some_and(|t| t.muted) || c.muted;
         let pattern = match c.content {
             ClipContent::Pattern { pattern } => pattern,
+            ClipContent::Automation {
+                ref target,
+                ref points,
+            } => {
+                let sel = ws.playlist.selection.contains(&c.id);
+                let hovered = hit.as_ref().is_some_and(|(h, _)| h.id == c.id);
+                draw_automation_clip(
+                    ui,
+                    v,
+                    c,
+                    cr,
+                    target,
+                    points,
+                    sel,
+                    hovered,
+                    lane_muted_any,
+                    s,
+                );
+                continue;
+            }
             ClipContent::Audio {
                 asset, reversed, ..
             } => {
@@ -1542,6 +1703,166 @@ fn draw_audio_clip(
                     Color::WHITE.alpha(0.9),
                 );
             }
+        }
+    }
+    ui.scene.pop_clip();
+    if sel {
+        ui.scene
+            .outline(cr, t.radius_s, 1.5, Color::WHITE.alpha(0.85));
+    }
+}
+
+/// The envelope area of an automation clip (below its header).
+fn auto_body(cr: Rect) -> Rect {
+    let header = 16.0f32.min(cr.h * 0.4);
+    Rect {
+        y: cr.y + header + 4.0,
+        h: (cr.h - header - 8.0).max(4.0),
+        ..cr
+    }
+}
+
+fn auto_point_xy(
+    v: &View,
+    c: &Clip,
+    body: Rect,
+    pt: &peel_document::AutomationPoint,
+) -> (f32, f32) {
+    let beat = (c.start + pt.position - c.offset).as_f64();
+    (v.x(beat), body.bottom() - pt.value * body.h)
+}
+
+/// Breakpoints snap four times finer than the playlist grid.
+fn auto_snap(snap: Time) -> Time {
+    snap.div_int(4).max(Time::new(1, 16))
+}
+
+/// A readable name for what an automation clip controls.
+pub fn automation_label(s: &Session, target: &peel_document::AutomationTarget) -> (String, Color) {
+    use peel_document::AutomationTarget as T;
+    let p = s.project();
+    match target {
+        T::Param { device, param } => {
+            let pname = peel_session::find_device(p, *device)
+                .and_then(|d| peel_devices::descriptor(&d.type_id))
+                .and_then(|d| d.param_by_key(param))
+                .map_or(param.as_str(), |pd| pd.name);
+            if let Some(ch) = p.channels.iter().find(|c| c.device.id == *device) {
+                return (format!("{} · {pname}", ch.name), col(ch.color));
+            }
+            if let Some(t) = p
+                .mixer
+                .tracks
+                .iter()
+                .find(|t| t.inserts.iter().any(|d| d.id == *device))
+            {
+                let dev = t
+                    .inserts
+                    .iter()
+                    .find(|d| d.id == *device)
+                    .and_then(|d| peel_devices::descriptor(&d.type_id))
+                    .map_or("", |d| d.name);
+                return (format!("{} {dev} · {pname}", t.name), col(t.color));
+            }
+            (format!("Missing · {pname}"), Color::hex(0x8E9AAB))
+        }
+        T::TrackGain { track } | T::TrackPan { track } => {
+            let what = if matches!(target, T::TrackGain { .. }) {
+                "Volume"
+            } else {
+                "Pan"
+            };
+            match p.mixer.track(*track) {
+                Some(t) => (format!("{} · {what}", t.name), col(t.color)),
+                None => (format!("Missing · {what}"), Color::hex(0x8E9AAB)),
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_automation_clip(
+    ui: &mut Ui,
+    v: &View,
+    c: &Clip,
+    cr: Rect,
+    target: &peel_document::AutomationTarget,
+    points: &[peel_document::AutomationPoint],
+    sel: bool,
+    hovered: bool,
+    muted: bool,
+    s: &Session,
+) {
+    let t = ui.theme.clone();
+    let (label, color) = automation_label(s, target);
+    ui.scene.rect(
+        cr,
+        t.radius_s,
+        t.panel.mix(color, if muted { 0.06 } else { 0.12 }),
+    );
+    let header = Rect {
+        h: 16.0f32.min(cr.h * 0.4),
+        ..cr
+    };
+    ui.scene.rect_ex(
+        header,
+        [t.radius_s, t.radius_s, 0.0, 0.0],
+        color.alpha(if muted { 0.3 } else { 0.55 }),
+        0.0,
+        Color::TRANSPARENT,
+    );
+    if cr.w > 26.0 {
+        ui.with_clip(header, |ui| {
+            let mut hr = header.shrink2(6.0, 0.0);
+            ui.icon(hr.cut_left(12.0), icons::WAVE_SINE, 11.0, t.text);
+            hr.cut_left(4.0);
+            ui.text(
+                hr,
+                &label,
+                t.caption.weight(peel_ui::FontWeight::SemiBold),
+                t.text,
+                Align::Start,
+            );
+        });
+    }
+    let body = auto_body(cr);
+    ui.scene.push_clip(cr);
+    ui.scene
+        .hline(cr.x, cr.right(), body.center().y, t.grid_step);
+    if !points.is_empty() {
+        let line = color.lighten(0.25).alpha(if muted { 0.4 } else { 1.0 });
+        let mut pts: Vec<peel_ui::Vec2> = points
+            .iter()
+            .map(|pt| {
+                let (x, y) = auto_point_xy(v, c, body, pt);
+                vec2(x, y)
+            })
+            .collect();
+        // Hold the first and last values to the clip edges.
+        if let (Some(f), Some(l)) = (pts.first().copied(), pts.last().copied()) {
+            pts.insert(0, vec2(cr.x, f.y));
+            pts.push(vec2(cr.right(), l.y));
+        }
+        for w in pts.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            let top = a.y.min(b.y);
+            let _ = top;
+            ui.scene.rect(
+                Rect {
+                    x: a.x,
+                    y: a.y.max(b.y),
+                    w: (b.x - a.x).max(0.0),
+                    h: body.bottom() - a.y.max(b.y),
+                },
+                0.0,
+                color.alpha(0.10),
+            );
+        }
+        ui.scene.polyline(&pts, 1.75, line);
+        for pt in points {
+            let (x, y) = auto_point_xy(v, c, body, pt);
+            let r = if hovered || sel { 4.0 } else { 3.0 };
+            ui.scene.circle_stroke(vec2(x, y), r, line, 1.5, t.bg);
         }
     }
     ui.scene.pop_clip();

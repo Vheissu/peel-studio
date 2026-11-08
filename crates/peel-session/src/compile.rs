@@ -198,6 +198,8 @@ pub fn compile(p: &Project, ctx: &CompileContext) -> (RenderPlan, PlanIndex) {
                             audio.push(region);
                         }
                     }
+                    // Compiled into automation lanes separately.
+                    ClipContent::Automation { .. } => {}
                 }
             }
             let bar = p.time_signature.bar_length();

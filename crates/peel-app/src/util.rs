@@ -66,31 +66,7 @@ pub fn is_black_key(key: u8) -> bool {
     matches!(key % 12, 1 | 3 | 6 | 8 | 10)
 }
 
-/// Fader position (0..=1) to decibels, with unity at 0.8 and -inf at 0.
-pub fn fader_to_db(pos: f32) -> f32 {
-    if pos <= 0.001 {
-        return -96.0;
-    }
-    // Piecewise: 0.8..1 -> 0..+6 dB, 0..0.8 -> -60..0 dB (curved).
-    if pos >= 0.8 {
-        (pos - 0.8) / 0.2 * 6.0
-    } else {
-        let x = pos / 0.8;
-        -60.0 * (1.0 - x).powf(1.6)
-    }
-}
-
-pub fn db_to_fader(db: f32) -> f32 {
-    if db <= -95.0 {
-        return 0.0;
-    }
-    if db >= 0.0 {
-        0.8 + (db.min(6.0) / 6.0) * 0.2
-    } else {
-        let x = 1.0 - (-db / 60.0).min(1.0).powf(1.0 / 1.6);
-        x * 0.8
-    }
-}
+pub use peel_document::{db_to_fader, fader_to_db};
 
 pub fn format_db(db: f32) -> String {
     if db <= -95.0 {

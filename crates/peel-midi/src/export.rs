@@ -224,6 +224,8 @@ pub fn export_arrangement(project: &Project, opts: &ExportOptions) -> Result<Mid
                 fl.report.audio_clips_omitted += 1;
                 continue;
             }
+            // Automation is not exported as MIDI controllers yet.
+            ClipContent::Automation { .. } => continue,
         };
         let lane_muted = arrangement
             .tracks

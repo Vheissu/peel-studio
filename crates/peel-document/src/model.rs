@@ -287,6 +287,51 @@ pub enum ClipContent {
         #[serde(default, skip_serializing_if = "time_is_zero")]
         fade_out: Time,
     },
+    /// An envelope that drives one parameter while the clip plays.
+    Automation {
+        target: AutomationTarget,
+        /// Breakpoints sorted by position, relative to the clip's source
+        /// (the clip `offset` applies as for patterns).
+        points: Vec<AutomationPoint>,
+    },
+}
+
+/// What an automation clip controls. Targets use stable identities: the
+/// device instance id plus the parameter's stable key, never a position.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AutomationTarget {
+    Param { device: Id, param: String },
+    TrackGain { track: Id },
+    TrackPan { track: Id },
+}
+
+/// One breakpoint. `value` is normalized 0..=1 across the target's range;
+/// segments interpolate linearly to the next point.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AutomationPoint {
+    pub position: Time,
+    pub value: f32,
+}
+
+/// Value of a breakpoint envelope at `pos` (holds outside the points).
+pub fn automation_value(points: &[AutomationPoint], pos: Time) -> Option<f32> {
+    let first = points.first()?;
+    if pos <= first.position {
+        return Some(first.value);
+    }
+    for w in points.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        if pos < b.position {
+            let span = (b.position - a.position).as_f64();
+            if span <= 0.0 {
+                return Some(b.value);
+            }
+            let t = ((pos - a.position).as_f64() / span) as f32;
+            return Some(a.value + (b.value - a.value) * t);
+        }
+    }
+    points.last().map(|p| p.value)
 }
 
 fn time_is_zero(t: &Time) -> bool {
@@ -439,5 +484,33 @@ impl Project {
     pub fn next_channel_color(&self) -> Color {
         let n = self.channels.len();
         crate::color::PALETTE[n % crate::color::PALETTE.len()]
+    }
+}
+
+/// Fader position (0..=1) to decibels: unity at 0.8, +6 dB at the top,
+/// a curved scale down to -60 dB, and silence at 0. Shared by the mixer UI
+/// and volume automation so both agree exactly.
+pub fn fader_to_db(pos: f32) -> f32 {
+    if pos <= 0.001 {
+        return -96.0;
+    }
+    if pos >= 0.8 {
+        (pos - 0.8) / 0.2 * 6.0
+    } else {
+        let x = pos / 0.8;
+        -60.0 * (1.0 - x).powf(1.6)
+    }
+}
+
+/// Inverse of [`fader_to_db`].
+pub fn db_to_fader(db: f32) -> f32 {
+    if db <= -95.0 {
+        return 0.0;
+    }
+    if db >= 0.0 {
+        0.8 + (db.min(6.0) / 6.0) * 0.2
+    } else {
+        let x = 1.0 - (-db / 60.0).min(1.0).powf(1.0 / 1.6);
+        x * 0.8
     }
 }
