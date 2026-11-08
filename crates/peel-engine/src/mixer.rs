@@ -183,6 +183,12 @@ pub(crate) struct Mixer {
     dry: Vec<f32>,
     pub chan_ramp: Vec<Ramp>,
     pub track_ramp: Vec<Ramp>,
+    /// Sidechain keys: each key track's signal after its inserts and before
+    /// its fader, so muting, soloing or mixing it does not change what it
+    /// keys. Same layout as `tracks`.
+    keys: Vec<f32>,
+    /// True when a key holds this block's signal (otherwise it is silence).
+    pub key_ready: Vec<bool>,
 }
 
 impl Mixer {
@@ -190,6 +196,8 @@ impl Mixer {
         Mixer {
             max_block,
             tracks: vec![0.0; MAX_TRACKS * 2 * max_block],
+            keys: vec![0.0; MAX_TRACKS * 2 * max_block],
+            key_ready: vec![false; MAX_TRACKS],
             dirty: vec![false; MAX_TRACKS],
             scratch: vec![0.0; 2 * max_block],
             dry: vec![0.0; 2 * max_block],
@@ -205,6 +213,41 @@ impl Mixer {
         let base = i * 2 * mb;
         let (l, r) = self.tracks[base..base + 2 * mb].split_at_mut(mb);
         (&mut l[..frames], &mut r[..frames])
+    }
+
+    /// Copies a track's current signal into its key.
+    pub fn store_key(&mut self, i: usize, frames: usize) {
+        let mb = self.max_block;
+        let base = i * 2 * mb;
+        let (src_l, src_r) = self.tracks[base..base + 2 * mb].split_at(mb);
+        let (dst_l, dst_r) = self.keys[base..base + 2 * mb].split_at_mut(mb);
+        dst_l[..frames].copy_from_slice(&src_l[..frames]);
+        dst_r[..frames].copy_from_slice(&src_r[..frames]);
+        self.key_ready[i] = true;
+    }
+
+    /// Key `k` (silence when it holds nothing this block) and track `ti`.
+    pub fn key_and_track(
+        &mut self,
+        k: usize,
+        ti: usize,
+        frames: usize,
+    ) -> (&[f32], &[f32], &mut [f32], &mut [f32]) {
+        let mb = self.max_block;
+        let kb = k * 2 * mb;
+        if !self.key_ready[k] {
+            self.keys[kb..kb + 2 * mb].fill(0.0);
+            self.key_ready[k] = true;
+        }
+        let (kl, kr) = self.keys[kb..kb + 2 * mb].split_at(mb);
+        let tb = ti * 2 * mb;
+        let (tl, tr) = self.tracks[tb..tb + 2 * mb].split_at_mut(mb);
+        (
+            &kl[..frames],
+            &kr[..frames],
+            &mut tl[..frames],
+            &mut tr[..frames],
+        )
     }
 
     /// Zeroes a track the first time it is touched in a block.

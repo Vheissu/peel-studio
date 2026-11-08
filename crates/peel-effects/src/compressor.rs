@@ -140,7 +140,7 @@ pub static DESCRIPTOR: DeviceDescriptor = DeviceDescriptor {
     params: &PARAMS,
 };
 
-pub static PRESETS: [Preset; 5] = [
+pub static PRESETS: [Preset; 6] = [
     Preset {
         name: "Default",
         params: &[],
@@ -167,6 +167,19 @@ pub static PRESETS: [Preset; 5] = [
             ("knee", 4.0),
             ("sidechain.hpf", 120.0),
             ("auto_makeup", 1.0),
+        ],
+    },
+    Preset {
+        // Set a sidechain from the kick's track to pump with the beat.
+        name: "Sidechain Duck",
+        params: &[
+            ("threshold", -32.0),
+            ("ratio", 12.0),
+            ("attack", 1.0),
+            ("release", 140.0),
+            ("knee", 3.0),
+            ("auto_makeup", 0.0),
+            ("makeup", 0.0),
         ],
     },
     Preset {
@@ -345,11 +358,37 @@ impl Fx for Compressor {
     }
 
     fn render(&mut self, _ctx: &ProcessContext, left: &mut [f32], right: &mut [f32]) {
+        self.compress(left, right, None);
+    }
+
+    fn render_keyed(
+        &mut self,
+        _ctx: &ProcessContext,
+        left: &mut [f32],
+        right: &mut [f32],
+        key: (&[f32], &[f32]),
+    ) {
+        self.compress(left, right, Some(key));
+    }
+
+    fn silent(&self) -> bool {
+        self.silence.quiet_for((self.sample_rate * 0.25) as u32)
+    }
+}
+
+impl Compressor {
+    /// Compresses in place. The detector listens to `key` when given (an
+    /// external sidechain), otherwise to the signal itself.
+    fn compress(&mut self, left: &mut [f32], right: &mut [f32], key: Option<(&[f32], &[f32])>) {
         self.silence.feed(left, right);
         let link = self.link;
-        for (l, r) in left.iter_mut().zip(right.iter_mut()) {
+        for (i, (l, r)) in left.iter_mut().zip(right.iter_mut()).enumerate() {
             let (dl, dr) = (*l, *r);
-            let (sl, sr) = self.sidechain.process(dl, dr);
+            let (kl, kr) = match key {
+                Some((kl, kr)) => (kl[i], kr[i]),
+                None => (dl, dr),
+            };
+            let (sl, sr) = self.sidechain.process(kl, kr);
             let db_l = gain_to_db(self.env[0].process(sl));
             let db_r = gain_to_db(self.env[1].process(sr));
             let linked = db_l.max(db_r);
@@ -366,10 +405,6 @@ impl Fx for Compressor {
             *r = dr + (wet_r - dr) * mix;
         }
         self.gr_db = -(self.smooth[0].value_db().min(self.smooth[1].value_db()));
-    }
-
-    fn silent(&self) -> bool {
-        self.silence.quiet_for((self.sample_rate * 0.25) as u32)
     }
 }
 
@@ -401,6 +436,38 @@ mod tests {
             }
         }
         20.0 * peak.log10()
+    }
+
+    #[test]
+    fn an_external_key_ducks_a_quiet_signal() {
+        let mut c = Compressor::new();
+        c.set_param(ID_THRESHOLD, -30.0);
+        c.set_param(ID_RATIO, 10.0);
+        c.set_param(ID_KNEE, 0.0);
+        c.set_param(ID_ATTACK, 1.0);
+        c.set_param(ID_RELEASE, 50.0);
+        c.prepare(SR, 256);
+        let ctx = ProcessContext::new(SR);
+        let quiet = db_to_gain(-36.0);
+        let run = |c: &mut Compressor, key_amp: f32| {
+            let mut peak = 0.0f32;
+            for block in 0..200 {
+                let mut l = sine_block(quiet, 440.0, block * 256, 256);
+                let mut r = l.clone();
+                let k = sine_block(key_amp, 60.0, block * 256, 256);
+                c.process_keyed(&ctx, &[], &mut l, &mut r, &k, &k);
+                if block > 150 {
+                    peak = l.iter().fold(peak, |m, v| m.max(v.abs()));
+                }
+            }
+            20.0 * peak.log10()
+        };
+        // The signal alone is below the threshold: untouched by its own level.
+        let alone = run(&mut c, 0.0);
+        assert!((alone - -36.0).abs() < 0.5, "{alone}");
+        // A loud key 24 dB over the threshold pulls it down about 21.6 dB.
+        let ducked = run(&mut c, db_to_gain(-6.0));
+        assert!(alone - ducked > 18.0, "ducked {ducked} vs {alone}");
     }
 
     #[test]

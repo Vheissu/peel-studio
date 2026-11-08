@@ -65,6 +65,18 @@ pub(crate) trait Fx {
     fn clear(&mut self);
     /// Processes one contiguous run of frames in place.
     fn render(&mut self, ctx: &ProcessContext, left: &mut [f32], right: &mut [f32]);
+    /// Like `render`, with a sidechain key of the same length. Effects
+    /// without a sidechain input ignore it.
+    fn render_keyed(
+        &mut self,
+        ctx: &ProcessContext,
+        left: &mut [f32],
+        right: &mut [f32],
+        key: (&[f32], &[f32]),
+    ) {
+        let _ = key;
+        self.render(ctx, left, right);
+    }
     fn latency_samples(&self) -> u32 {
         0
     }
@@ -101,8 +113,10 @@ pub(crate) fn run_events<F: Fx>(
     events: &[DeviceEvent],
     left: &mut [f32],
     right: &mut [f32],
+    key: Option<(&[f32], &[f32])>,
 ) {
     let frames = left.len().min(right.len());
+    let key = key.filter(|(kl, kr)| kl.len() >= frames && kr.len() >= frames);
     let (left, right) = (&mut left[..frames], &mut right[..frames]);
     // A NaN or infinity must never enter filter or feedback state, where it
     // would circulate forever. Treat it as silence at the door.
@@ -130,7 +144,15 @@ pub(crate) fn run_events<F: Fx>(
         if to > from {
             let mut c = *ctx;
             c.beat_position += from as f64 * beats_per_frame;
-            fx.render(&c, &mut left[from..to], &mut right[from..to]);
+            match key {
+                Some((kl, kr)) => fx.render_keyed(
+                    &c,
+                    &mut left[from..to],
+                    &mut right[from..to],
+                    (&kl[from..to], &kr[from..to]),
+                ),
+                None => fx.render(&c, &mut left[from..to], &mut right[from..to]),
+            }
         }
     };
 
@@ -174,7 +196,25 @@ macro_rules! impl_device {
                 left: &mut [f32],
                 right: &mut [f32],
             ) {
-                $crate::common::run_events(self, ctx, events, left, right);
+                $crate::common::run_events(self, ctx, events, left, right, None);
+            }
+            fn process_keyed(
+                &mut self,
+                ctx: &::peel_dsp::device::ProcessContext,
+                events: &[::peel_dsp::device::DeviceEvent],
+                left: &mut [f32],
+                right: &mut [f32],
+                key_left: &[f32],
+                key_right: &[f32],
+            ) {
+                $crate::common::run_events(
+                    self,
+                    ctx,
+                    events,
+                    left,
+                    right,
+                    Some((key_left, key_right)),
+                );
             }
             fn latency(&self) -> u32 {
                 $crate::common::Fx::latency_samples(self)

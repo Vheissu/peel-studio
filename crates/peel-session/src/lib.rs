@@ -961,6 +961,137 @@ mod tests {
     }
 
     #[test]
+    fn a_sidechained_compressor_hears_its_key_track_first() {
+        let mut project = template::beat_and_melody();
+        let kick_track = project
+            .channels
+            .iter()
+            .find(|c| c.name == "Kick")
+            .unwrap()
+            .track;
+        let synth_track = project
+            .channels
+            .iter()
+            .find(|c| c.name == "Synth")
+            .unwrap()
+            .track;
+        let mut comp = template::device("peel.fx.compressor", None);
+        comp.sidechain = Some(kick_track);
+        let comp_id = comp.id;
+        project
+            .mixer
+            .track_mut(synth_track)
+            .unwrap()
+            .inserts
+            .insert(0, comp);
+        assert!(
+            peel_document::validate(&project)
+                .iter()
+                .all(|i| !i.is_error())
+        );
+        let s = Session::new_silent(project);
+        let plan = s.plan.as_ref().expect("plan").clone();
+        let slot = s.devices[&comp_id].slot;
+        let (ti, route) = plan
+            .tracks
+            .iter()
+            .enumerate()
+            .find(|(_, r)| r.inserts.contains(&slot))
+            .expect("the synth track");
+        let (_, key) = route
+            .keys
+            .iter()
+            .copied()
+            .find(|k| k.0 == slot)
+            .expect("keyed");
+        assert!(usize::from(key) < ti, "the kick track is processed first");
+    }
+
+    #[test]
+    fn a_soloed_track_still_pumps_with_a_muted_kick() {
+        let dir = std::env::temp_dir().join(format!("peel-sc-test-{}", Id::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut project = template::beat_and_melody();
+        let kick_track = project
+            .channels
+            .iter()
+            .find(|c| c.name == "Kick")
+            .unwrap()
+            .track;
+        let synth_track = project
+            .channels
+            .iter()
+            .find(|c| c.name == "Synth")
+            .unwrap()
+            .track;
+        let render = |project: &Project, name: &str| {
+            let out = dir.join(name);
+            let settings = ExportSettings {
+                path: out.clone(),
+                sample_rate: 48_000,
+                bits: 32,
+                tail_seconds: 0.0,
+            };
+            let progress = std::sync::atomic::AtomicU32::new(0);
+            let cancel = std::sync::atomic::AtomicBool::new(false);
+            render_to_wav(project, &HashMap::new(), &settings, &progress, &cancel).expect("render");
+            peel_media::decode_file(&out)
+                .expect("decode")
+                .left()
+                .to_vec()
+        };
+        project.mixer.track_mut(synth_track).unwrap().solo = true;
+        let plain = render(&project, "plain.wav");
+        let mut comp = template::device("peel.fx.compressor", Some("Sidechain Duck"));
+        comp.sidechain = Some(kick_track);
+        project
+            .mixer
+            .track_mut(synth_track)
+            .unwrap()
+            .inserts
+            .insert(0, comp);
+        let ducked = render(&project, "ducked.wav");
+        // Level just after each kick against the same moment without the
+        // compressor, over the first eight bars.
+        let beat = 48_000.0 * 60.0 / 118.0;
+        let rms = |x: &[f32], b: usize| {
+            let a = (b as f64 * beat) as usize + 1_000;
+            let s = &x[a..a + 2_400];
+            (s.iter().map(|v| v * v).sum::<f32>() / s.len() as f32).sqrt()
+        };
+        let (mut on, mut off) = (0.0, 0.0);
+        for b in 0..32 {
+            on += rms(&ducked, b);
+            off += rms(&plain, b);
+        }
+        assert!(off > 0.01, "the synth is playing: {off}");
+        assert!(on < off * 0.5, "ducked after each kick: {on} vs {off}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_sidechain_that_closes_a_loop_is_rejected() {
+        let mut project = template::beat_and_melody();
+        let master = project.mixer.tracks[0].id;
+        let drums = project
+            .channels
+            .iter()
+            .find(|c| c.name == "Kick")
+            .unwrap()
+            .track;
+        // The kick track feeds the master; keying the kick from the master
+        // would make each wait for the other.
+        let mut comp = template::device("peel.fx.compressor", None);
+        comp.sidechain = Some(master);
+        project.mixer.track_mut(drums).unwrap().inserts.push(comp);
+        assert!(
+            peel_document::validate(&project)
+                .iter()
+                .any(|i| i.is_error())
+        );
+    }
+
+    #[test]
     fn curved_automation_compiles_to_the_same_curve() {
         use peel_document::{AutomationPoint, AutomationTarget, Clip, ClipContent, Time};
         let mut project = template::beat_and_melody();

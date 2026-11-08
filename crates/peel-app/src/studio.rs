@@ -219,6 +219,32 @@ impl Studio {
                 self.session.doc.end_gesture();
             }
         }
+        if std::env::var_os("PEEL_SIDECHAIN").is_some() {
+            let p = self.session.project();
+            let kick = p
+                .channels
+                .iter()
+                .find(|c| c.name == "Kick")
+                .map(|c| c.track);
+            let synth = p
+                .channels
+                .iter()
+                .find(|c| c.name == "Synth")
+                .map(|c| c.track);
+            if let (Some(kick), Some(synth)) = (kick, synth) {
+                let mut comp =
+                    peel_session::template::device("peel.fx.compressor", Some("Sidechain Duck"));
+                comp.sidechain = Some(kick);
+                comp.preset = Some("Sidechain Duck".into());
+                self.session.doc.edit("Sidechain", |p| {
+                    if let Some(t) = p.mixer.track_mut(synth) {
+                        t.inserts.insert(0, comp);
+                    }
+                });
+                self.ws.focus = Some(Focus::Track(synth));
+                self.ws.dock = DockTab::Mixer;
+            }
+        }
         if std::env::var_os("PEEL_TEMPO").is_some() {
             self.ws.playlist.show_tempo = true;
             self.session.doc.edit("Tempo", |p| {

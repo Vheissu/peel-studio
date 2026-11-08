@@ -60,6 +60,14 @@ pub fn validate(p: &Project) -> Vec<Issue> {
         unique(t.id, "mixer track", &mut issues);
         for d in &t.inserts {
             unique(d.id, "insert", &mut issues);
+            if let Some(src) = d.sidechain
+                && (!track_ids.contains(&src) || src == t.id)
+            {
+                issues.push(Issue::error(format!(
+                    "an insert on mixer track {} has an invalid sidechain",
+                    t.name
+                )));
+            }
         }
         for send in &t.sends {
             if !track_ids.contains(&send.target) || send.target == t.id || !send.gain_db.is_finite()
@@ -227,28 +235,20 @@ pub fn validate(p: &Project) -> Vec<Issue> {
 
 /// Name of a track on a routing cycle, if any.
 fn routing_cycle(p: &Project) -> Option<String> {
-    let master = p.mixer.tracks.first()?.id;
-    // Depth-first search over outputs and sends; a back edge is a cycle.
-    fn visit(
-        p: &Project,
-        id: Id,
-        master: Id,
-        state: &mut std::collections::HashMap<Id, u8>,
-    ) -> Option<Id> {
+    p.mixer.tracks.first()?;
+    // Depth-first search over outputs, sends and sidechain keys; a back
+    // edge is a cycle.
+    fn visit(p: &Project, id: Id, state: &mut std::collections::HashMap<Id, u8>) -> Option<Id> {
         match state.get(&id) {
             Some(1) => return Some(id),
             Some(2) => return None,
             _ => {}
         }
         state.insert(id, 1);
-        if id != master
-            && let Some(t) = p.mixer.track(id)
-        {
-            let mut next = vec![t.output.unwrap_or(master)];
-            next.extend(t.sends.iter().map(|s| s.target));
-            for n in next {
+        if p.mixer.track(id).is_some() {
+            for n in p.mixer.feeds(id) {
                 if p.mixer.track(n).is_some()
-                    && let Some(c) = visit(p, n, master, state)
+                    && let Some(c) = visit(p, n, state)
                 {
                     return Some(c);
                 }
@@ -259,7 +259,7 @@ fn routing_cycle(p: &Project) -> Option<String> {
     }
     let mut state = std::collections::HashMap::new();
     for t in &p.mixer.tracks {
-        if let Some(c) = visit(p, t.id, master, &mut state) {
+        if let Some(c) = visit(p, t.id, &mut state) {
             return Some(
                 p.mixer
                     .track(c)

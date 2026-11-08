@@ -407,8 +407,13 @@ fn track(ui: &mut Ui, r: Rect, id: Id, s: &mut Session, ws: &mut Workspace) {
         .inserts
         .iter()
         .map(|d| {
+            let key = if peel_devices::accepts_sidechain(&d.type_id) {
+                38.0
+            } else {
+                0.0
+            };
             peel_devices::descriptor(&d.type_id)
-                .map_or(60.0, |desc| panel_height(desc, body.w) + 40.0)
+                .map_or(60.0, |desc| panel_height(desc, body.w) + 40.0 + key)
         })
         .collect();
     let total: f32 = heights.iter().sum::<f32>() + 12.0;
@@ -484,6 +489,10 @@ fn track(ui: &mut Ui, r: Rect, id: Id, s: &mut Session, ws: &mut Workspace) {
             Align::Start,
         );
         c.cut_top(4.0);
+        if peel_devices::accepts_sidechain(&dev.type_id) {
+            sidechain_row(ui, c.cut_top(30.0), s, id, dev);
+            c.cut_top(8.0);
+        }
         device_panel(ui, c, dev, desc, s, ws, t.accent);
         ui.scene
             .hline(card.x, card.right(), card.bottom() + 3.0, t.line);
@@ -1227,6 +1236,90 @@ fn sends_section(ui: &mut Ui, body: &mut Rect, tr: &peel_document::MixerTrack, s
 }
 
 /// True if audio from `from` can reach `to` through outputs and sends.
+/// Chooses which mixer track keys a sidechain-capable insert.
+fn sidechain_row(ui: &mut Ui, row: Rect, s: &mut Session, track: Id, dev: &DeviceInstance) {
+    let t = ui.theme.clone();
+    let mut rr = row;
+    ui.text(
+        rr.cut_left(70.0),
+        "Sidechain",
+        t.caption,
+        t.text_dim,
+        Align::Start,
+    );
+    let p = s.project();
+    // Any other track that does not already depend on this one.
+    let options: Vec<(Id, String)> = p
+        .mixer
+        .tracks
+        .iter()
+        .skip(1)
+        .filter(|x| x.id != track && !reaches(p, track, x.id))
+        .map(|x| (x.id, x.name.clone()))
+        .collect();
+    let current = dev
+        .sidechain
+        .and_then(|k| p.mixer.track(k))
+        .map_or("None".to_string(), |x| x.name.clone());
+    let id = W::new(("insp-sidechain", dev.id));
+    let b = ui.interact_button(id, rr, &format!("Sidechain {current}"));
+    ui.scene.rect(
+        rr,
+        t.radius_m,
+        if b.hovered {
+            t.control_hover
+        } else {
+            t.control
+        },
+    );
+    let mut inner = rr.shrink2(10.0, 0.0);
+    ui.icon(inner.cut_right(14.0), icons::CARET_DOWN, 11.0, t.text_dim);
+    if dev.sidechain.is_some() {
+        ui.icon(inner.cut_left(18.0), icons::LINK, 12.0, t.accent);
+    }
+    ui.text(
+        inner,
+        &current,
+        t.label,
+        if dev.sidechain.is_some() {
+            t.text
+        } else {
+            t.text_dim
+        },
+        Align::Start,
+    );
+    ui.tooltip(&b, "Duck this track when another one plays");
+    if b.clicked {
+        ui.open_popup(id.with("menu"), rr);
+    }
+    let mut items = vec![MenuItem::new("None").checked(dev.sidechain.is_none())];
+    items.extend(
+        options
+            .iter()
+            .map(|(oid, n)| MenuItem::new(n.clone()).checked(dev.sidechain == Some(*oid))),
+    );
+    if let Some(i) = ui.menu(id.with("menu"), vec2(rr.x, rr.bottom() + 4.0), &items) {
+        let key = if i == 0 { None } else { Some(options[i - 1].0) };
+        let did = dev.id;
+        s.doc.edit(
+            if key.is_some() {
+                "Set sidechain"
+            } else {
+                "Remove sidechain"
+            },
+            |p| {
+                if let Some(d) = p
+                    .mixer
+                    .track_mut(track)
+                    .and_then(|t| t.inserts.iter_mut().find(|d| d.id == did))
+                {
+                    d.sidechain = key;
+                }
+            },
+        );
+    }
+}
+
 pub(crate) fn reaches(
     p: &peel_document::Project,
     from: peel_document::Id,
@@ -1242,9 +1335,8 @@ pub(crate) fn reaches(
         if !seen.insert(c) || c == master {
             continue;
         }
-        if let Some(t) = p.mixer.track(c) {
-            stack.push(t.output.unwrap_or(master));
-            stack.extend(t.sends.iter().map(|x| x.target));
+        if p.mixer.track(c).is_some() {
+            stack.extend(p.mixer.feeds(c));
         }
     }
     false

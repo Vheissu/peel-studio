@@ -174,6 +174,12 @@ pub struct TrackRoute {
     pub meter: u16,
     /// Post-fader sends to later tracks in plan order.
     pub sends: Vec<TrackSend>,
+    /// Sidechain keys: an insert slot and the earlier track (in plan order)
+    /// whose signal it listens to.
+    pub keys: Vec<(Slot, TrackIndex)>,
+    /// Another track's insert listens to this one: keep its pre-fader
+    /// signal as a key every block.
+    pub key_source: bool,
 }
 
 /// A post-fader send from one track into another.
@@ -197,6 +203,8 @@ impl TrackRoute {
             output,
             meter,
             sends: Vec::new(),
+            keys: Vec::new(),
+            key_source: false,
         }
     }
 }

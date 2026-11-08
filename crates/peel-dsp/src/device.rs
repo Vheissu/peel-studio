@@ -123,6 +123,22 @@ pub trait Device: Send {
         right: &mut [f32],
     );
 
+    /// Renders one block with a sidechain (key) signal of the same length,
+    /// for devices that react to another track (a compressor ducking under
+    /// the kick). Devices without a sidechain input ignore the key.
+    fn process_keyed(
+        &mut self,
+        ctx: &ProcessContext,
+        events: &[DeviceEvent],
+        left: &mut [f32],
+        right: &mut [f32],
+        key_left: &[f32],
+        key_right: &[f32],
+    ) {
+        let _ = (key_left, key_right);
+        self.process(ctx, events, left, right);
+    }
+
     /// Processing latency in samples introduced by lookahead.
     fn latency(&self) -> u32 {
         0

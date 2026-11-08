@@ -99,6 +99,17 @@ pub fn compile(p: &Project, ctx: &CompileContext) -> (RenderPlan, PlanIndex) {
                 muted: t.muted || solo_muted,
                 output,
                 meter: ctx.meters.get(&t.id).copied().unwrap_or(0),
+                key_source: p.mixer.sidechain_targets(t.id).next().is_some(),
+                keys: t
+                    .inserts
+                    .iter()
+                    .filter(|d| !d.bypass)
+                    .filter_map(|d| {
+                        let slot = *ctx.slots.get(&d.id)?;
+                        let src = *index.tracks.get(&d.sidechain?)?;
+                        Some((slot, src))
+                    })
+                    .collect(),
                 sends: if is_master {
                     Vec::new()
                 } else {
@@ -429,6 +440,8 @@ pub fn same_structure(a: &RenderPlan, b: &RenderPlan) -> bool {
             .all(|(x, y)| x.slot == y.slot && x.track == y.track)
         && a.tracks.iter().zip(&b.tracks).all(|(x, y)| {
             x.inserts == y.inserts
+                && x.keys == y.keys
+                && x.key_source == y.key_source
                 && x.output == y.output
                 && x.meter == y.meter
                 && x.sends.len() == y.sends.len()
@@ -437,7 +450,8 @@ pub fn same_structure(a: &RenderPlan, b: &RenderPlan) -> bool {
 }
 
 /// Mixer tracks (indices into `p.mixer.tracks`) ordered so every track
-/// comes after everything that feeds it through its output or a send; the
+/// comes after everything that feeds it through its output, a send or a
+/// sidechain key; the
 /// master is last. Tracks caught in a cycle (rejected by validation) are
 /// appended in document order and their backward routes are ignored by the
 /// engine.
@@ -447,9 +461,9 @@ fn processing_order(p: &Project) -> Vec<usize> {
     // Edges source -> destination.
     let mut indegree = vec![0usize; n];
     let mut edges: Vec<Vec<usize>> = vec![Vec::new(); n];
-    for (i, t) in p.mixer.tracks.iter().enumerate().skip(1) {
-        let mut dests: Vec<usize> = vec![t.output.and_then(pos).unwrap_or(0)];
-        dests.extend(t.sends.iter().filter_map(|s| pos(s.target)));
+    for (i, t) in p.mixer.tracks.iter().enumerate() {
+        // Outputs, sends and sidechain keys all run source -> destination.
+        let dests: Vec<usize> = p.mixer.feeds(t.id).into_iter().filter_map(pos).collect();
         for d in dests {
             if d != i {
                 edges[i].push(d);

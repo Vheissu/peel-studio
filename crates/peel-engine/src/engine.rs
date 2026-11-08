@@ -1128,6 +1128,7 @@ impl Engine {
         };
         let n_tracks = plan.tracks.len();
         mixer.dirty[..n_tracks].fill(false);
+        mixer.key_ready[..n_tracks].fill(false);
 
         // ---- audio regions and declick tails -> tracks ----
         audio.render(plan, mixer, retirer, block_start, frames, *sr64);
@@ -1207,7 +1208,28 @@ impl Engine {
                     continue;
                 }
                 mixer.ensure_clean(ti, frames);
-                if bypass[s].mix == 1.0 && target == 1.0 {
+                // A sidechain key comes from a track earlier in plan order:
+                // its signal after inserts, before its fader.
+                let key = route
+                    .keys
+                    .iter()
+                    .find(|k| k.0 == insert)
+                    .map(|k| usize::from(k.1))
+                    .filter(|&k| k < ti);
+                if let Some(k) = key
+                    && bypass[s].mix == 1.0
+                    && target == 1.0
+                {
+                    let (kl, kr, l, r) = mixer.key_and_track(k, ti, frames);
+                    dev.process_keyed(&ctx, events, l, r, kl, kr);
+                    let (_, _, bad) = sanitize_peak(l, r);
+                    if bad > 0 {
+                        telemetry
+                            .non_finite
+                            .fetch_add(bad as u64, Ordering::Relaxed);
+                        dev.reset();
+                    }
+                } else if bypass[s].mix == 1.0 && target == 1.0 {
                     let (l, r) = mixer.track(ti, frames);
                     dev.process(&ctx, events, l, r);
                     let (_, _, bad) = sanitize_peak(l, r);
@@ -1241,6 +1263,9 @@ impl Engine {
                 }
             }
 
+            if route.key_source && mixer.dirty[ti] {
+                mixer.store_key(ti, frames);
+            }
             let (tl, tr) = target_gains(route.gain, route.pan, route.muted);
             if !mixer.dirty[ti] {
                 mixer.track_ramp[ti].snap(tl, tr);

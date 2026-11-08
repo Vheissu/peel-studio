@@ -92,6 +92,10 @@ pub struct DeviceInstance {
     /// Opaque state of an external plugin (base64), captured on save.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<String>,
+    /// Mixer track whose post-fader signal keys this device (a compressor
+    /// ducking under the kick). Only for devices that accept a sidechain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sidechain: Option<Id>,
 }
 
 impl DeviceInstance {
@@ -105,6 +109,7 @@ impl DeviceInstance {
             bypass: false,
             preset: None,
             state: None,
+            sidechain: None,
         }
     }
 }
@@ -414,6 +419,30 @@ impl Mixer {
 
     pub fn track_mut(&mut self, id: Id) -> Option<&mut MixerTrack> {
         self.tracks.iter_mut().find(|t| t.id == id)
+    }
+
+    /// Tracks with an insert keyed from `source`: sidechain connections
+    /// run from `source` to each of them.
+    pub fn sidechain_targets(&self, source: Id) -> impl Iterator<Item = Id> + '_ {
+        self.tracks
+            .iter()
+            .filter(move |t| t.inserts.iter().any(|d| d.sidechain == Some(source)))
+            .map(|t| t.id)
+    }
+
+    /// Every track `id` feeds: its output, sends and sidechain keys.
+    pub fn feeds(&self, id: Id) -> Vec<Id> {
+        let Some(t) = self.track(id) else {
+            return Vec::new();
+        };
+        let master = self.tracks[0].id;
+        let mut v = Vec::new();
+        if id != master {
+            v.push(t.output.unwrap_or(master));
+        }
+        v.extend(t.sends.iter().map(|s| s.target));
+        v.extend(self.sidechain_targets(id));
+        v
     }
 }
 
