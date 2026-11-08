@@ -806,6 +806,8 @@ fn knob_cell(
     let kr = c.cut_top(44.0);
     let knob = Rect::from_center(kr.center(), 40.0, 40.0);
     let resp = ui.knob(id, knob, norm, default, color, bipolar);
+    ui.name(&resp, name);
+    ui.value_text(&resp, value);
     let label_r = c.cut_top(18.0);
     if resp.hovered || resp.active {
         ui.text(label_r, value, t.readout_small, t.text, Align::Center);

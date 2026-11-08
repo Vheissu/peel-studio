@@ -298,6 +298,7 @@ fn strip(
         t.text_dim,
         true,
     );
+    ui.name(&k, &format!("{} pan", tr.name));
     automate_menu(
         ui,
         s,
@@ -408,6 +409,8 @@ fn strip(
     if f.released {
         s.doc.end_gesture();
     }
+    ui.name(&f, &format!("{} volume", tr.name));
+    ui.value_text(&f, &format_db(tr.gain_db));
     automate_menu(
         ui,
         s,

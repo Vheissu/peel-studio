@@ -746,6 +746,12 @@ fn edit_canvas(
     let color = col(ch.color);
     let id = W::new("roll-canvas");
     let resp = ui.interact(id, c);
+    ui.describe(
+        id,
+        peel_ui::Role::Canvas,
+        &format!("Piano roll, {}", ch.name),
+        &format!("{} notes", notes.len()),
+    );
     let drag_id = W::new("roll-drag");
     let pointer = ui.pointer();
 

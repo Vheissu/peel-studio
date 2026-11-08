@@ -668,6 +668,12 @@ fn clips(
         .collect();
     let id = W::new("pl-canvas");
     let resp = ui.interact(id, lanes);
+    ui.describe(
+        id,
+        peel_ui::Role::Canvas,
+        "Playlist",
+        &format!("{} clips on {} lanes", clips.len(), tracks.len()),
+    );
     let drag_id = W::new("pl-drag");
     let pointer = ui.pointer();
 

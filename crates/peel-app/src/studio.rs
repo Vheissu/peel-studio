@@ -812,7 +812,7 @@ fn dock(ui: &mut Ui, r: Rect, studio: &mut Studio) {
         let cell = tabs.cut_left(w);
         tabs.cut_left(4.0);
         let id = W::new(("dock-tab", label));
-        let resp = ui.interact(id, cell);
+        let resp = ui.interact_button(id, cell, label);
         let on = studio.ws.dock == tab;
         let hot = ui.animate_bool(id, resp.hovered);
         if on {

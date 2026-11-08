@@ -184,6 +184,7 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
             col(ch.color),
             false,
         );
+        ui.name(&vresp, &format!("{} volume", ch.name));
         ui.tooltip(
             &vresp,
             &format!("Volume {}", crate::util::format_db(ch.gain_db)),
@@ -207,6 +208,7 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
             t.text_dim,
             true,
         );
+        ui.name(&presp, &format!("{} pan", ch.name));
         ui.tooltip(&presp, "Pan");
         if presp.changed {
             let cid = ch.id;
@@ -422,7 +424,7 @@ fn channel_button(
 ) {
     let t = ui.theme.clone();
     let id = W::new(("rack-name", ch.id));
-    let resp = ui.interact(id, r);
+    let resp = ui.interact_button(id, r, &ch.name);
     let hot = ui.animate_bool(id, resp.hovered);
     let base = if selected {
         t.control_hover
@@ -572,7 +574,7 @@ fn step_row(
         let note = notes.iter().find(|n| n.start == pos);
         let on = note.is_some();
         let id = W::new(("step", ch.id, i));
-        let resp = ui.interact(id, cell);
+        let resp = ui.interact_button(id, cell, &format!("{} step {}", ch.name, i + 1));
         let beat_odd = (i / 4) % 2 == 1;
         let off_fill = if beat_odd {
             t.raised.lighten(0.035)
@@ -629,6 +631,11 @@ fn step_row(
             }
         } else if paint_active && ui.input.down[0] && pointer_inside && on != paint_on {
             set_step(s, pid, ch, pos, paint_on, gesture);
+        }
+        // Keyboard or assistive activation (no mouse press behind it).
+        if resp.clicked && !paint_active && !resp.pressed {
+            set_step(s, pid, ch, pos, !on, id.0 ^ 0x6b);
+            s.doc.end_gesture();
         }
         if resp.secondary_clicked && on {
             set_step(s, pid, ch, pos, false, id.0 ^ 0xdead);
