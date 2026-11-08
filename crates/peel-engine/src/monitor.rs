@@ -171,7 +171,7 @@ impl Preview {
         let Some(sample) = sample else {
             return;
         };
-        if sample.frames() == 0 || !(sample.sample_rate > 0.0) {
+        if sample.frames() == 0 || !sample.sample_rate.is_finite() || sample.sample_rate <= 0.0 {
             retirer.retire(Retired::Sample(sample));
             return;
         }

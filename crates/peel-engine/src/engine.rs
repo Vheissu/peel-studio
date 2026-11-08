@@ -9,12 +9,16 @@
 //! # Timing model
 //!
 //! The engine counts output frames in `engine_sample` (monotonic `i64`).
-//! While playing, `origin` is the engine sample at which musical time zero
-//! falls for the current run of the transport. A beat `b` therefore lands on
-//! engine sample `origin + tempo.beat_to_sample(b)`. `origin` changes only
-//! when the transport is (re)anchored: play, seek, loop wrap and plan swap.
-//! No quantity is accumulated block by block, so repeating material cannot
-//! drift, and the result is independent of how the host splits the stream.
+//! While playing, an [`Origin`] (whole samples plus an exact fraction) is the
+//! engine position at which musical time zero falls for the current run of
+//! the transport. A beat `b` lands on engine sample
+//! `origin + round(tempo.beat_to_seconds(b) * sample_rate)`, which equals
+//! `TempoMap::beat_to_sample(b)` after a play from the start. The origin
+//! changes only when the transport is (re)anchored: play, seek, plan swap,
+//! and loop wrap (which adds the *unrounded* loop length). Nothing is
+//! accumulated block by block and rounding never compounds, so repeating
+//! material cannot drift and the result does not depend on how the host
+//! splits the stream.
 //!
 //! # Event ordering
 //!
@@ -31,8 +35,9 @@ use std::time::Instant;
 use peel_dsp::{Device, EventKind, ProcessContext};
 use rtrb::{Consumer, Producer};
 
+use crate::clock::{Origin, loop_samples};
 use crate::command::{EngineCommand, Retired};
-use crate::events::{ActiveNote, ActiveNotes, Staging};
+use crate::events::{ActiveNote, ActiveNotes, OffResult, Staging};
 use crate::mixer::{Mixer, mix_ramped, peak, sanitize_peak, scale_ramped, slew, target_gains};
 use crate::monitor::{Metronome, Preview};
 use crate::plan::{RenderPlan, SeqKind};
@@ -57,7 +62,7 @@ struct Transport {
     /// Content position in quarter notes at `engine_sample`.
     position: f64,
     /// Engine sample at which musical time zero falls (while playing).
-    origin: i64,
+    origin: Origin,
     /// Index of the next sequence event to deliver.
     cursor: usize,
     /// The loop applies: the playhead was inside the loop when anchored.
@@ -77,8 +82,8 @@ struct BypassState {
 
 enum Boundary {
     None,
-    /// Wrap to this loop start.
-    Loop(f64),
+    /// Wrap from the loop end back to the loop start `(start, end)`.
+    Loop(f64, f64),
     End,
 }
 
@@ -167,7 +172,7 @@ impl Engine {
             transport: Transport {
                 playing: false,
                 position: 0.0,
-                origin: 0,
+                origin: Origin::ZERO,
                 cursor: 0,
                 loop_armed: false,
                 end_armed: false,
@@ -457,7 +462,10 @@ impl Engine {
             }
             // A repeated key retriggers: release the old note first.
             if self.active.remove_live(slot, key).is_some() {
-                self.stage.push_off(
+                stage_off(
+                    &mut self.stage,
+                    &mut self.active,
+                    &self.telemetry,
                     s,
                     0,
                     EventKind::NoteOff {
@@ -484,7 +492,10 @@ impl Engine {
                 keep: true,
             });
         } else if self.active.remove_live(slot, key).is_some() {
-            self.stage.push_off(
+            stage_off(
+                &mut self.stage,
+                &mut self.active,
+                &self.telemetry,
                 s,
                 0,
                 EventKind::NoteOff {
@@ -624,19 +635,19 @@ impl Engine {
         let sr = self.sr64;
         let plan = &*self.plan;
         let t = &mut self.transport;
-        t.origin = self
-            .engine_sample
-            .saturating_sub(plan.tempo.beat_to_sample(beat, sr));
-        t.cursor = cursor_at(plan, t.origin, self.engine_sample, sr);
+        t.origin = Origin::anchored(&plan.tempo, beat, self.engine_sample, sr);
+        t.cursor = cursor_at(plan, &t.origin, self.engine_sample, sr);
         t.loop_armed = valid_loop(plan, sr).is_some_and(|(_, end)| beat < end);
         t.end_armed = plan.length_beats.is_finite() && beat < plan.length_beats;
     }
 
-    /// Stages the release of a tracked note. If the slot's reserve is full the
-    /// buffer is flagged and `Staging::finish_chunk` falls back to
-    /// `AllNotesOff`, so the result is deliberately ignored here.
+    /// Stages the release of a tracked note. If the slot has no room left,
+    /// `Staging::finish_chunk` falls back to `AllNotesOff`.
     fn stage_note_off(&mut self, n: ActiveNote, offset: u32) {
-        let _ = self.stage.push_off(
+        stage_off(
+            &mut self.stage,
+            &mut self.active,
+            &self.telemetry,
             n.slot as usize,
             offset,
             EventKind::NoteOff {
@@ -707,23 +718,20 @@ impl Engine {
                 None
             };
             if let Some((start, end)) = looping {
-                let end_s = self
-                    .transport
-                    .origin
-                    .saturating_add(self.plan.tempo.beat_to_sample(end, sr));
+                let end_s = self.transport.origin.sample_of(&self.plan.tempo, end, sr);
                 if end_s < block_end {
                     seg_end = end_s.max(seg_start);
-                    boundary = Boundary::Loop(start);
+                    boundary = Boundary::Loop(start, end);
                 }
             } else if self.transport.loop_armed {
                 // The loop was removed or became invalid.
                 self.transport.loop_armed = false;
             }
             if matches!(boundary, Boundary::None) && self.transport.end_armed {
-                let end_s = self
-                    .transport
-                    .origin
-                    .saturating_add(self.plan.tempo.beat_to_sample(self.plan.length_beats, sr));
+                let end_s =
+                    self.transport
+                        .origin
+                        .sample_of(&self.plan.tempo, self.plan.length_beats, sr);
                 if end_s < block_end {
                     seg_end = end_s.max(seg_start);
                     boundary = Boundary::End;
@@ -735,13 +743,13 @@ impl Engine {
 
             match boundary {
                 Boundary::None => break,
-                Boundary::Loop(start) => {
+                Boundary::Loop(start, end) => {
                     let offset = (seg_end - block_start) as u32;
                     self.release_sequence_notes(offset);
                     let plan = &*self.plan;
                     let t = &mut self.transport;
-                    t.origin = seg_end.saturating_sub(plan.tempo.beat_to_sample(start, sr));
-                    t.cursor = cursor_at(plan, t.origin, seg_end, sr);
+                    t.origin.wrap(&plan.tempo, start, end, sr);
+                    t.cursor = cursor_at(plan, &t.origin, seg_end, sr);
                     t.next_click = ceil_beat(start);
                     seg_start = seg_end;
                 }
@@ -771,9 +779,7 @@ impl Engine {
         let seq = &plan.sequence;
         while transport.cursor < seq.len() {
             let ev = &seq[transport.cursor];
-            let at = transport
-                .origin
-                .saturating_add(plan.tempo.beat_to_sample(ev.beat, sr));
+            let at = transport.origin.sample_of(&plan.tempo, ev.beat, sr);
             if at >= until {
                 break;
             }
@@ -819,7 +825,10 @@ impl Engine {
                 } => {
                     // Only notes the engine actually started are released.
                     if active.remove_voice(route.slot, voice).is_some() {
-                        stage.push_off(
+                        stage_off(
+                            stage,
+                            active,
+                            telemetry,
                             slot,
                             offset,
                             EventKind::NoteOff {
@@ -848,7 +857,7 @@ impl Engine {
             let at = self
                 .transport
                 .origin
-                .saturating_add(self.plan.tempo.beat_to_sample(n as f64, sr));
+                .sample_of(&self.plan.tempo, n as f64, sr);
             if at >= until {
                 break;
             }
@@ -882,8 +891,10 @@ impl Engine {
 
         self.engine_sample = block_end;
         if self.transport.playing {
-            let rel = block_end.saturating_sub(self.transport.origin);
-            let beat = self.plan.tempo.sample_to_beat(rel, self.sr64);
+            let beat = self
+                .transport
+                .origin
+                .beat_at(&self.plan.tempo, block_end, self.sr64);
             self.transport.position = if beat.is_finite() {
                 beat.max(0.0)
             } else {
@@ -1107,9 +1118,30 @@ impl Engine {
 /// the transport `origin`. Compares in the sample domain (not beats) so an
 /// event that rounds to `from` is never skipped when the transport is
 /// re-anchored mid-stream.
-fn cursor_at(plan: &RenderPlan, origin: i64, from: i64, sr: f64) -> usize {
+fn cursor_at(plan: &RenderPlan, origin: &Origin, from: i64, sr: f64) -> usize {
     plan.sequence
-        .partition_point(|e| origin.saturating_add(plan.tempo.beat_to_sample(e.beat, sr)) < from)
+        .partition_point(|e| origin.sample_of(&plan.tempo, e.beat, sr) < from)
+}
+
+/// Stages a note-off, forgetting any note-on that had to make room for it.
+fn stage_off(
+    stage: &mut Staging,
+    active: &mut ActiveNotes,
+    telemetry: &Telemetry,
+    slot: usize,
+    offset: u32,
+    kind: EventKind,
+) {
+    if let OffResult::Evicted(EventKind::NoteOn { key, voice, .. }) =
+        stage.push_off(slot, offset, kind)
+    {
+        if voice >= LIVE_VOICE_BASE {
+            active.remove_live(slot as u32, key);
+        } else {
+            active.remove_voice(slot as u32, voice);
+        }
+        telemetry.dropped_notes.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 /// Smallest whole beat at or after `beat`.
@@ -1139,11 +1171,8 @@ fn valid_loop(plan: &RenderPlan, sr: f64) -> Option<(f64, f64)> {
     if end <= start {
         return None;
     }
-    let len = plan
-        .tempo
-        .beat_to_sample(end, sr)
-        .saturating_sub(plan.tempo.beat_to_sample(start, sr));
-    (len >= 1).then_some((start, end))
+    let len = loop_samples(&plan.tempo, start, end, sr);
+    (len >= 1.0).then_some((start, end))
 }
 
 // The engine is moved into the audio callback.

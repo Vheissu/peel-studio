@@ -549,7 +549,8 @@ fn write_interleaved<T: Sample + FromSample<f32>>(
             }
         }
         2 => {
-            for (o, (a, b)) in out.chunks_exact_mut(2).zip(l.iter().zip(r)) {
+            let (pairs, _) = out.as_chunks_mut::<2>();
+            for (o, (a, b)) in pairs.iter_mut().zip(l.iter().zip(r)) {
                 o[0] = conv(*a);
                 o[1] = conv(*b);
             }

@@ -17,9 +17,11 @@ use crate::MAX_ACTIVE_NOTES;
 /// * Two more entries are reserved for the overflow fallback (`AllNotesOff`)
 ///   and for panic (`AllSoundOff`).
 ///
-/// If a note-off still cannot fit, the buffer is flagged and the engine ends
-/// the block with `AllNotesOff` for the slot (and forgets the slot's tracked
-/// notes), which keeps note integrity at the cost of the slot's held notes.
+/// A note-off that finds the buffer full evicts the latest staged note-on
+/// instead of being dropped. Only when the buffer holds nothing but releases
+/// is it flagged and the engine ends the block with `AllNotesOff` for the
+/// slot (forgetting the slot's tracked notes), which keeps note integrity at
+/// the cost of the slot's held notes.
 pub(crate) struct EventBuf {
     events: Vec<DeviceEvent>,
     soft_cap: usize,
@@ -52,6 +54,16 @@ impl EventBuf {
         self.overflow = false;
         self.queued = false;
     }
+}
+
+/// Outcome of staging a note-off.
+pub(crate) enum OffResult {
+    Pushed,
+    /// The note-off was staged by evicting this note-on, which the caller
+    /// must forget (the note never started).
+    Evicted(EventKind),
+    /// Nothing could be evicted; the slot ends the block with `AllNotesOff`.
+    Overflow,
 }
 
 /// Event buffers for every device slot plus the list of slots that received
@@ -101,21 +113,36 @@ impl Staging {
     }
 
     /// Adds a note-off. It is placed before any note-on at the same offset
-    /// unless that note-on starts the very voice being released. Returns
-    /// false only when even the reserve is full (the slot is then flagged
-    /// for an `AllNotesOff` fallback).
-    pub fn push_off(&mut self, slot: usize, offset: u32, kind: EventKind) -> bool {
+    /// unless that note-on starts the very voice being released.
+    ///
+    /// Note-offs are never dropped in favor of note-ons: when the buffer is
+    /// full the latest staged note-on is evicted to make room (and reported
+    /// so its note can be forgotten). Only if the buffer holds nothing but
+    /// releases is the slot flagged for the `AllNotesOff` fallback.
+    pub fn push_off(&mut self, slot: usize, offset: u32, kind: EventKind) -> OffResult {
         let Some(buf) = self.bufs.get_mut(slot) else {
-            return false;
+            return OffResult::Overflow;
         };
         let voice = match kind {
             EventKind::NoteOff { voice, .. } => voice,
             _ => u32::MAX,
         };
+        let mut result = OffResult::Pushed;
         if buf.events.len() >= buf.hard_cap {
-            buf.overflow = true;
-            self.mark(slot);
-            return false;
+            let victim = buf
+                .events
+                .iter()
+                .rposition(|e| matches!(e.kind, EventKind::NoteOn { voice: v, .. } if v != voice));
+            match victim {
+                Some(i) => {
+                    result = OffResult::Evicted(buf.events.remove(i).kind);
+                }
+                None => {
+                    buf.overflow = true;
+                    self.mark(slot);
+                    return OffResult::Overflow;
+                }
+            }
         }
         let mut pos = buf.events.len();
         while pos > 0 {
@@ -136,7 +163,7 @@ impl Staging {
         // `len < hard_cap <= capacity`, so this never reallocates.
         buf.events.insert(pos, DeviceEvent { offset, kind });
         self.mark(slot);
-        true
+        result
     }
 
     /// Adds `AllNotesOff` / `AllSoundOff`. Never fails: the last entry is
