@@ -2427,6 +2427,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "peel-compose"
+version = "0.1.0"
+dependencies = [
+ "peel-document",
+ "peel-time",
+]
+
+[[package]]
 name = "peel-devices"
 version = "0.1.0"
 dependencies = [
