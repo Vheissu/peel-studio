@@ -412,6 +412,12 @@ fn track(ui: &mut Ui, r: Rect, id: Id, s: &mut Session, _ws: &mut Workspace) {
 fn panel_height(desc: &DeviceDescriptor, w: f32) -> f32 {
     let per_row = ((w - 6.0) / CELL_W).floor().max(1.0) as usize;
     let mut h = 0.0;
+    if !peel_devices::presets(desc.type_id).is_empty() {
+        h += 36.0;
+    }
+    if desc.type_id == "peel.sampler" {
+        h += 80.0;
+    }
     for (_, params) in groups(desc) {
         h += 22.0;
         let (wide, knobs): (Vec<&ParamDescriptor>, Vec<&ParamDescriptor>) =
@@ -501,7 +507,13 @@ fn device_panel(
         sample_view(ui, &mut body, dev, s);
     }
 
-    let content_h = panel_height(desc, body.w);
+    let mut content_h = panel_height(desc, body.w);
+    if !presets.is_empty() {
+        content_h -= 36.0;
+    }
+    if desc.type_id == "peel.sampler" {
+        content_h -= 80.0;
+    }
     let scroll_id = W::new(("insp-dev-scroll", dev.id));
     let off = if content_h > body.h {
         scroll_body(ui, scroll_id, body, content_h)

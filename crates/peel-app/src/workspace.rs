@@ -88,7 +88,7 @@ impl Default for Workspace {
     fn default() -> Self {
         Workspace {
             dock: DockTab::Rack,
-            dock_h: 330.0,
+            dock_h: 400.0,
             browser_w: 236.0,
             inspector_w: 300.0,
             browser_tab: BrowserTab::Instruments,
@@ -98,7 +98,7 @@ impl Default for Workspace {
             focus: None,
             roll: RollView {
                 zoom_x: 96.0,
-                row_h: 16.0,
+                row_h: 14.0,
                 scroll_beats: 0.0,
                 top_key: 84.0,
                 snap: Time::new(1, 4),
