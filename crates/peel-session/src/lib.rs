@@ -73,6 +73,16 @@ impl Session {
                 EngineHandle::start_null(config).expect("null audio engine")
             }
         };
+        Session::with_engine(project, engine)
+    }
+
+    /// A session on the silent software clock (tests, headless tools).
+    pub fn new_silent(project: Project) -> Session {
+        let engine = EngineHandle::start_null(EngineConfig::default()).expect("null audio engine");
+        Session::with_engine(project, engine)
+    }
+
+    fn with_engine(project: Project, engine: EngineHandle) -> Session {
         log::info!(
             "audio: {} at {} Hz, block {}",
             engine.device_name(),

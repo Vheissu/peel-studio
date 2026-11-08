@@ -387,6 +387,16 @@ impl Ui {
         r
     }
 
+    /// Where a widget was last drawn (its clipped interaction rectangle).
+    /// Used by tests and tooling to target widgets by id.
+    pub fn widget_rect(&self, id: Id) -> Option<Rect> {
+        self.hits
+            .iter()
+            .chain(self.prev_hits.iter())
+            .find(|h| h.id == id)
+            .map(|h| h.rect)
+    }
+
     /// Total pointer travel since the active widget was pressed.
     pub fn drag_distance(&self) -> f32 {
         self.active_drag_dist

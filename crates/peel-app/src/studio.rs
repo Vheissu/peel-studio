@@ -29,7 +29,39 @@ impl Studio {
             .or(session.project().channels.first())
             .map(|c| c.id);
         ws.focus = ws.selected_channel.map(Focus::Channel);
-        Studio { session, ws }
+        let mut studio = Studio { session, ws };
+        studio.apply_debug_env();
+        studio
+    }
+
+    /// `PEEL_DOCK=rack|roll|mixer`, `PEEL_FOCUS=master` and `PEEL_PLAY=1`
+    /// set up a view for screenshots and manual checks.
+    fn apply_debug_env(&mut self) {
+        match std::env::var("PEEL_DOCK").as_deref() {
+            Ok("roll") => self.ws.dock = DockTab::PianoRoll,
+            Ok("mixer") => self.ws.dock = DockTab::Mixer,
+            _ => {}
+        }
+        if std::env::var("PEEL_FOCUS").as_deref() == Ok("master") {
+            self.ws.focus = Some(Focus::Track(self.session.project().mixer.tracks[0].id));
+        }
+        if let Ok(name) = std::env::var("PEEL_PATTERN")
+            && let Some(p) = self
+                .session
+                .project()
+                .patterns
+                .iter()
+                .find(|p| p.name == name)
+                .map(|p| p.id)
+        {
+            self.session.select_pattern(p);
+        }
+        if std::env::var("PEEL_SONG").is_ok() {
+            self.session.set_mode(PlayMode::Song);
+        }
+        if std::env::var("PEEL_PLAY").is_ok() {
+            self.session.play();
+        }
     }
 
     fn shortcuts(&mut self, ui: &mut Ui, win: &WindowControl) {

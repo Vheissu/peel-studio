@@ -12,6 +12,9 @@ mod transport;
 mod util;
 mod workspace;
 
+#[cfg(test)]
+mod tests;
+
 use std::path::PathBuf;
 
 use peel_session::{Session, template};

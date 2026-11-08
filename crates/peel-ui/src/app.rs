@@ -31,7 +31,7 @@ pub trait App {
 
 /// Window operations available to the app during a frame.
 pub struct WindowControl {
-    window: Arc<Window>,
+    window: Option<Arc<Window>>,
     title: std::cell::RefCell<String>,
     drag: std::cell::Cell<bool>,
     exit: std::cell::Cell<bool>,
@@ -39,9 +39,30 @@ pub struct WindowControl {
 }
 
 impl WindowControl {
+    /// A control with no window, for driving an [`App`] in tests.
+    pub fn headless() -> WindowControl {
+        WindowControl {
+            window: None,
+            title: std::cell::RefCell::new(String::new()),
+            drag: std::cell::Cell::new(false),
+            exit: std::cell::Cell::new(false),
+            adapter: "headless".into(),
+        }
+    }
+
+    pub fn title(&self) -> String {
+        self.title.borrow().clone()
+    }
+
+    pub fn exit_requested(&self) -> bool {
+        self.exit.get()
+    }
+
     pub fn set_title(&self, title: &str) {
         if *self.title.borrow() != title {
-            self.window.set_title(title);
+            if let Some(w) = &self.window {
+                w.set_title(title);
+            }
             *self.title.borrow_mut() = title.to_string();
         }
     }
@@ -66,11 +87,13 @@ impl WindowControl {
     }
 
     pub fn is_maximized(&self) -> bool {
-        self.window.is_maximized()
+        self.window.as_ref().is_some_and(|w| w.is_maximized())
     }
 
     pub fn toggle_maximized(&self) {
-        self.window.set_maximized(!self.window.is_maximized());
+        if let Some(w) = &self.window {
+            w.set_maximized(!w.is_maximized());
+        }
     }
 }
 
@@ -189,7 +212,7 @@ impl<A: App, F: FnOnce(&mut Ui) -> A> ApplicationHandler for Runner<A, F> {
         };
         log::info!("graphics adapter: {}", renderer.adapter_info());
         let control = WindowControl {
-            window: window.clone(),
+            window: Some(window.clone()),
             title: std::cell::RefCell::new(self.options.title.clone()),
             drag: std::cell::Cell::new(false),
             exit: std::cell::Cell::new(false),
