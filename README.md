@@ -16,20 +16,27 @@ effects. There is no web view.
 
 ## What works today
 
-- Pattern workflow: a Channel Rack step sequencer and a Piano Roll edit the
-  same notes; patterns are painted into the Playlist as linked clips, and
-  Make unique splits one off.
+- Pattern workflow: a Channel Rack step sequencer (with a velocity graph)
+  and a Piano Roll edit the same notes; patterns are painted into the
+  Playlist as linked clips, and Make unique splits one off.
 - Ten native instruments (five synthesized drums, a polyphonic synth, a
   mono bass, an FM electric piano, a modelled piano and a sampler) and nine
-  effects (EQ, compressor, limiter, delay, reverb, drive, filter, chorus,
-  utility), with over a hundred factory presets.
-- A console-style mixer with inserts, bus routing, pan, faders, meters,
-  mute and solo.
-- Scales and chord stamping, clipboard, quantize, swing, per-step velocity.
+  effects (EQ with an interactive curve, compressor, limiter, delay, reverb,
+  drive, filter, chorus, utility), with over a hundred factory presets in
+  the Browser.
+- Arrangement: pattern, audio and automation clips; trims, fades, marquee
+  selection, Alt-drag copies, loop range, lane management.
+- Mixing: console-style strips with inserts, bus routing, post-fader sends,
+  pan, faders, meters, mute and solo; automation of any device parameter,
+  track volume or pan.
+- Playing and recording: computer keyboard and hardware MIDI keyboards with
+  sustain, note recording into patterns, scales and chord stamping,
+  quantize, swing, tap tempo.
 - Exact rational musical time, sample-accurate playback that cannot drift,
   and a realtime audio path verified to make no allocations.
 - Open project files with atomic saves, autosave and crash recovery,
-  Standard MIDI File import and export, WAV export.
+  Standard MIDI File import and export, WAV export, undo history.
+- Screen reader support through AccessKit and keyboard focus traversal.
 
 | Piano Roll with a scale | Mixer and EQ |
 | --- | --- |
