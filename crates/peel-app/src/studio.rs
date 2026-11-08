@@ -182,6 +182,16 @@ impl Studio {
             Ok("mixer") => self.ws.dock = DockTab::Mixer,
             _ => {}
         }
+        if let Some(path) = std::env::var_os("PEEL_AUDIO") {
+            let lane = self.session.project().arrangement().tracks[3].id;
+            if let Err(e) = self.session.add_audio_clip(
+                lane,
+                peel_document::Time::ZERO,
+                std::path::Path::new(&path),
+            ) {
+                log::error!("PEEL_AUDIO: {e}");
+            }
+        }
         if std::env::var_os("PEEL_EQ").is_some() {
             let master = self.session.project().mixer.tracks[0].id;
             let eq = peel_session::template::device("peel.fx.eq", Some("Vocal Presence"));

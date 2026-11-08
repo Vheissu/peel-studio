@@ -542,3 +542,60 @@ fn browser_presets_add_configured_channels() {
     }
     assert_eq!(h.studio.ws.selected_channel, Some(ch.id));
 }
+
+#[test]
+fn dropping_a_sample_on_a_lane_adds_an_audio_clip() {
+    let dir = std::env::temp_dir().join(format!("peel-app-audio-{}", peel_document::Id::new()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("tone.wav");
+    let sr = 48_000u32;
+    let tone: Vec<f32> = (0..sr)
+        .map(|i| (i as f32 * 440.0 * std::f32::consts::TAU / sr as f32).sin() * 0.5)
+        .collect();
+    peel_media::write_wav(&path, &[&tone, &tone], sr, peel_media::WavFormat::PCM24).unwrap();
+
+    let mut h = Harness::new();
+    let lane = h.session().project().arrangement().tracks[4].id;
+    let canvas = h.rect(W::new("pl-canvas"));
+    let lane_h = h.studio.ws.playlist.lane_h;
+    h.ui.start_drag(peel_ui::DragPayload {
+        data: Box::new(crate::browser::BrowserItem::Sample(path.clone())),
+        label: "tone".into(),
+        color: peel_ui::Color::WHITE,
+    });
+    h.ui.input.down[0] = true;
+    let p = vec2(canvas.x + 50.0, canvas.y + lane_h * 4.5);
+    h.move_to(p);
+    h.release(0);
+    let clip = h
+        .session()
+        .project()
+        .arrangement()
+        .clips
+        .iter()
+        .find(|c| matches!(c.content, ClipContent::Audio { .. }))
+        .cloned()
+        .expect("audio clip");
+    assert_eq!(clip.track, lane);
+    // One second at 118 BPM is just under two beats.
+    assert!(
+        clip.length >= Time::new(15, 8) && clip.length <= Time::beats(2),
+        "{:?}",
+        clip.length
+    );
+    let ClipContent::Audio { asset, .. } = clip.content else {
+        unreachable!()
+    };
+    // The decode runs on the loader thread; peaks appear once it finishes.
+    let mut ok = false;
+    for _ in 0..200 {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        h.frame();
+        if h.session().audio_peaks(asset).is_some() {
+            ok = true;
+            break;
+        }
+    }
+    assert!(ok, "peaks computed");
+    std::fs::remove_dir_all(&dir).ok();
+}

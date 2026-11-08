@@ -138,12 +138,39 @@ pub fn draw(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) {
     track_heads(ui, heads, &v, &arr.tracks, s);
     clips(ui, &v, &arr.tracks, &arr.clips, s, ws);
 
-    // Patterns dragged from the browser.
-    if let Some((BrowserItem::Pattern(pid), p)) = ui.take_drop::<BrowserItem>(lanes_r) {
+    // Patterns and samples dragged from the browser, and files from the OS.
+    let accepts = |i: &BrowserItem| matches!(i, BrowserItem::Pattern(_) | BrowserItem::Sample(_));
+    if ui.drop_hover::<BrowserItem>(lanes_r).is_some_and(accepts)
+        && let Some((item, p)) = ui.take_drop::<BrowserItem>(lanes_r)
+    {
         let lane = v.lane_at(p.y);
+        let beat = Time::from_f64(v.beat(p.x).max(0.0), 960).floor_to(ws.playlist.snap);
         if let Some(track) = arr.tracks.get(lane.max(0) as usize).map(|t| t.id) {
-            let beat = Time::from_f64(v.beat(p.x).max(0.0), 960).floor_to(ws.playlist.snap);
-            place_clip(s, track, beat, pid);
+            match item {
+                BrowserItem::Pattern(pid) => place_clip(s, track, beat, pid),
+                BrowserItem::Sample(path) => {
+                    if let Err(e) = s.add_audio_clip(track, beat, &path) {
+                        s.notify(format!("Could not add {}: {e}", path.display()), true);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    if let Some(p) = ui.pointer().filter(|p| lanes_r.contains(*p)) {
+        let files = ui.take_dropped_files(lanes_r);
+        let lane = v.lane_at(p.y).max(0) as usize;
+        let beat = Time::from_f64(v.beat(p.x).max(0.0), 960).floor_to(ws.playlist.snap);
+        for (i, path) in files
+            .iter()
+            .filter(|f| peel_media::is_audio_file(f))
+            .enumerate()
+        {
+            if let Some(track) = arr.tracks.get(lane + i).map(|t| t.id)
+                && let Err(e) = s.add_audio_clip(track, beat, path)
+            {
+                s.notify(format!("Could not add {}: {e}", path.display()), true);
+            }
         }
     }
 
@@ -723,7 +750,43 @@ fn clips(
             MenuItem::Separator,
             MenuItem::new("Delete clip").shortcut("Del"),
         ];
-        if let Some(choice) = ui.menu(menu_id, at, &items) {
+        if let ClipContent::Audio { reversed, .. } = c.content {
+            let audio_items = [
+                MenuItem::new(if reversed { "Play forwards" } else { "Reverse" }),
+                MenuItem::new(if c.muted { "Unmute clip" } else { "Mute clip" }),
+                MenuItem::Separator,
+                MenuItem::new("Delete clip").shortcut("Del"),
+            ];
+            let cid = c.id;
+            match ui.menu(menu_id, at, &audio_items) {
+                Some(0) => s.doc.edit(
+                    if reversed {
+                        "Play clip forwards"
+                    } else {
+                        "Reverse clip"
+                    },
+                    |p| {
+                        if let Some(x) = p.arrangement_mut().clips.iter_mut().find(|x| x.id == cid)
+                            && let ClipContent::Audio { reversed, .. } = &mut x.content
+                        {
+                            *reversed = !*reversed;
+                        }
+                    },
+                ),
+                Some(1) => s
+                    .doc
+                    .edit(if c.muted { "Unmute clip" } else { "Mute clip" }, |p| {
+                        if let Some(x) = p.arrangement_mut().clips.iter_mut().find(|x| x.id == cid)
+                        {
+                            x.muted = !x.muted;
+                        }
+                    }),
+                Some(3) => s.doc.edit("Delete clip", |p| {
+                    p.arrangement_mut().clips.retain(|x| x.id != cid)
+                }),
+                _ => {}
+            }
+        } else if let Some(choice) = ui.menu(menu_id, at, &items) {
             let ClipContent::Pattern { pattern } = c.content else {
                 return;
             };
@@ -962,8 +1025,28 @@ fn clips(
         if !cr.intersects(&lanes) {
             continue;
         }
-        let ClipContent::Pattern { pattern } = c.content else {
-            continue;
+        let lane_muted_any = tracks.get(lane).is_some_and(|t| t.muted) || c.muted;
+        let pattern = match c.content {
+            ClipContent::Pattern { pattern } => pattern,
+            ClipContent::Audio {
+                asset, reversed, ..
+            } => {
+                let sel = ws.playlist.selection.contains(&c.id);
+                let hovered = hit.as_ref().is_some_and(|(h, _)| h.id == c.id);
+                draw_audio_clip(
+                    ui,
+                    v,
+                    c,
+                    cr,
+                    asset,
+                    reversed,
+                    sel,
+                    hovered,
+                    lane_muted_any,
+                    s,
+                );
+                continue;
+            }
         };
         let Some(pat) = patterns.get(&pattern) else {
             continue;
@@ -1161,4 +1244,137 @@ pub fn make_unique(s: &mut Session, clip: Id, pattern: Id) -> Option<Id> {
         }
     });
     Some(new_id)
+}
+
+/// Draws an audio clip with its waveform from the cached peak pyramid.
+#[allow(clippy::too_many_arguments)]
+fn draw_audio_clip(
+    ui: &mut Ui,
+    v: &View,
+    c: &Clip,
+    cr: Rect,
+    asset: Id,
+    reversed: bool,
+    sel: bool,
+    hovered: bool,
+    muted: bool,
+    s: &Session,
+) {
+    let t = ui.theme.clone();
+    let wave = Color::hex(0x56B3C2);
+    let body = t.panel.mix(wave, if muted { 0.10 } else { 0.22 });
+    ui.scene.rect(
+        cr,
+        t.radius_s,
+        if hovered { body.lighten(0.04) } else { body },
+    );
+    let header = Rect {
+        h: 16.0f32.min(cr.h * 0.4),
+        ..cr
+    };
+    ui.scene.rect_ex(
+        header,
+        [t.radius_s, t.radius_s, 0.0, 0.0],
+        wave.alpha(if muted { 0.35 } else { 0.8 }),
+        0.0,
+        Color::TRANSPARENT,
+    );
+    let name = s
+        .project()
+        .asset(asset)
+        .map(|a| a.name.clone())
+        .unwrap_or_default();
+    if cr.w > 26.0 {
+        let label = if reversed {
+            format!("{name}  (reversed)")
+        } else {
+            name
+        };
+        ui.with_clip(header, |ui| {
+            ui.text(
+                header.shrink2(6.0, 0.0),
+                &label,
+                t.caption.weight(peel_ui::FontWeight::SemiBold),
+                ink_on(wave),
+                Align::Start,
+            );
+        });
+    }
+    let body_r = Rect {
+        y: header.bottom() + 2.0,
+        h: cr.bottom() - header.bottom() - 4.0,
+        ..cr
+    };
+    if body_r.h < 4.0 {
+        return;
+    }
+    let Some(peaks) = s.audio_peaks(asset) else {
+        if s.audio_loading(asset) {
+            ui.text(body_r, "Loading", t.caption, t.text_faint, Align::Center);
+        } else {
+            ui.text(body_r, "Missing file", t.caption, t.record, Align::Center);
+        }
+        return;
+    };
+    // Map each pixel column to source frames through the tempo map.
+    let tempo = peel_time::TempoMap::from_segments(&s.project().tempo);
+    let rate = s.sample_rate() as f64;
+    let source0 = peel_session::clip_source_start_seconds(&tempo, c);
+    let clip_sec0 = tempo.beat_to_seconds(c.start.as_f64());
+    let clip_sec1 = tempo.beat_to_seconds(c.end().as_f64());
+    let frames = peaks.frames() as f64;
+    let x0 = cr.x.max(v.lanes.x).floor();
+    let x1 = cr.right().min(v.lanes.right()).ceil();
+    let cols = (x1 - x0).max(1.0) as usize;
+    let mid = body_r.center().y;
+    let amp = body_r.h * 0.48;
+    ui.scene.push_clip(cr);
+    let frame_at = |x: f32| -> f64 {
+        let sec = tempo.beat_to_seconds(v.beat(x));
+        let into = if reversed {
+            (clip_sec1 - sec) + source0
+        } else {
+            (sec - clip_sec0) + source0
+        };
+        (into * rate).clamp(0.0, frames)
+    };
+    let (mut prev_end, color) = (
+        frame_at(x0),
+        wave.lighten(0.3).alpha(if muted { 0.35 } else { 0.9 }),
+    );
+    for i in 0..cols {
+        let x = x0 + i as f32;
+        let f_end = frame_at(x + 1.0);
+        let (a, b) = if prev_end <= f_end {
+            (prev_end, f_end)
+        } else {
+            (f_end, prev_end)
+        };
+        prev_end = f_end;
+        if b - a < 1.0 || a >= frames {
+            continue;
+        }
+        if let Some((lo, hi)) = peaks
+            .query(a as usize, (b as usize).max(a as usize + 1), 1)
+            .next()
+        {
+            let y0 = mid - hi.clamp(-1.0, 1.0) * amp;
+            let y1 = mid - lo.clamp(-1.0, 1.0) * amp;
+            ui.scene.rect(
+                Rect {
+                    x,
+                    y: y0,
+                    w: 1.0,
+                    h: (y1 - y0).max(1.0),
+                },
+                0.0,
+                color,
+            );
+        }
+    }
+    ui.scene.pop_clip();
+    if sel {
+        ui.scene
+            .outline(cr, t.radius_s, 1.5, Color::WHITE.alpha(0.85));
+    }
 }
