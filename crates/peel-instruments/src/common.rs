@@ -376,22 +376,6 @@ impl<V: PoolVoice> Pool<V> {
         }
     }
 
-    /// Fades out every sounding voice (used to choke).
-    pub(crate) fn fade_all(&mut self) {
-        for (i, v) in self.voices.iter_mut().enumerate() {
-            if v.is_active() {
-                v.fade_out(self.sample_rate);
-                if matches!(
-                    self.alloc.slot(i).state,
-                    VoiceState::Held | VoiceState::Releasing
-                ) {
-                    // Counted as fading so it no longer takes a polyphony slot.
-                    self.alloc.mark_fading(i);
-                }
-            }
-        }
-    }
-
     pub(crate) fn kill_all(&mut self) {
         for v in &mut self.voices {
             v.kill();

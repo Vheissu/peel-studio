@@ -467,8 +467,8 @@ impl GrandVoice {
             _ => [-0.5, 0.0, 0.5],
         };
         let key_pan = (kf - 60.0) / 48.0 * 0.35;
-        for string in 0..MAX_STRINGS {
-            let (l, r) = pan_gains(((spread[string] + key_pan) * s.width).clamp(-1.0, 1.0));
+        for (string, &offset) in spread.iter().enumerate() {
+            let (l, r) = pan_gains(((offset + key_pan) * s.width).clamp(-1.0, 1.0));
             self.gl[string] = l;
             self.gr[string] = r;
         }

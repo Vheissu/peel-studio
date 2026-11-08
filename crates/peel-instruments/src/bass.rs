@@ -14,7 +14,7 @@ use peel_dsp::param::{ParamDescriptor, Unit};
 use peel_dsp::util::{db_to_gain, key_to_hz};
 use peel_dsp::{Device, DeviceDescriptor, DeviceKind, ParamId, Preset, ProcessContext};
 
-use crate::common::{CTRL, Instrument, Ramp, Synth, lerp, ramp_coef, vel_gain};
+use crate::common::{CTRL, Instrument, Ramp, Synth, ramp_coef, vel_gain};
 
 const WAVE: ParamId = 1;
 const PW: ParamId = 2;
@@ -130,9 +130,9 @@ static PARAMS: [ParamDescriptor; 21] = [
         "filter.decay",
         "Env Decay",
         "Filter",
-        0.02,
-        2.0,
-        0.3,
+        0.03,
+        4.0,
+        0.5,
         Unit::Seconds,
     ),
     ParamDescriptor::linear(
@@ -261,7 +261,7 @@ pub static PRESETS: [Preset; 6] = [
             ("filter.cutoff", 900.0),
             ("filter.resonance", 0.05),
             ("filter.env_amount", 0.8),
-            ("filter.decay", 0.3),
+            ("filter.decay", 0.5),
             ("filter.sustain", 0.0),
             ("filter.key_track", 0.3),
             ("filter.drive", 0.15),
@@ -284,7 +284,7 @@ pub static PRESETS: [Preset; 6] = [
             ("filter.cutoff", 360.0),
             ("filter.resonance", 0.78),
             ("filter.env_amount", 3.2),
-            ("filter.decay", 0.2),
+            ("filter.decay", 0.4),
             ("filter.key_track", 0.4),
             ("filter.drive", 0.45),
             ("filter.accent", 0.9),
@@ -307,7 +307,7 @@ pub static PRESETS: [Preset; 6] = [
             ("filter.cutoff", 650.0),
             ("filter.resonance", 0.2),
             ("filter.env_amount", 0.5),
-            ("filter.decay", 0.5),
+            ("filter.decay", 0.9),
             ("filter.sustain", 0.4),
             ("filter.drive", 0.4),
             ("amp.attack", 0.01),
@@ -325,7 +325,7 @@ pub static PRESETS: [Preset; 6] = [
             ("filter.cutoff", 240.0),
             ("filter.resonance", 0.35),
             ("filter.env_amount", 3.5),
-            ("filter.decay", 0.15),
+            ("filter.decay", 0.3),
             ("filter.drive", 0.2),
             ("amp.decay", 0.22),
             ("amp.sustain", 0.0),
@@ -343,7 +343,7 @@ pub static PRESETS: [Preset; 6] = [
             ("filter.cutoff", 480.0),
             ("filter.resonance", 0.4),
             ("filter.env_amount", 2.6),
-            ("filter.decay", 0.12),
+            ("filter.decay", 0.22),
             ("filter.key_track", 0.6),
             ("filter.drive", 0.3),
             ("amp.attack", 0.002),
@@ -364,7 +364,7 @@ pub static PRESETS: [Preset; 6] = [
             ("filter.cutoff", 560.0),
             ("filter.resonance", 0.55),
             ("filter.env_amount", 2.0),
-            ("filter.decay", 0.35),
+            ("filter.decay", 0.6),
             ("filter.drive", 0.85),
             ("filter.accent", 0.7),
             ("amp.sustain", 0.9),
@@ -464,7 +464,7 @@ impl Bass {
             wave: Waveform::Sine,
             mode: 1,
             amp_adsr: [0.004, 0.5, 0.9, 0.15],
-            flt_decay: 0.3,
+            flt_decay: 0.5,
             flt_sustain: 0.0,
             vel_sens: 0.5,
             pw: Ramp::new(0.5),

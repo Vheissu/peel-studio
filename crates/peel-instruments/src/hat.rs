@@ -355,8 +355,8 @@ impl Synth for Hat {
         let color = (self.color * ratio.sqrt()).min(0.42 * sr);
         let v = &mut self.pool.voices[slot];
         v.active = true;
-        for i in 0..6 {
-            v.dt[i] = (BANK[i] * ratio / sr).min(0.45);
+        for (i, &hz) in BANK.iter().enumerate() {
+            v.dt[i] = (hz * ratio / sr).min(0.45);
             // Fixed, spread phases so every hit has the same metallic attack.
             v.osc[i] = Osc::with_phase((i as f32 * 0.37 + 0.11).fract());
         }
@@ -373,7 +373,7 @@ impl Synth for Hat {
         v.slow.trigger(1.0, 0.000_2, sr);
         v.metal_gain = self.metal * 1.6;
         v.noise_gain = lerp(0.9, 0.3, self.metal);
-        v.gain = vel_gain(velocity, self.vel_sens) * self.level_gain;
+        v.gain = vel_gain(velocity, self.vel_sens);
         v.choke_ms = self.choke_ms;
         v.fade.reset();
     }
@@ -402,8 +402,8 @@ impl Synth for Hat {
             for v in self.pool.voices.iter_mut().filter(|v| v.active) {
                 out += v.tick();
             }
-            left[n] = out;
-            right[n] = out;
+            left[n] = out * self.level_gain;
+            right[n] = out * self.level_gain;
         }
     }
 

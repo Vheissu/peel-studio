@@ -533,3 +533,39 @@ fn drums_transpose_with_key() {
         );
     }
 }
+
+#[test]
+fn param_events_take_effect_at_their_sample_and_not_before() {
+    for id in types() {
+        let desc = peel_instruments::descriptors()
+            .iter()
+            .find(|d| d.type_id == id)
+            .unwrap();
+        let notes = [note_on(100, 60, 0.9, 1), note_on(120, 67, 0.9, 2)];
+        let mut plain = fresh(id);
+        let (a, _) = render(plain.as_mut(), &notes, 8_000, 256);
+
+        let mut events = notes.to_vec();
+        for p in desc.params {
+            events.push((
+                3_000,
+                EventKind::Param {
+                    id: p.id,
+                    value: p.max,
+                },
+            ));
+        }
+        events.sort_by_key(|(t, _)| *t);
+        let mut changed = fresh(id);
+        let (b, _) = render(changed.as_mut(), &events, 8_000, 256);
+        assert_eq!(
+            &a[..3_000],
+            &b[..3_000],
+            "{id}: parameter event leaked into the past"
+        );
+        assert!(
+            max_diff(&a[3_000..], &b[3_000..]) > 1e-4,
+            "{id}: parameter event had no audible effect"
+        );
+    }
+}

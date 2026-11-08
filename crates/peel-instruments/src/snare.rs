@@ -449,7 +449,7 @@ impl Synth for Snare {
         v.snap_gain = self.snap * 1.1 * lerp(0.4, 1.0, velocity);
         v.body_gain = lerp(0.2, 1.0, self.mix);
         v.noise_gain = lerp(1.6, 0.35, self.mix) * lerp(0.6, 1.0, velocity);
-        v.gain = vel_gain(velocity, self.vel_sens) * self.level_gain;
+        v.gain = vel_gain(velocity, self.vel_sens);
         v.fade.reset();
     }
 
@@ -473,8 +473,8 @@ impl Synth for Snare {
             for v in self.pool.voices.iter_mut().filter(|v| v.active) {
                 out += v.tick(sr_inv, self.drive_g, self.drive_norm);
             }
-            left[n] = out;
-            right[n] = out;
+            left[n] = out * self.level_gain;
+            right[n] = out * self.level_gain;
         }
     }
 

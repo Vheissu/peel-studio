@@ -139,8 +139,13 @@ pub fn detect_pitch(buf: &[f32], sample_rate: f32) -> f32 {
         }
         *slot = sum / energy;
     }
-    let best = nac.iter().cloned().fold(0.0f32, f32::max);
-    for lag in min_lag + 1..max_lag {
+    // Skip the broad peak around zero lag: start once the correlation has
+    // gone negative.
+    let Some(start) = (min_lag..=max_lag).find(|&l| nac[l] < 0.0) else {
+        return 0.0;
+    };
+    let best = nac[start..=max_lag].iter().cloned().fold(0.0f32, f32::max);
+    for lag in start + 1..max_lag {
         if nac[lag] >= 0.85 * best && nac[lag] >= nac[lag - 1] && nac[lag] >= nac[lag + 1] {
             // Parabolic refinement around the peak.
             let (a, b, c) = (nac[lag - 1], nac[lag], nac[lag + 1]);

@@ -615,7 +615,7 @@ impl Synth for Sampler {
         v.loop_start = ls;
         v.loop_end = le;
         v.honors_off = honors_off;
-        v.tail_fade = ((0.003 * sample.sample_rate) as f32).max(2.0);
+        v.tail_fade = (0.003 * sample.sample_rate).max(2.0);
         v.gain = vel;
         v.filter_l.set(c, r, sr);
         v.filter_r.copy_coeffs(&v.filter_l);

@@ -431,7 +431,7 @@ impl Synth for Kick {
         v.bright = lerp(0.3, 1.0, velocity.sqrt());
         v.lp.set_cutoff(self.tone_hz * v.bright, sr);
         v.lp.reset();
-        v.gain = vel_gain(velocity, self.vel_sens) * self.level_gain;
+        v.gain = vel_gain(velocity, self.vel_sens);
         v.fade.reset();
     }
 
@@ -455,8 +455,8 @@ impl Synth for Kick {
             for v in self.pool.voices.iter_mut().filter(|v| v.active) {
                 out += v.tick(sr_inv, self.drive_g, self.drive_norm);
             }
-            left[n] = out;
-            right[n] = out;
+            left[n] = out * self.level_gain;
+            right[n] = out * self.level_gain;
         }
     }
 

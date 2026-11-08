@@ -13,7 +13,7 @@ pub const MIN_TIME: f32 = 0.000_5;
 const ATTACK_RATIO: f32 = 0.3;
 /// Overshoot ratio for decay and release; smaller reaches the end sooner
 /// relative to the nominal time.
-const DECAY_RATIO: f32 = 0.000_3;
+const DECAY_RATIO: f32 = 0.004;
 /// Level below which a releasing envelope is considered finished.
 const IDLE_LEVEL: f32 = 1.0e-5;
 
@@ -33,8 +33,8 @@ fn exp_coef(samples: f32, ratio: f32) -> f32 {
 /// Attack/decay/sustain/release envelope.
 ///
 /// Times are in seconds. `decay` and `release` are the time a full-scale fall
-/// takes to reach silence, so the audible tail is shorter than the number
-/// suggests (the first half of the time covers about 30 dB).
+/// takes to reach silence; the curve is exponential, so the first half of
+/// that time already covers about 24 dB.
 #[derive(Clone, Copy, Debug)]
 pub struct Adsr {
     stage: Stage,

@@ -439,7 +439,7 @@ impl Synth for Clap {
         v.tail.set_t60(self.decay, sr);
         v.snap_gain = self.snap * 1.5;
         v.room_gain = self.room * 1.4 * lerp(0.6, 1.0, velocity);
-        v.gain = vel_gain(velocity, self.vel_sens) * self.level_gain;
+        v.gain = vel_gain(velocity, self.vel_sens);
         v.fade.reset();
     }
 
@@ -464,8 +464,8 @@ impl Synth for Clap {
                 l += a;
                 r += b;
             }
-            left[n] = l;
-            right[n] = r;
+            left[n] = l * self.level_gain;
+            right[n] = r * self.level_gain;
         }
     }
 
