@@ -1575,3 +1575,45 @@ fn pointer_use_never_shows_a_focus_ring_or_takes_keys() {
         draw(ui);
     });
 }
+
+#[test]
+fn custom_drawn_buttons_join_the_keyboard_and_the_tree() {
+    let mut h = Harness::new();
+    let id = Id::new("tab");
+    let r = cell(0);
+    let draw = |ui: &mut Ui| {
+        let resp = ui.interact_button(id, r, "Mixer");
+        ui.scene.rect(r, 4.0, ui.theme.control);
+        ui.focus_ring(id, r, 4.0);
+        resp.clicked
+    };
+    h.frame(draw);
+    let n = h.ui.accessibility_node(id).unwrap();
+    assert_eq!(n.role(), Role::Button);
+    assert_eq!(n.label(), Some("Mixer"));
+    assert!(n.supports_action(Action::Click));
+    h.tab();
+    h.frame(draw);
+    assert!(h.ui.is_kb_focused(id));
+    h.press(named(NamedKey::Enter));
+    assert!(h.frame(draw));
+    h.action(Action::Click, id, None);
+    assert!(h.frame(draw));
+
+    // Full control for other kinds of widget.
+    let tab = Id::new("tab2");
+    let selected = true;
+    h.frame(|ui| {
+        ui.interact_node(
+            tab,
+            cell(1),
+            FocusKind::Activate,
+            Semantics::new(Role::Tab)
+                .label("Piano roll")
+                .selected(selected),
+        );
+    });
+    let n = h.ui.accessibility_node(tab).unwrap();
+    assert_eq!(n.role(), Role::Tab);
+    assert_eq!(n.is_selected(), Some(true));
+}

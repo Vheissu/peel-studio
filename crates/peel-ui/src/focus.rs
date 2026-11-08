@@ -251,7 +251,9 @@ impl Ui {
     /// Moves keyboard focus to `id`, for example into a dialog that just
     /// opened. A text field takes it by starting to edit.
     pub fn request_kb_focus(&mut self, id: Id) {
-        self.set_kb_focus(Some(id));
+        self.kb_focus = Some(id);
+        self.kb_entered = Some(id);
+        self.request_repaint();
     }
 
     pub fn clear_kb_focus(&mut self) {

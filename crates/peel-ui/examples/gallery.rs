@@ -57,10 +57,9 @@ impl App for Gallery {
             14.0,
         );
         row.cut_left(8.0);
-        if ui
-            .led(Id::new("led"), row.cut_left(24.0), self.led, t.play)
-            .clicked
-        {
+        let led = ui.led(Id::new("led"), row.cut_left(24.0), self.led, t.play);
+        ui.name(&led, "Monitoring");
+        if led.clicked {
             self.led = !self.led;
         }
         panel.cut_top(12.0);
@@ -77,7 +76,8 @@ impl App for Gallery {
         for i in 0..4 {
             let mut k = knobs.cut_left(56.0);
             let label = k.cut_bottom(16.0);
-            ui.knob(
+            let name = ["Cutoff", "Res", "Drive", "Pan"][i];
+            let knob = ui.knob(
                 Id::new(("knob", i)),
                 k,
                 &mut self.knobs[i],
@@ -85,13 +85,9 @@ impl App for Gallery {
                 colors[i],
                 i == 3,
             );
-            ui.text(
-                label,
-                ["Cutoff", "Res", "Drive", "Pan"][i],
-                t.caption,
-                t.text_faint,
-                Align::Center,
-            );
+            // Screen readers cannot see the caption below the knob.
+            ui.name(&knob, name);
+            ui.text(label, name, t.caption, t.text_faint, Align::Center);
             knobs.cut_left(12.0);
         }
         panel.cut_top(16.0);
@@ -103,6 +99,7 @@ impl App for Gallery {
             0.5,
             t.accent,
         );
+        ui.label_last("Mix");
         panel.cut_top(16.0);
         let bpm = panel.cut_top(36.0).with_w(110.0);
         ui.scene.rect(bpm, t.radius_m, t.bg);
@@ -117,6 +114,7 @@ impl App for Gallery {
             t.accent,
             |v| format!("{v:.1}"),
         );
+        ui.label_last("Tempo");
         panel.cut_top(16.0);
         let name = panel.cut_top(30.0).with_w(260.0);
         ui.text_edit(Id::new("name"), name, &mut self.name, "Search sounds");
@@ -163,8 +161,10 @@ impl App for Gallery {
         let mut body = strip;
         let meter = body.cut_right(14.0);
         ui.fader(Id::new("fader"), body, &mut self.fader, 0.75, t.accent);
+        ui.label_last("Master volume");
         let lvl = (ui.time() as f32 * 1.7).sin().abs() * 1.05;
         ui.meter(Id::new("meter"), meter, (lvl, lvl * 0.8));
+        ui.label_last("Master level");
         ui.request_repaint();
     }
 }

@@ -35,6 +35,13 @@
 //! real-world value string with [`Ui::value_text`], which screen readers
 //! prefer over the number.
 //!
+//! An icon button reports a toggled state once it has been `on`; a toggle
+//! that has never been on looks like a plain button until then. Declare it
+//! up front with `ui.describe_node(id, Semantics::patch().toggled(on))`.
+//!
+//! `ui.text` draws pixels and is not described. Give headings and names that
+//! matter a node with [`Ui::describe_label`].
+//!
 //! # Custom widgets
 //!
 //! Custom canvases (a piano roll, a playlist, a step grid) describe
@@ -76,6 +83,8 @@
 //! * *Increment*, *Decrement* and *SetValue* reach value widgets through
 //!   [`Ui::take_adjust`]; text fields take *SetValue* and
 //!   *ReplaceSelectedText*.
+//! * Scroll areas answer the scroll actions (by a line or a page, or to an
+//!   offset).
 //! * Anything else is available to custom widgets through
 //!   [`Ui::take_action`].
 //!
@@ -587,6 +596,38 @@ impl Ui {
             self.a11y.last = Some(id);
         }
         out
+    }
+
+    /// [`Ui::interact`] for a custom-drawn button: also a keyboard focus stop
+    /// (Space and Enter click it), described to screen readers as a button
+    /// named `label`, and clickable by assistive technology. Draw the ring
+    /// yourself after the widget, with [`Ui::focus_ring`].
+    pub fn interact_button(&mut self, id: Id, rect: Rect, label: &str) -> Response {
+        self.interact_node(
+            id,
+            rect,
+            FocusKind::Activate,
+            Semantics::new(Role::Button).label(label),
+        )
+    }
+
+    /// [`Ui::interact`] for any custom-drawn widget: registers a focus stop
+    /// of `kind` and describes the widget with `sem`. The node's position is
+    /// `rect`. See [`Ui::interact_button`].
+    pub fn interact_node(
+        &mut self,
+        id: Id,
+        rect: Rect,
+        kind: FocusKind,
+        sem: Semantics,
+    ) -> Response {
+        let resp = self.interact(id, rect);
+        self.focusable(id, rect, kind);
+        if self.a11y.on {
+            self.a11y_upsert(id, RANK_TEXT, sem.rect(rect));
+            self.a11y.last = Some(id);
+        }
+        resp
     }
 
     /// Names a widget (for example the response of an icon button or a
