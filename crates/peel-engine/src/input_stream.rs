@@ -31,6 +31,18 @@ pub struct InputRequest {
     pub buffer_frames: Option<u32>,
 }
 
+impl InputRequest {
+    /// The input [`EngineConfig::input_device`] names, with the output's
+    /// buffer size.
+    pub fn from_config(config: &crate::EngineConfig) -> InputRequest {
+        InputRequest {
+            device: config.input_device.clone().filter(|d| !d.trim().is_empty()),
+            sample_rate: None,
+            buffer_frames: config.buffer_frames,
+        }
+    }
+}
+
 /// An opened input.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InputInfo {

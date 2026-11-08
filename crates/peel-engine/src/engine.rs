@@ -39,7 +39,7 @@ use crate::audio::AudioState;
 use crate::clock::{Origin, loop_samples};
 use crate::command::{EngineCommand, Retired};
 use crate::events::{ActiveNote, ActiveNotes, OffResult, Staging};
-use crate::input::{InputShared, MonitorReceiver};
+use crate::input::{InputInjector, InputShared, MonitorReceiver, new_processor};
 use crate::live::{LiveInput, LiveShared, LiveState, LiveTiming, RecordedReceiver};
 use crate::mixer::{Mixer, mix_ramped, peak, sanitize_peak, scale_ramped, slew, target_gains};
 use crate::monitor::{Metronome, Preview};
@@ -245,6 +245,34 @@ impl Engine {
     /// capture, monitoring and timing. See [`crate::input`].
     pub fn input_shared(&self) -> &Arc<InputShared> {
         &self.input
+    }
+
+    /// Connects an input that no device feeds and returns the injector that
+    /// feeds it, for engines driven directly (tests, tools). With a device
+    /// engine use [`EngineHandle::open_injected_input`](crate::EngineHandle::open_injected_input).
+    /// Monitoring works when `sample_rate` equals the engine's.
+    pub fn open_injected_input(
+        &mut self,
+        telemetry: &Arc<Telemetry>,
+        sample_rate: u32,
+        channels: u16,
+    ) -> InputInjector {
+        let out_rate = self.sample_rate.round() as u32;
+        let (processor, parts) = new_processor(
+            &self.input,
+            telemetry,
+            sample_rate,
+            channels.max(1),
+            out_rate,
+        );
+        self.input.attach(
+            parts.sample_rate,
+            parts.channels,
+            parts.capture,
+            parts.monitor.is_some(),
+        );
+        self.handle_command(EngineCommand::SetInputMonitor(parts.monitor.map(Box::new)));
+        InputInjector::new(processor)
     }
 
     /// Tells the input side how the output callback is timed, so a take can

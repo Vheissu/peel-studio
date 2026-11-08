@@ -2102,6 +2102,7 @@ name = "peel-session"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "dirs",
  "log",
  "midir",
  "peel-devices",

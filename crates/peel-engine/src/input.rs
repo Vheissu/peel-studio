@@ -273,6 +273,13 @@ impl InputShared {
         self.sample_rate.load(Ordering::Relaxed)
     }
 
+    /// Length in seconds of the input callbacks as last seen (0 before the
+    /// first one).
+    pub fn input_block_seconds(&self) -> f64 {
+        f64::from(self.in_block.load(Ordering::Relaxed))
+            / f64::from(self.sample_rate.load(Ordering::Relaxed).max(1))
+    }
+
     /// Channels the input device delivers (0 when none is open).
     pub fn device_channels(&self) -> u16 {
         self.device_channels.load(Ordering::Relaxed) as u16
@@ -668,7 +675,12 @@ impl InputProcessor {
         let mut buf = [0.0f32; CHUNK * 2];
         for block in data.chunks(CHUNK * ch) {
             let n = block.len() / ch;
-            for (out, frame) in buf.chunks_exact_mut(2).zip(block.chunks_exact(ch)) {
+            for (out, frame) in buf
+                .as_chunks_mut::<2>()
+                .0
+                .iter_mut()
+                .zip(block.chunks_exact(ch))
+            {
                 let l = clean(frame[a].to_sample::<f32>());
                 let r = clean(frame[b].to_sample::<f32>());
                 peak[0] = peak[0].max(l.abs());
@@ -936,7 +948,7 @@ impl MonitorReceiver {
             let mut gain = self.gain;
             let mut i = 0;
             for part in [a, b] {
-                for pair in part.chunks_exact(2) {
+                for pair in part.as_chunks::<2>().0 {
                     out_l[i] += pair[0] * gain;
                     out_r[i] += pair[1] * gain;
                     gain += step;
@@ -989,8 +1001,21 @@ impl InputInjector {
         self.timing = timing;
     }
 
-    /// Delivers one callback of interleaved float frames.
-    pub fn push(&mut self, interleaved: &[f32]) {
+    /// Makes the input report that its device failed, as an unplugged
+    /// interface would.
+    pub fn fail_device(&mut self, message: &str) {
+        self.processor
+            .shared
+            .fail(InputFailure::DeviceLost, message.to_string());
+    }
+
+    /// Delivers one callback of interleaved frames in any sample format a
+    /// device can use (`f32`, `i16`, ...).
+    pub fn push<T>(&mut self, interleaved: &[T])
+    where
+        T: Sample,
+        f32: FromSample<T>,
+    {
         self.processor.process(interleaved, self.timing);
     }
 }
@@ -1158,7 +1183,7 @@ mod tests {
                     if got == 0 {
                         break;
                     }
-                    for pair in buf[..got].chunks_exact(2) {
+                    for pair in buf[..got].as_chunks::<2>().0 {
                         assert_eq!((pair[0], pair[1]), (seen as f32, seen as f32));
                         seen += 1;
                     }
@@ -1167,7 +1192,7 @@ mod tests {
         }
         assert!(next > 96_000 * 4, "wrapped the ring several times: {next}");
         assert_eq!(r.shared.dropped_frames(), 0);
-        for pair in drain(&r.shared).chunks_exact(2) {
+        for pair in drain(&r.shared).as_chunks::<2>().0 {
             assert_eq!(pair[0], seen as f32);
             seen += 1;
         }

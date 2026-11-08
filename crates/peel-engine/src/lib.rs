@@ -160,10 +160,10 @@ pub struct EngineConfig {
     /// [`list_output_devices`]. `None`, or a device that is not found, uses
     /// the system default (the latter with a logged warning).
     pub device: Option<String>,
-    /// Input device [`EngineHandle::open_input`] uses when its request does
-    /// not name one (`None` is the system default input). Starting the engine
-    /// never opens an input: that is what triggers the microphone permission
-    /// prompt, so it waits until the user asks.
+    /// Input device for [`InputRequest::from_config`] (`None` is the system
+    /// default input). Starting the engine never opens an input: that is what
+    /// triggers the microphone permission prompt, so it waits until the user
+    /// asks with [`EngineHandle::open_input`].
     pub input_device: Option<String>,
     /// Largest block the engine processes at once; device callbacks larger
     /// than this are split.

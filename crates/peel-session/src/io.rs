@@ -101,9 +101,9 @@ impl MidiBridge {
 /// Session state for audio device selection and MIDI input.
 pub(crate) struct IoState {
     /// Restart on the silent clock instead of a device (tests, tools).
-    silent: bool,
+    pub(crate) silent: bool,
     /// What the running engine was started with.
-    config: EngineConfig,
+    pub(crate) config: EngineConfig,
     midi: Option<MidiInput>,
     midi_enabled: bool,
     selection: PortSelection,
@@ -257,6 +257,7 @@ impl Session {
         self.engine = engine;
         self.io.config = config;
         self.reinstall_engine(old_rate, position, metronome);
+        self.reopen_input();
 
         if let Some(reason) = failure {
             let message = format!("Could not switch audio output: {reason}");

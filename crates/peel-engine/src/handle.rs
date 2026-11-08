@@ -90,19 +90,14 @@ struct InputSide {
     stream: Option<cpal::Stream>,
     info: Option<InputInfo>,
     shared: Arc<InputShared>,
-    /// From [`EngineConfig::input_device`] and the output buffer size.
-    default_device: Option<String>,
-    default_buffer_frames: Option<u32>,
 }
 
 impl InputSide {
-    fn new(live: &LiveSide, config: &EngineConfig) -> InputSide {
+    fn new(live: &LiveSide) -> InputSide {
         InputSide {
             stream: None,
             info: None,
             shared: live.audio_input.clone(),
-            default_device: config.input_device.clone(),
-            default_buffer_frames: config.buffer_frames,
         }
     }
 }
@@ -131,7 +126,7 @@ impl EngineHandle {
                 );
                 Ok(EngineHandle {
                     backend: Backend::Cpal(opened.stream),
-                    input: InputSide::new(&opened.live, &config),
+                    input: InputSide::new(&opened.live),
                     commands: opened.commands,
                     retired: opened.retired,
                     telemetry,
@@ -184,7 +179,7 @@ impl EngineHandle {
         let null = NullBackend::spawn(engine, sample_rate, buffer_frames as usize)?;
         Ok(EngineHandle {
             backend: Backend::Null(null),
-            input: InputSide::new(&live, &config),
+            input: InputSide::new(&live),
             commands,
             retired,
             telemetry,
@@ -293,9 +288,9 @@ impl EngineHandle {
     ///
     /// This is the call that makes the operating system ask for microphone
     /// permission, so make it in response to the user choosing an input (or
-    /// arming a track). `request.device` falls back to
-    /// [`EngineConfig::input_device`], then to the system default. The stream
-    /// opens at the output's sample rate when the device can, which is what
+    /// arming a track). `request.device` of `None` is the system default
+    /// input ([`InputRequest::from_config`] takes it from
+    /// [`EngineConfig::input_device`]). The stream opens at the output's sample rate when the device can, which is what
     /// software monitoring needs; otherwise at the device's own rate (a take
     /// is then recorded at that rate and monitoring is unavailable, see
     /// [`InputShared::monitor_supported`]).
@@ -304,19 +299,11 @@ impl EngineHandle {
     /// substitution. Errors carry a message that says what to do next.
     pub fn open_input(&mut self, request: &InputRequest) -> Result<InputInfo, InputError> {
         self.close_input();
-        let request = InputRequest {
-            device: request
-                .device
-                .clone()
-                .or_else(|| self.input.default_device.clone()),
-            sample_rate: request.sample_rate,
-            buffer_frames: request.buffer_frames.or(self.input.default_buffer_frames),
-        };
         let out_rate = self.sample_rate.round() as u32;
         let shared = self.input.shared.clone();
         let telemetry = self.telemetry.clone();
         let mut parts = None;
-        let opened = open_stream(&request, out_rate, &shared, |rate, channels| {
+        let opened = open_stream(request, out_rate, &shared, |rate, channels| {
             let (processor, p) = new_processor(&shared, &telemetry, rate, channels, out_rate);
             parts = Some(p);
             processor

@@ -19,6 +19,7 @@ peel-project.workspace = true
 peel-midi-io = { path = "../peel-midi-io" }
 log.workspace = true
 blake3.workspace = true
+dirs.workspace = true
 
 [dev-dependencies]
 midir = "0.11"
