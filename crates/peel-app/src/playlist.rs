@@ -549,6 +549,50 @@ fn track_heads(ui: &mut Ui, r: Rect, v: &View, tracks: &[Track], s: &mut Session
             *ui.state::<Option<Id>>(W::new("pl-rename-lane-target")) = Some(tr.id);
             crate::rename::open(ui, W::new("pl-rename-lane"), row, &tr.name);
         }
+        let menu = W::new(("pl-lane-menu", tr.id));
+        if name_resp.secondary_clicked {
+            ui.open_popup(menu, row);
+        }
+        let n = tracks.len();
+        let items = [
+            MenuItem::new("Rename"),
+            MenuItem::new("Insert lane above"),
+            MenuItem::new("Move up").enabled(i > 0),
+            MenuItem::new("Move down").enabled(i + 1 < n),
+            MenuItem::Separator,
+            MenuItem::new("Delete lane and its clips").enabled(n > 1),
+        ];
+        let lane_id = tr.id;
+        match ui.menu(menu, vec2(row.x, row.bottom() + 4.0), &items) {
+            Some(0) => {
+                *ui.state::<Option<Id>>(W::new("pl-rename-lane-target")) = Some(lane_id);
+                crate::rename::open(ui, W::new("pl-rename-lane"), row, &tr.name);
+            }
+            Some(1) => s.doc.edit("Insert lane", |p| {
+                let arr = p.arrangement_mut();
+                arr.tracks.insert(
+                    i,
+                    Track {
+                        id: Id::new(),
+                        name: format!("Track {}", n + 1),
+                        color: None,
+                        muted: false,
+                    },
+                );
+            }),
+            Some(2) => s
+                .doc
+                .edit("Move lane", |p| p.arrangement_mut().tracks.swap(i, i - 1)),
+            Some(3) => s
+                .doc
+                .edit("Move lane", |p| p.arrangement_mut().tracks.swap(i, i + 1)),
+            Some(5) => s.doc.edit(format!("Delete {}", tr.name), |p| {
+                let arr = p.arrangement_mut();
+                arr.tracks.retain(|t| t.id != lane_id);
+                arr.clips.retain(|c| c.track != lane_id);
+            }),
+            _ => {}
+        }
     }
     if let Some(name) = crate::rename::show(ui, W::new("pl-rename-lane"))
         && let Some(lane) = *ui.state::<Option<Id>>(W::new("pl-rename-lane-target"))

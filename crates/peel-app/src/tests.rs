@@ -813,3 +813,38 @@ fn tapping_the_bpm_label_sets_the_tempo() {
         1
     );
 }
+
+#[test]
+fn lane_menu_inserts_and_deletes_lanes() {
+    let mut h = Harness::new();
+    let lanes = h.session().project().arrangement().tracks.clone();
+    let drums = lanes[0].id;
+    let open_menu = |h: &mut Harness, lane: peel_document::Id| {
+        let r = h.rect(W::new(("pl-lane-name", lane))).center();
+        h.move_to(r);
+        h.move_to(r);
+        h.press(1);
+        h.release(1);
+        h.frame();
+    };
+    open_menu(&mut h, drums);
+    h.click(W::new(("pl-lane-menu", drums)).with(("item", 1usize)));
+    assert_eq!(
+        h.session().project().arrangement().tracks.len(),
+        lanes.len() + 1
+    );
+    assert_ne!(
+        h.session().project().arrangement().tracks[0].id,
+        drums,
+        "new lane above"
+    );
+    h.frame();
+    open_menu(&mut h, drums);
+    h.click(W::new(("pl-lane-menu", drums)).with(("item", 5usize)));
+    let arr = h.session().project().arrangement();
+    assert!(arr.tracks.iter().all(|t| t.id != drums));
+    assert!(
+        arr.clips.iter().all(|c| c.track != drums),
+        "its clips went with it"
+    );
+}
