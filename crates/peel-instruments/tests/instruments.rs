@@ -487,6 +487,7 @@ fn pitch_follows_the_key() {
         "peel.keys.tine",
         "peel.keys.grand",
         "peel.sampler",
+        "peel.wind.sax",
     ] {
         if peel_instruments::create(id).is_none() {
             continue;

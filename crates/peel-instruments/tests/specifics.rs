@@ -932,3 +932,202 @@ fn grand_sixteen_note_chord_is_cheap_and_clean() {
     // debug-profile test build (dependencies are optimized).
     assert!(elapsed < 1.0, "took {elapsed} s for 4 s of audio");
 }
+
+// -------------------------------------------------------------------- sax
+
+fn sax_with_preset(name: &str) -> Box<dyn Device> {
+    let mut d = fresh("peel.wind.sax");
+    let preset = peel_instruments::presets("peel.wind.sax")
+        .iter()
+        .find(|p| p.name == name)
+        .unwrap();
+    for (key, value) in preset.params {
+        set(d.as_mut(), key, *value);
+    }
+    d
+}
+
+fn sax_note_range(name: &str) -> (u8, u8) {
+    match name {
+        "Tenor" => (44, 76),
+        "Soprano" => (56, 88),
+        _ => (49, 80),
+    }
+}
+
+#[test]
+fn sax_holds_pitch_across_its_range() {
+    for key in [45u8, 52, 60, 69, 76] {
+        let mut d = fresh("peel.wind.sax");
+        set(d.as_mut(), "vibrato.depth", 0.0);
+        let (l, _) = render(d.as_mut(), &[note_on(0, key, 0.8, 1)], 24_000, 256);
+        let want = 440.0 * 2f32.powf((key as f32 - 69.0) / 12.0);
+        let got = detect_pitch(&l[9_600..], SR);
+        assert!(
+            (got / want - 1.0).abs() < 0.01,
+            "key {key}: wanted {want} Hz, got {got} Hz"
+        );
+    }
+}
+
+#[test]
+fn sax_presets_sound_across_their_range() {
+    for preset in peel_instruments::presets("peel.wind.sax") {
+        let (lo, hi) = sax_note_range(preset.name);
+        for key in [lo, (lo + hi) / 2, hi] {
+            let mut d = sax_with_preset(preset.name);
+            let (l, r) = render(
+                d.as_mut(),
+                &[note_on(0, key, 0.8, 1), note_off(30_000, key, 1)],
+                48_000 * 2,
+                256,
+            );
+            assert!(all_finite(&l) && all_finite(&r), "{} {key}", preset.name);
+            let body = rms(&l[12_000..28_000]);
+            assert!(
+                body > 0.01 && peak(&l) < 1.5,
+                "{} key {key}: rms {body}, peak {}",
+                preset.name,
+                peak(&l)
+            );
+            assert!(rms(&l[48_000 * 2 - 4_000..]) < 1e-4, "{} tail", preset.name);
+            assert!(d.is_silent(), "{} key {key} not silent", preset.name);
+        }
+    }
+}
+
+#[test]
+fn sax_long_note_is_stable_and_has_no_dc() {
+    for name in ["Alto", "Growl", "Breathy"] {
+        let mut d = sax_with_preset(name);
+        let total = 48_000 * 20;
+        let (l, _) = render(d.as_mut(), &[note_on(0, 62, 0.8, 1)], total, 512);
+        assert!(all_finite(&l));
+        let early = rms(&l[48_000..96_000]);
+        let late = rms(&l[total - 96_000..total - 48_000]);
+        assert!(
+            (late / early - 1.0).abs() < 0.25,
+            "{name}: level drifts {early} -> {late}"
+        );
+        let mean = l[48_000..].iter().sum::<f32>() / (total - 48_000) as f32;
+        assert!(mean.abs() < 0.002, "{name}: dc {mean}");
+        assert!(peak(&l) < 1.0, "{name}: peak {}", peak(&l));
+    }
+}
+
+#[test]
+fn sax_mono_legato_changes_pitch_without_retriggering() {
+    let mut d = fresh("peel.wind.sax");
+    set(d.as_mut(), "vibrato.depth", 0.0);
+    set(d.as_mut(), "breath.scoop", 0.0);
+    let events = [
+        note_on(0, 60, 0.8, 1),
+        note_on(24_000, 64, 0.8, 2),
+        note_off(40_000, 64, 2),
+        note_off(41_000, 60, 1),
+    ];
+    let (l, _) = render(d.as_mut(), &events, 48_000, 256);
+    let first = detect_pitch(&l[10_000..20_000], SR);
+    let second = detect_pitch(&l[30_000..38_000], SR);
+    assert!((first / 261.63 - 1.0).abs() < 0.01, "first {first}");
+    assert!((second / 329.63 - 1.0).abs() < 0.01, "second {second}");
+    // No breath restart: no dip around the legato change.
+    let before = rms(&l[23_000..23_900]);
+    let after = rms(&l[24_100..25_000]);
+    assert!(after > before * 0.7, "level dipped {before} -> {after}");
+}
+
+#[test]
+fn sax_poly_mode_plays_chords() {
+    let mut d = fresh("peel.wind.sax");
+    set(d.as_mut(), "voice.mode", 1.0);
+    set(d.as_mut(), "vibrato.depth", 0.0);
+    let events = [note_on(0, 60, 0.8, 1), note_on(0, 67, 0.8, 2)];
+    let (l, _) = render(d.as_mut(), &events, 24_000, 256);
+    let w = &l[9_600..24_000];
+    let c = tone_level(w, 261.63);
+    let g = tone_level(w, 392.0);
+    let between = tone_level(w, 330.0);
+    assert!(
+        c > between * 5.0 && g > between * 5.0,
+        "c {c}, g {g}, mid {between}"
+    );
+}
+
+#[test]
+fn sax_vibrato_fades_in_after_its_delay() {
+    let mut d = fresh("peel.wind.sax");
+    set(d.as_mut(), "vibrato.depth", 60.0);
+    set(d.as_mut(), "vibrato.delay", 0.5);
+    set(d.as_mut(), "breath.scoop", 0.0);
+    let (l, _) = render(d.as_mut(), &[note_on(0, 60, 0.8, 1)], 48_000 * 2, 256);
+    let pitch_spread = |a: usize, b: usize| {
+        let ps: Vec<f32> = (a..b)
+            .step_by(2_400)
+            .map(|s| detect_pitch(&l[s..s + 4_800], SR))
+            .collect();
+        let hi = ps.iter().cloned().fold(0.0, f32::max);
+        let lo = ps.iter().cloned().fold(f32::MAX, f32::min);
+        hi / lo
+    };
+    let early = pitch_spread(4_800, 20_000);
+    let late = pitch_spread(60_000, 90_000);
+    assert!(early < 1.01, "vibrato before its delay: {early}");
+    assert!(late > 1.015, "no vibrato after the delay: {late}");
+}
+
+#[test]
+fn sax_noise_growl_and_velocity_shape_the_sound() {
+    let play = |key: &str, value: f32| {
+        let mut d = fresh("peel.wind.sax");
+        set(d.as_mut(), "vibrato.depth", 0.0);
+        set(d.as_mut(), key, value);
+        let (l, _) = render(d.as_mut(), &[note_on(0, 60, 0.8, 1)], 24_000, 256);
+        l[9_600..].to_vec()
+    };
+    // Breath noise adds energy between the harmonics.
+    let clean = play("breath.noise", 0.0);
+    let airy = play("breath.noise", 1.0);
+    let gap = |b: &[f32]| tone_level(b, 261.63 * 3.5) + tone_level(b, 261.63 * 8.5);
+    assert!(gap(&airy) > gap(&clean) * 3.0, "noise should fill the gaps");
+    // Growl adds low-rate sidebands next to the fundamental.
+    let plain = play("growl.amount", 0.0);
+    let growl = play("growl.amount", 1.0);
+    let side = |b: &[f32]| tone_level(b, 261.63 - 70.0) + tone_level(b, 261.63 + 70.0);
+    assert!(side(&growl) > side(&plain) * 3.0, "growl sidebands");
+    // Harder blowing is brighter.
+    let bright = |vel: f32| {
+        let mut d = fresh("peel.wind.sax");
+        set(d.as_mut(), "vibrato.depth", 0.0);
+        let (l, _) = render(d.as_mut(), &[note_on(0, 60, vel, 1)], 24_000, 256);
+        brightness(&l[9_600..])
+    };
+    assert!(
+        bright(1.0) > bright(0.3) * 1.2,
+        "velocity should open the tone"
+    );
+}
+
+#[test]
+fn sax_phrase_report() {
+    // Numeric look at a legato phrase; prints with --nocapture.
+    let mut d = fresh("peel.wind.sax");
+    let notes = [(60u8, 0.8f32), (62, 0.7), (64, 0.9), (67, 0.6), (65, 0.8)];
+    let mut events = Vec::new();
+    for (i, (k, v)) in notes.iter().enumerate() {
+        let at = i * 18_000;
+        events.push(note_on(at, *k, *v, i as u32 + 1));
+        events.push(note_off(at + 17_000, *k, i as u32 + 1));
+    }
+    let total = 5 * 18_000 + 12_000;
+    let (l, _) = render(d.as_mut(), &events, total, 512);
+    let mean = l.iter().sum::<f32>() / l.len() as f32;
+    println!(
+        "phrase: peak {:.3}, rms {:.3}, dc {:.5}, finite {}",
+        peak(&l),
+        rms(&l),
+        mean,
+        all_finite(&l)
+    );
+    assert!(peak(&l) > 0.1 && peak(&l) < 1.0 && mean.abs() < 0.005);
+}
