@@ -1696,13 +1696,22 @@ fn expression_lane(
     }
     ui.scene.pop_clip();
 
-    // Top-right: the lane's scale and Clear.
+    // Top-right: the lane's scale and Clear, on a backdrop so a curve
+    // running under them never crosses the text.
+    let scale_text = match lane_kind {
+        Lane::Pitch => format!("±{} st", range.round() as i32),
+        _ => "0–100%".to_string(),
+    };
+    let text_w = ui.measure(&scale_text, t.caption).x;
+    let clear_w = if focus_points.is_empty() { 0.0 } else { 52.0 };
     let mut bar = Rect {
-        x: lane.right() - 160.0,
+        x: lane.right() - 10.0 - clear_w - text_w,
         y: lane.y + 3.0,
-        w: 156.0,
+        w: 6.0 + clear_w + text_w,
         h: 18.0,
     };
+    ui.scene
+        .rect(bar.expand(2.0), t.radius_s, t.panel_alt.alpha(0.9));
     if !focus_points.is_empty() {
         let clear = ui.button(W::new("roll-expr-clear"), bar.cut_right(46.0), "Clear");
         ui.tooltip(
@@ -1725,10 +1734,6 @@ fn expression_lane(
         }
         bar.cut_right(6.0);
     }
-    let scale_text = match lane_kind {
-        Lane::Pitch => format!("±{} st", range.round() as i32),
-        _ => "0–100%".to_string(),
-    };
     ui.text(bar, &scale_text, t.caption, t.text_faint, Align::End);
 
     // One quiet line when there is nothing to show.
