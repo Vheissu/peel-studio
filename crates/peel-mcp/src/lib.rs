@@ -6,6 +6,7 @@
 mod actions;
 mod compose;
 mod control;
+mod expression_control;
 mod io_control;
 
 pub use actions::{Action, decode};

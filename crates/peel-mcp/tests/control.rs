@@ -477,3 +477,120 @@ fn expression_requires_a_target_before_changing_live_state_or_range() {
     assert_eq!(state["bend"], 0.0);
     assert!(h.call("midi_expression", json!({"reset": true})).is_err());
 }
+
+#[test]
+fn saved_expression_is_editable_validated_and_preserved_by_note_tools() {
+    let mut h = Host::new();
+    let channel = h.channel();
+    let pid = h.s.selected_pattern();
+    let result=h.call("set_notes",json!({"pattern":pid,"channel":channel["channel"],"notes":[{"start":"0","length":"2","key":60,"velocity":0.8}]})).unwrap();
+    let note = result["notes"][0].clone();
+    h.call("note_expression",json!({"pattern":pid,"note":note,"pitch":[{"offset":"0","value":0},{"offset":"1/2","value":7}],"pressure":[{"offset":"0","value":0.2},{"offset":"1","value":0.8}]})).unwrap();
+    let saved = h
+        .call("note_expression", json!({"pattern":pid,"note":note}))
+        .unwrap()["expression"]
+        .clone();
+    for bad in [
+        json!({"pitch":[{"offset":"3","value":7}]}),
+        json!({"pitch":[{"offset":"0","value":121}]}),
+        json!({"pressure":[{"offset":"0","value":-0.1}]}),
+        json!({"pitch":[{"offset":"0","value":0},{"offset":"0","value":1}]}),
+        json!({"timbre":[{"offset":"-1","value":0.5}]}),
+    ] {
+        let mut args = bad.as_object().unwrap().clone();
+        args.insert("pattern".into(), json!(pid));
+        args.insert("note".into(), note.clone());
+        assert!(h.call("note_expression", Value::Object(args)).is_err());
+        assert_eq!(
+            h.call("note_expression", json!({"pattern":pid,"note":note}))
+                .unwrap()["expression"],
+            saved
+        );
+    }
+    h.call(
+        "transform_notes",
+        json!({"pattern":pid,"selection":[note],"tool":{"kind":"chop","division":"1","gate":1}}),
+    )
+    .unwrap();
+    let p = h.s.project().pattern(pid).unwrap();
+    assert_eq!(p.notes.len(), 2);
+    assert_eq!(p.expression.len(), 2);
+    let later = p
+        .notes
+        .iter()
+        .find(|n| n.start == peel_document::Time::beats(1))
+        .unwrap();
+    assert_eq!(
+        p.expression_for(later.id)
+            .unwrap()
+            .at(peel_document::Time::ZERO)
+            .pitch,
+        7.0
+    );
+    h.call(
+        "set_notes",
+        json!({"pattern":pid,"channel":channel["channel"],"notes":[]}),
+    )
+    .unwrap();
+    assert!(h.s.project().pattern(pid).unwrap().expression.is_empty());
+}
+
+#[test]
+fn mpe_tools_route_equal_pitches_to_distinct_voices_without_editing_the_project() {
+    let mut h = Host::new();
+    let channel = h.channel();
+    h.call("configure_midi", json!({"channel":channel["channel"]}))
+        .unwrap();
+    let before = h.s.project().clone();
+    let config = h.call("mpe", json!({"mode":"lower","members":4})).unwrap()["config"].clone();
+    assert_eq!(config["member_bend_range"], 48.0);
+    for bad in [
+        json!({"members":0}),
+        json!({"member_bend_range":97}),
+        json!({"manager_bend_range":-1}),
+    ] {
+        assert!(h.call("mpe", bad).is_err());
+        assert_eq!(h.call("mpe", json!({})).unwrap()["config"], config);
+    }
+    for channel in [1, 2] {
+        h.call(
+            "midi_input",
+            json!({"channel":channel,"event":{"kind":"note_on","key":60,"velocity":100}}),
+        )
+        .unwrap();
+    }
+    h.call(
+        "midi_input",
+        json!({"channel":1,"event":{"kind":"pitch_bend","value":8191}}),
+    )
+    .unwrap();
+    h.call(
+        "midi_input",
+        json!({"channel":2,"event":{"kind":"channel_pressure","value":100}}),
+    )
+    .unwrap();
+    let events = h.s.take_recorded_performance();
+    let ons: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e.kind, peel_session::RecordedPerformanceKind::NoteOn { .. }))
+        .collect();
+    assert_eq!(ons.len(), 2);
+    assert_ne!(ons[0].voice, ons[1].voice);
+    assert!(events.iter().any(|e|e.voice==ons[0].voice&&matches!(e.kind,peel_session::RecordedPerformanceKind::Expression{pitch,..} if pitch==48.0)));
+    assert!(events.iter().any(|e|e.voice==ons[1].voice&&matches!(e.kind,peel_session::RecordedPerformanceKind::Expression{pressure,..} if pressure>0.7)));
+    assert!(
+        h.call(
+            "midi_input",
+            json!({"channel":16,"event":{"kind":"note_on","key":60,"velocity":100}})
+        )
+        .is_err()
+    );
+    assert!(
+        h.call(
+            "midi_input",
+            json!({"channel":1,"event":{"kind":"pitch_bend","value":8192}})
+        )
+        .is_err()
+    );
+    assert_eq!(h.s.project(), &before);
+}

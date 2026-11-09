@@ -51,6 +51,14 @@ pub enum Action {
         channel: String,
         notes: Vec<NoteInput>,
     },
+    /// Read or edit a note's saved pitch, pressure and timbre curves. Offsets are note-relative quarter-note strings; omitted curves stay unchanged, [] clears a curve. Recorded values hold until the next point.
+    NoteExpression {
+        pattern: String,
+        note: String,
+        pitch: Option<Vec<ExpressionPointInput>>,
+        pressure: Option<Vec<ExpressionPointInput>>,
+        timbre: Option<Vec<ExpressionPointInput>>,
+    },
     /// Apply a compositional tool to a pattern or a selection of note IDs as one undo step. Supports legato, articulation, chop, arpeggiate, strum, flam, humanize, levels, flip and tidy.
     TransformNotes {
         pattern: String,
@@ -171,6 +179,18 @@ pub enum Action {
         channel: u8,
         controller: u8,
         value: u8,
+    },
+    /// Read or configure MPE input on the selected instrument. Choose off, lower or upper; members is 1..15, bend ranges 0..96 semitones. Defaults: 15 members, 48 semitones per note, 2 for the zone. Configuration is transient to this session.
+    Mpe {
+        mode: Option<MpeModeInput>,
+        members: Option<u8>,
+        member_bend_range: Option<f32>,
+        manager_bend_range: Option<f32>,
+    },
+    /// Send an internal MIDI event through the same MPE and channel-filter path as hardware. Channel is zero-based 0..15, data bytes 0..127, pitch bend -8192..8191.
+    MidiInput {
+        channel: u8,
+        event: MidiMessageInput,
     },
     /// Read or send transient pitch bend and aftertouch on the live instrument. Bend is -1..1; pressure is 0..1; bend_range is 0..48 semitones. Omitted values stay unchanged. Reset centers expression without stopping notes or changing saved parameters.
     MidiExpression {
@@ -305,4 +325,28 @@ pub fn decode(name: &str, mut arguments: serde_json::Map<String, Value>) -> Resu
         Value::String(name.strip_prefix("peel_").ok_or("Unknown tool")?.into()),
     );
     serde_json::from_value(Value::Object(arguments)).map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExpressionPointInput {
+    pub offset: String,
+    pub value: f32,
+}
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MpeModeInput {
+    Off,
+    Lower,
+    Upper,
+}
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum MidiMessageInput {
+    NoteOn { key: u8, velocity: u8 },
+    NoteOff { key: u8, velocity: u8 },
+    PitchBend { value: i16 },
+    ChannelPressure { value: u8 },
+    PolyPressure { key: u8, value: u8 },
+    ControlChange { controller: u8, value: u8 },
 }

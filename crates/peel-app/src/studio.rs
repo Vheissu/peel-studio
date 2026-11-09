@@ -207,9 +207,6 @@ impl Studio {
         let held: Vec<_> = self.ws.held.drain().collect();
         for (_, (ch, key)) in held {
             self.session.live_note(ch, key, 0.0, false);
-            let beat = self.session.position();
-            self.recorder
-                .note(&mut self.session, ch, key, 0.0, false, beat);
         }
     }
 
@@ -840,9 +837,6 @@ impl Studio {
         for (code, key) in ons {
             self.ws.held.insert(code, (channel, key));
             self.session.live_note(channel, key, 0.8, true);
-            let beat = self.session.position();
-            self.recorder
-                .note(&mut self.session, channel, key, 0.8, true, beat);
         }
         let released: Vec<KeyCode> = ui
             .input
@@ -853,9 +847,6 @@ impl Studio {
         for code in released {
             if let Some((ch, key)) = self.ws.held.remove(&code) {
                 self.session.live_note(ch, key, 0.0, false);
-                let beat = self.session.position();
-                self.recorder
-                    .note(&mut self.session, ch, key, 0.0, false, beat);
             }
         }
     }

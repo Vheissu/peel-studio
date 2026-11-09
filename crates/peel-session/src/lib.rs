@@ -37,8 +37,8 @@ pub use export::{
 };
 pub use io::{
     LiveTiming, MidiControlTarget, MidiEvent, MidiLearnStatus, MidiMapping, MidiPortInfo,
-    OutputChannels, OutputDeviceInfo, OutputRoute, OutputRouteStatus, PortSelection, RecordedMidi,
-    list_output_devices,
+    MpeConfig, MpeMode, OutputChannels, OutputDeviceInfo, OutputRoute, OutputRouteStatus,
+    PortSelection, RecordedMidi, RecordedPerformance, RecordedPerformanceKind, list_output_devices,
 };
 pub use peel_engine::{
     InputChannels, InputDeviceInfo, InputInfo, InputInjector, LatencyReport, list_input_devices,
@@ -722,6 +722,7 @@ impl Session {
             self.selected_pattern = p;
         }
         if self.mode != mode {
+            self.io.bridge.release_all();
             let was_song = self.mode == PlayMode::Song;
             self.mode = mode;
             if was_song != (mode == PlayMode::Song) && self.playing {
@@ -745,6 +746,7 @@ impl Session {
 
     /// Stops and returns to where playback started.
     pub fn stop(&mut self) {
+        self.io.bridge.release_all();
         // Stopping the transport ends a recording: its clips are claimed with
         // `stop_recording`.
         self.finish_recording(true);
@@ -765,6 +767,7 @@ impl Session {
     }
 
     pub fn seek(&mut self, beat: f64) {
+        self.io.bridge.release_all();
         let _ = self.engine.send(EngineCommand::Seek {
             beat: beat.max(0.0),
         });
@@ -849,15 +852,7 @@ impl Session {
             return;
         };
         if let Some(d) = self.devices.get(&ch.device.id) {
-            let accepted = self
-                .engine
-                .send(EngineCommand::LiveNote {
-                    slot: d.slot,
-                    key,
-                    velocity,
-                    on,
-                })
-                .is_ok();
+            let accepted = self.io.bridge.note(d.slot, key, velocity, on);
             if accepted && on && self.live_target() == Some(channel) {
                 self.io.bridge.clear_key_pressure(key);
             }

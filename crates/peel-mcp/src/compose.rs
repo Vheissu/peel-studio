@@ -199,10 +199,14 @@ pub fn transform(
                 .into(),
         );
     }
-    let transformed = peel_compose::apply(&notes, &tool);
+    let (transformed, expression) =
+        peel_compose::apply_with_expression(&notes, &pattern.expression, &tool);
     let ids: std::collections::HashSet<_> = notes.iter().map(|n| n.id).collect();
     pattern.notes.retain(|n| !ids.contains(&n.id));
     pattern.notes.extend(transformed);
+    pattern.expression.retain(|e| !ids.contains(&e.note));
+    pattern.expression.extend(expression);
+    pattern.retain_expression();
     pattern.sort_notes();
     Ok(tool.name())
 }

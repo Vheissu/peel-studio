@@ -73,7 +73,7 @@ impl Control {
                 "recording": s.is_recording(), "armed_lanes": s.armed_lanes(),
                 "record_blocker": s.record_blocker(), "input_open": s.input_is_open(),
                 "input_error": s.input_error(), "input_warning": s.input_warning(),
-                "monitoring": s.monitoring(), "midi_enabled": s.midi_enabled(),
+                "monitoring": s.monitoring(), "midi_enabled": s.midi_enabled(), "mpe": s.mpe_config(),
                 "performing": s.performing(), "capturing": s.performance_capturing(),
                 "render_progress": s.render_progress(), "stretching": s.stretching(),
                 "undo": s.doc.history_labels().collect::<Vec<_>>(),
@@ -136,6 +136,15 @@ impl Control {
                     .then_some(offset.saturating_add(files.len()));
                 Ok(json!({"files":files,"total":total,"next_offset":next_offset}))
             }
+            Action::NoteExpression {
+                pattern,
+                note,
+                pitch,
+                pressure,
+                timbre,
+            } => crate::expression_control::note_expression(
+                s, &pattern, &note, pitch, pressure, timbre,
+            ),
             Action::TransformNotes {
                 pattern,
                 selection,
@@ -258,6 +267,7 @@ impl Control {
             Action::AddPattern { name, length } => {
                 let mut p = s.project().clone();
                 let pattern = Pattern {
+                    expression: Vec::new(),
                     id: Id::new(),
                     name,
                     color: p.next_channel_color(),
@@ -298,6 +308,7 @@ impl Control {
                 let ids: Vec<_> = notes.iter().map(|n| n.id).collect();
                 pattern.notes.retain(|n| n.channel != channel);
                 pattern.notes.extend(notes);
+                pattern.retain_expression();
                 pattern.sort_notes();
                 commit(s, "Set notes", p)?;
                 Ok(json!({"notes": ids, "revision": s.doc.revision()}))
@@ -607,6 +618,21 @@ impl Control {
                 crate::io_control::send_control(s, channel, controller, value)?;
                 Ok(crate::io_control::midi_controls(s))
             }
+            Action::Mpe {
+                mode,
+                members,
+                member_bend_range,
+                manager_bend_range,
+            } => crate::expression_control::mpe(
+                s,
+                mode,
+                members,
+                member_bend_range,
+                manager_bend_range,
+            ),
+            Action::MidiInput { channel, event } => {
+                crate::expression_control::midi_input(s, channel, event)
+            }
             Action::MidiExpression {
                 bend,
                 pressure,
@@ -842,7 +868,7 @@ impl Drop for Control {
     }
 }
 
-fn commit(s: &mut Session, label: &str, p: Project) -> Result<Value, String> {
+pub(crate) fn commit(s: &mut Session, label: &str, p: Project) -> Result<Value, String> {
     s.apply_project_edit(s.project().id, s.doc.revision(), label, p)?;
     let warnings = peel_document::validate(s.project())
         .into_iter()

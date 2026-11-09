@@ -811,6 +811,7 @@ pub fn new_pattern(studio: &mut Studio, from: Option<&Pattern>) -> Id {
             p
         }
         None => Pattern {
+            expression: Vec::new(),
             id,
             name: format!("Pattern {}", n + 1),
             color: PALETTE[(n * 5 + 3) % PALETTE.len()],
