@@ -1978,9 +1978,13 @@ pub fn make_unique(s: &mut Session, clip: Id, pattern: Id) -> Option<Id> {
     let mut copy = src;
     copy.id = Id::new();
     copy.name = name;
+    let mut map = HashMap::new();
     for note in &mut copy.notes {
-        note.id = Id::new();
+        let id = Id::new();
+        map.insert(note.id, id);
+        note.id = id;
     }
+    copy.expression = crate::note_expr::remap(&copy.expression, &map);
     let new_id = copy.id;
     s.doc.edit("Make unique", |p| {
         p.patterns.push(std::sync::Arc::new(copy));

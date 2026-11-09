@@ -46,6 +46,8 @@ pub struct Prefs {
     pub midi_channel: Option<u8>,
     /// Pitch wheel range in semitones (machine level).
     pub pitch_bend_range: f32,
+    /// MPE zone for incoming MIDI (machine setting, off by default).
+    pub mpe: peel_session::MpeConfig,
     /// Secondary hardware outputs (machine level, never in a project).
     pub output_routes: Vec<peel_session::OutputRoute>,
     /// Channels the main output uses on its device.
@@ -82,6 +84,7 @@ impl Default for Prefs {
             midi_mappings: Vec::new(),
             midi_channel: None,
             pitch_bend_range: 2.0,
+            mpe: peel_session::MpeConfig::default(),
             output_routes: Vec::new(),
             primary_output: None,
             recordings_dir: None,

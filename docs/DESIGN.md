@@ -347,10 +347,41 @@ moves it too and the editor never sends a stale centre over the top. Neither
 is saved in the project. The Bend range picker (Off to 48 st) is a machine
 setting kept in preferences and applied at startup and project reset.
 
+MIDI has an MPE row under the port summary: Off, Lower zone or Upper zone.
+Off keeps the Channel filter and Bend range. A zone replaces them with
+Members (count and channels, numbered from 1, with the manager channel in
+the tooltip), Note bend (the member channels' range) and Zone bend (the
+manager's). The setup is a machine preference applied at startup and
+project reset; the rows show the live setup, so a controller that changes
+it over RPN is not overwritten.
+
 Notes never hang. Mouse notes end on release, when the pointer leaves the
 window with the button up, when the editor closes, when the target changes
 and when the window loses focus; the same focus loss ends held computer
 keys and centres a held Pitch or Pressure, and Panic silences every channel.
+
+## Piano roll lanes
+
+The lane under the notes has a picker in the key column: Velocity, Pitch,
+Pressure, Timbre, stacked as a vertical segmented control (arrow keys move
+it). Velocity works as it always has. The other three edit one note at a
+time: the only selected note, or the one last clicked. Its span is tinted
+and its curve drawn in the channel color; other notes' curves show faint
+behind it. Clicking another note's span in the lane switches to it.
+
+Curves are recorded events held until the next one, so they draw as steps,
+never ramps. Before its first point a note plays the neutral value (0 st,
+0 %, 50 %), drawn as a thin lead-in. Pitch reads in semitones over a range
+that fits the note (±2 to ±120 st; scroll to change it), Pressure and
+Timbre in percent. Click inside the note to add a point, drag to move it
+(snapped to the grid; Alt for free), right-click or Delete over a point to
+remove it, Clear to empty the lane. Each gesture is one undo step. Points
+stay inside the note and in order. Dense recorded takes show the line and
+only the handle under the pointer.
+
+Curves move with their notes: copy, paste, duplicate, the note tools and
+Make unique carry them; delete, erase and cut drop them; shortening a note
+trims them.
 
 ## Audio sheet
 

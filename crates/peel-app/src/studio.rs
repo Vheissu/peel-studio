@@ -31,6 +31,8 @@ pub struct Studio {
     /// The channel the computer keyboard played last frame; changing it
     /// releases held keys.
     last_channel: Option<Id>,
+    /// `PEEL_MPE_TAKE` screenshot performance.
+    pub dev_take: crate::dev_take::DevTake,
 }
 
 /// Seconds between autosaves of a changed project.
@@ -84,6 +86,7 @@ impl Studio {
             autosaved_revision: revision,
             last_dock,
             last_channel: None,
+            dev_take: Default::default(),
         };
         studio.scripts.python = studio.prefs.python.clone();
         studio.open_view();
@@ -155,6 +158,18 @@ impl Studio {
         };
         if (self.session.pitch_bend_range() - range).abs() > 1.0e-6
             && let Err(e) = self.session.set_pitch_bend_range(range)
+        {
+            self.session.notify(e, true);
+        }
+        // Saved MPE setup, applied once here; RPN messages from a controller
+        // may change it afterwards and the editor shows what is live.
+        let mpe = if prefs.mpe.validate().is_ok() {
+            prefs.mpe
+        } else {
+            peel_session::MpeConfig::default()
+        };
+        if self.session.mpe_config() != mpe
+            && let Err(e) = self.session.configure_mpe(mpe)
         {
             self.session.notify(e, true);
         }
@@ -1302,6 +1317,7 @@ impl Studio {
             self.ws.io_open = false;
         }
         self.session.set_live_target(self.ws.selected_channel);
+        crate::dev_take::frame(self, ui);
         self.session.poll_midi();
         self.recorder.frame(&mut self.session);
         crate::scripts::frame(ui, self);

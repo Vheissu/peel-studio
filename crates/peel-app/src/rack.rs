@@ -534,6 +534,7 @@ fn channel_button(
                 s.doc.edit("Clear notes", |p| {
                     if let Some(pt) = p.pattern_mut(pid) {
                         pt.notes.retain(|n| n.channel != cid);
+                        crate::note_expr::prune(pt);
                     }
                 });
             }
@@ -696,6 +697,7 @@ fn set_step(s: &mut Session, pid: Id, ch: &Channel, pos: Time, on: bool, gesture
                 pt.sort_notes();
             } else if !on {
                 pt.notes.retain(|n| !(n.channel == cid && n.start == pos));
+                crate::note_expr::prune(pt);
             }
         }
     });
@@ -864,9 +866,9 @@ pub fn delete_channel(s: &mut Session, ws: &mut Workspace, cid: Id) {
         p.channels.retain(|c| c.id != cid);
         for pt in p.patterns.iter_mut() {
             if pt.uses_channel(cid) {
-                std::sync::Arc::make_mut(pt)
-                    .notes
-                    .retain(|n| n.channel != cid);
+                let pt = std::sync::Arc::make_mut(pt);
+                pt.notes.retain(|n| n.channel != cid);
+                crate::note_expr::prune(pt);
             }
         }
         // Remove the channel's private mixer track if nothing else uses it.

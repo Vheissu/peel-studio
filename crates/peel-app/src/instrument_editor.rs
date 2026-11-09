@@ -8,7 +8,9 @@
 //! loses focus. Panic ends everything on every channel.
 
 use peel_document::Id;
-use peel_session::{MidiControlTarget, MidiEvent, MidiLearnStatus, MidiMapping, Session};
+use peel_session::{
+    MidiControlTarget, MidiEvent, MidiLearnStatus, MidiMapping, MpeConfig, MpeMode, Session,
+};
 use peel_ui::Id as W;
 use peel_ui::{
     Align, Color, CursorIcon, FocusKind, LayerId, MenuItem, Rect, Role, Semantics, Ui, icons, vec2,
@@ -857,6 +859,9 @@ fn midi_status(
         ui.open_popup(W::new("settings-panel"), ports_btn.rect);
     }
     rows.gap(4.0);
+    if mpe_rows(ui, rows, s, prefs) {
+        return;
+    }
     // Channel filter.
     let mut row = rows.row(28.0);
     ui.text(
@@ -932,6 +937,164 @@ fn midi_status(
         "Notes, sustain, pitch bend, aftertouch and CC knobs reach this instrument.",
     );
     rows.gap(used);
+}
+
+/// Writes one MPE change to the session and, once accepted, to the
+/// machine's preferences. The session may also change from RPN messages, so
+/// edits start from what is live.
+fn set_mpe(s: &mut Session, prefs: &mut Prefs, f: impl FnOnce(&mut MpeConfig)) {
+    let mut c = s.mpe_config();
+    f(&mut c);
+    match s.configure_mpe(c) {
+        Ok(()) => {
+            prefs.mpe = c;
+            prefs.save();
+        }
+        Err(e) => s.notify(e, true),
+    }
+}
+
+/// "15 · ch 2–16": member count and their channels, counted from 1.
+pub fn members_text(c: &MpeConfig) -> String {
+    let m = c.members.clamp(1, 15);
+    let (lo, hi) = match c.mode {
+        MpeMode::Upper => (16 - m, 15),
+        _ => (2, m + 1),
+    };
+    if lo == hi {
+        format!("{m} · ch {lo}")
+    } else {
+        format!("{m} · ch {lo}–{hi}")
+    }
+}
+
+/// A labelled dropdown row. Returns the picked item.
+fn pick_row(
+    ui: &mut Ui,
+    rows: &mut Rows,
+    id: W,
+    label: &str,
+    value: &str,
+    a11y: &str,
+    items: &[MenuItem],
+) -> (Option<usize>, peel_ui::Response) {
+    let t = ui.theme.clone();
+    let mut row = rows.row(28.0);
+    ui.text(row.cut_left(70.0), label, t.caption, t.text_faint, Align::Start);
+    let resp = ui.dropdown(id, row, value, a11y);
+    if resp.clicked {
+        ui.open_popup(id.with("menu"), row);
+    }
+    let pick = ui.menu(id.with("menu"), vec2(row.x, row.bottom() + 4.0), items);
+    rows.gap(4.0);
+    (pick, resp)
+}
+
+/// Bend ranges offered for MPE member notes and the zone's manager channel.
+const NOTE_BENDS: [f32; 5] = [0.0, 12.0, 24.0, 48.0, 96.0];
+const ZONE_BENDS: [f32; 9] = [0.0, 1.0, 2.0, 3.0, 5.0, 7.0, 12.0, 24.0, 48.0];
+
+/// The MPE rows. Returns true when MPE is on, in which case they replace
+/// the channel filter and bend range of ordinary MIDI.
+fn mpe_rows(ui: &mut Ui, rows: &mut Rows, s: &mut Session, prefs: &mut Prefs) -> bool {
+    let c = s.mpe_config();
+    let modes = [MpeMode::Off, MpeMode::Lower, MpeMode::Upper];
+    let mode_name = |m: MpeMode| match m {
+        MpeMode::Off => "Off",
+        MpeMode::Lower => "Lower zone",
+        MpeMode::Upper => "Upper zone",
+    };
+    let items: Vec<MenuItem> = modes
+        .iter()
+        .map(|m| MenuItem::new(mode_name(*m)).checked(c.mode == *m))
+        .collect();
+    let (pick, resp) = pick_row(
+        ui,
+        rows,
+        W::new("inst-mpe-mode"),
+        "MPE",
+        mode_name(c.mode),
+        "MPE zone",
+        &items,
+    );
+    ui.tooltip(
+        &resp,
+        "MIDI Polyphonic Expression: each note gets its own channel, so it bends, presses and slides on its own",
+    );
+    if let Some(i) = pick {
+        set_mpe(s, prefs, |c| c.mode = modes[i]);
+    }
+    let c = s.mpe_config();
+    if c.mode == MpeMode::Off {
+        return false;
+    }
+
+    let items: Vec<MenuItem> = (1..=15u8)
+        .map(|m| {
+            MenuItem::new(members_text(&MpeConfig { members: m, ..c })).checked(c.members == m)
+        })
+        .collect();
+    let (pick, resp) = pick_row(
+        ui,
+        rows,
+        W::new("inst-mpe-members"),
+        "Members",
+        &members_text(&c),
+        "MPE member channels",
+        &items,
+    );
+    let manager = if c.mode == MpeMode::Upper { 16 } else { 1 };
+    ui.tooltip(&resp, &format!("Member channels; channel {manager} is the zone's manager"));
+    if let Some(i) = pick {
+        set_mpe(s, prefs, |c| c.members = i as u8 + 1);
+    }
+
+    let range_items = |choices: &[f32], cur: f32| -> Vec<MenuItem> {
+        choices
+            .iter()
+            .map(|v| MenuItem::new(crate::expression::range_text(*v)).checked((v - cur).abs() < 0.01))
+            .collect()
+    };
+    let (pick, resp) = pick_row(
+        ui,
+        rows,
+        W::new("inst-mpe-note-bend"),
+        "Note bend",
+        &crate::expression::range_text(c.member_bend_range),
+        "MPE note bend range",
+        &range_items(&NOTE_BENDS, c.member_bend_range),
+    );
+    ui.tooltip(&resp, "Bend range of each note's own channel");
+    if let Some(i) = pick {
+        set_mpe(s, prefs, |c| c.member_bend_range = NOTE_BENDS[i]);
+    }
+    let (pick, resp) = pick_row(
+        ui,
+        rows,
+        W::new("inst-mpe-zone-bend"),
+        "Zone bend",
+        &crate::expression::range_text(c.manager_bend_range),
+        "MPE zone bend range",
+        &range_items(&ZONE_BENDS, c.manager_bend_range),
+    );
+    ui.tooltip(&resp, "Bend range of the manager channel, which moves every note in the zone");
+    if let Some(i) = pick {
+        set_mpe(s, prefs, |c| c.manager_bend_range = ZONE_BENDS[i]);
+    }
+    rows.gap(-2.0);
+    let used = crate::util::hint(
+        ui,
+        W::new("inst-mpe-hint"),
+        Rect {
+            x: rows.x,
+            y: rows.y,
+            w: rows.w,
+            h: 40.0,
+        },
+        "Each note's bend, pressure and slide (CC74) play and record on that note alone.",
+    );
+    rows.gap(used);
+    true
 }
 
 fn mapper(

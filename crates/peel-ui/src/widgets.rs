@@ -345,10 +345,37 @@ impl Ui {
 
     /// Segmented control. Returns true when the selection changes.
     pub fn segmented(&mut self, id: Id, r: Rect, options: &[&str], selected: &mut usize) -> bool {
+        self.segmented_impl(id, r, options, selected, false)
+    }
+
+    /// Segmented control stacked top to bottom, with caption-size labels,
+    /// for narrow label columns. Arrow keys move the selection.
+    pub fn segmented_column(
+        &mut self,
+        id: Id,
+        r: Rect,
+        options: &[&str],
+        selected: &mut usize,
+    ) -> bool {
+        self.segmented_impl(id, r, options, selected, true)
+    }
+
+    fn segmented_impl(
+        &mut self,
+        id: Id,
+        r: Rect,
+        options: &[&str],
+        selected: &mut usize,
+        vertical: bool,
+    ) -> bool {
         let t = self.theme.clone();
         self.scene.rect(r, t.radius_m, t.well);
         let inner = r.shrink(2.0);
-        let cells = inner.columns(options.len(), 2.0);
+        let cells = if vertical {
+            inner.rows(options.len(), 1.0)
+        } else {
+            inner.columns(options.len(), 2.0)
+        };
         let mut changed = false;
         self.a11y_node(id, r, RANK_TEXT, || Semantics::new(Role::RadioGroup));
         self.a11y_push(id);
@@ -369,10 +396,16 @@ impl Ui {
         }
         let sel_x = self.animate(id.with("sel"), *selected as f32, 22.0);
         if let Some(first) = cells.first() {
-            let step = first.w + 2.0;
-            let sr = Rect {
-                x: inner.x + sel_x * step,
-                ..*first
+            let sr = if vertical {
+                Rect {
+                    y: inner.y + sel_x * (first.h + 1.0),
+                    ..*first
+                }
+            } else {
+                Rect {
+                    x: inner.x + sel_x * (first.w + 2.0),
+                    ..*first
+                }
             };
             self.scene.rect(sr, t.radius_s, t.control_hover);
         }
@@ -393,6 +426,14 @@ impl Ui {
             };
             if is_icon {
                 self.icon(*cell, label, 15.0, color);
+            } else if vertical {
+                self.text(
+                    cell.shrink2(3.0, 0.0),
+                    label,
+                    t.caption,
+                    color,
+                    Align::Start,
+                );
             } else {
                 self.text(*cell, label, t.label, color, Align::Center);
             }

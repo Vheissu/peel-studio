@@ -158,6 +158,8 @@ impl Settings {
 struct Active {
     pattern: Id,
     original: Vec<Note>,
+    /// Expression of `original` when the panel opened.
+    original_expr: Vec<peel_document::NoteExpression>,
     /// Notes the last preview wrote.
     current: Vec<Id>,
     gesture: u64,
@@ -187,9 +189,16 @@ pub fn open(
     let st = ui.state::<State>(PANEL);
     st.uses += 1;
     let gesture = 0x7001_5000_0000 + st.uses;
+    let original_expr = s
+        .project()
+        .pattern(pattern)
+        .map(|pt| crate::note_expr::gather(pt, targets.iter().map(|n| n.id)))
+        .unwrap_or_default();
+    let st = ui.state::<State>(PANEL);
     st.active = Some(Active {
         pattern,
         current: targets.iter().map(|n| n.id).collect(),
+        original_expr,
         original: targets,
         gesture,
         applied: false,
@@ -218,7 +227,10 @@ fn preview(ui: &mut Ui, s: &mut Session, ws: &mut Workspace) {
     let st = ui.state::<State>(PANEL);
     let tool = st.settings.tool();
     let Some(a) = st.active.as_mut() else { return };
-    let result = peel_compose::apply(&a.original, &tool);
+    // Curves follow their notes; chopped and repeated notes get the
+    // matching window of their source curve.
+    let (result, curves) =
+        peel_compose::apply_with_expression(&a.original, &a.original_expr, &tool);
     let mut gone: HashSet<Id> = a.original.iter().map(|n| n.id).collect();
     gone.extend(a.current.iter().copied());
     let pid = a.pattern;
@@ -229,6 +241,8 @@ fn preview(ui: &mut Ui, s: &mut Session, ws: &mut Workspace) {
             pt.notes.retain(|n| !gone.contains(&n.id));
             pt.notes.extend(added);
             pt.sort_notes();
+            pt.expression.retain(|e| !gone.contains(&e.note));
+            crate::note_expr::insert(pt, curves);
         }
     });
     a.current = result.iter().map(|n| n.id).collect();

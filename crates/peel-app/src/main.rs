@@ -3,6 +3,7 @@
 mod analysis_view;
 mod audio_io;
 mod browser;
+mod dev_take;
 mod device_layout;
 mod dialogs;
 mod eq_editor;
@@ -17,6 +18,7 @@ mod layout;
 mod mastering_ui;
 mod midi;
 mod mixer;
+mod note_expr;
 mod note_tools;
 mod perform;
 mod piano_roll;
@@ -36,6 +38,8 @@ mod workspace;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod mpe_tests;
 
 #[cfg(test)]
 use inspector::reaches as inspector_reaches;
@@ -84,11 +88,17 @@ fn main() {
         return;
     }
     let prefs = prefs::Prefs::load();
-    let mut session = Session::new_with_audio(
-        template::showcase(),
-        prefs.audio_device.clone(),
-        prefs.buffer_frames,
-    );
+    // `PEEL_SILENT` (development): the software clock, no audio or MIDI
+    // hardware, for screenshots that play the transport.
+    let mut session = if std::env::var_os("PEEL_SILENT").is_some() {
+        Session::new_silent(template::showcase())
+    } else {
+        Session::new_with_audio(
+            template::showcase(),
+            prefs.audio_device.clone(),
+            prefs.buffer_frames,
+        )
+    };
     session.prefer_input_device(prefs.input_device.clone());
     if let Some(c) = prefs.input_channels() {
         session.set_input_channels(c);

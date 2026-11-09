@@ -76,6 +76,12 @@ pub struct RollView {
     pub scale: Option<crate::harmony::Scale>,
     /// Chord shape stamped when drawing (index into `harmony::CHORDS`).
     pub chord: usize,
+    /// What the lower lane edits.
+    pub lane: crate::note_expr::Lane,
+    /// The note whose expression the lower lane edits.
+    pub focus_note: Option<Id>,
+    /// Pitch lane range in semitones either side of zero; None fits the note.
+    pub pitch_range: Option<f32>,
 }
 
 pub struct PlaylistView {
@@ -137,6 +143,8 @@ pub struct Workspace {
     pub browser_scroll: f32,
     /// Notes copied in the Piano Roll.
     pub clipboard: Vec<peel_document::Note>,
+    /// Expression of the copied notes, addressed by their original IDs.
+    pub clipboard_expr: Vec<peel_document::NoteExpression>,
     pub export_panel: bool,
     pub export_bits: u16,
     pub export_format: AudioFormat,
@@ -186,6 +194,9 @@ impl Default for Workspace {
                 ghosts: true,
                 scale: None,
                 chord: 0,
+                lane: Default::default(),
+                focus_note: None,
+                pitch_range: None,
             },
             playlist: PlaylistView {
                 zoom_x: 22.0,
@@ -212,6 +223,7 @@ impl Default for Workspace {
             export: None,
             browser_scroll: 0.0,
             clipboard: Vec::new(),
+            clipboard_expr: Vec::new(),
             export_panel: false,
             export_bits: 24,
             export_format: AudioFormat::Wav,

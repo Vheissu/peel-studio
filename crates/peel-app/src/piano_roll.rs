@@ -3,11 +3,14 @@
 
 use std::collections::HashSet;
 
-use peel_document::{Channel, Id, Note, Pattern, Time};
+use std::collections::HashMap;
+
+use peel_document::{Channel, ExpressionPoint, Id, Note, Pattern, Time};
 use peel_session::{PlayMode, Session};
 use peel_ui::Id as W;
 use peel_ui::{Align, Button, Color, CursorIcon, Key, MenuItem, NamedKey, Rect, Ui, icons, vec2};
 
+use crate::note_expr::{Lane, PITCH_RANGES, fit_range, points, set_curve};
 use crate::studio::current_pattern;
 use crate::util::{SCROLLBAR, col, format_length, ink_on, is_black_key, note_name};
 use crate::workspace::{Tool, Workspace};
@@ -33,6 +36,8 @@ struct DragState {
     start_beat: f64,
     start_key: i32,
     origin: Vec<Note>,
+    /// Expression of `origin` when the drag began (resizing prunes from it).
+    origin_expr: Vec<peel_document::NoteExpression>,
     gesture: u64,
     last_key: u8,
     marquee_from: (f64, f32),
@@ -46,6 +51,7 @@ impl Default for DragState {
             start_beat: 0.0,
             start_key: 0,
             origin: Vec::new(),
+            origin_expr: Vec::new(),
             gesture: 0,
             last_key: 0,
             marquee_from: (0.0, 0.0),
@@ -249,7 +255,7 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
 
     let notes: Vec<Note> = pattern.notes_for(channel.id).copied().collect();
     edit_canvas(ui, &v, &notes, &channel, s, ws, pid, &pattern);
-    velocity_lane(ui, vel_r, &v, &notes, &channel, s, ws, pid);
+    lower_lane(ui, vel_r, &v, &notes, &channel, s, ws, pid);
     let paste_at = ui
         .pointer()
         .filter(|p| canvas.contains(*p))
@@ -899,6 +905,7 @@ fn edit_canvas(
                 }
                 ws.roll.selection.insert(n.id);
             }
+            ws.roll.focus_note = Some(n.id);
             st.kind = if edge {
                 DragKind::Resize
             } else {
@@ -911,6 +918,7 @@ fn edit_canvas(
                 .filter(|x| ws.roll.selection.contains(&x.id))
                 .copied()
                 .collect();
+            st.origin_expr = crate::note_expr::gather(pattern, st.origin.iter().map(|x| x.id));
             ws.roll.note_len = n.length;
             if !edge {
                 s.live_note(ch.id, n.key, n.velocity, true);
@@ -944,6 +952,7 @@ fn edit_canvas(
                 }
             });
             ws.roll.selection = notes.iter().map(|n| n.id).collect();
+            ws.roll.focus_note = Some(anchor.id);
             st.kind = DragKind::Move;
             st.anchor = anchor.id;
             st.last_key = anchor.key;
@@ -976,6 +985,7 @@ fn edit_canvas(
         s.doc.edit_gesture(gid, "Delete notes", |p| {
             if let Some(pt) = p.pattern_mut(pid) {
                 pt.notes.retain(|x| x.id != n.id);
+                crate::note_expr::prune(pt);
             }
         });
         ws.roll.selection.remove(&n.id);
@@ -1040,6 +1050,7 @@ fn edit_canvas(
                         let new_end = Time::from_f64(raw_end, 960).round_to(snap);
                         let dl = new_end - anchor.end();
                         let origin = st.origin.clone();
+                        let origin_expr = st.origin_expr.clone();
                         let mut last_len = anchor.length;
                         s.doc.edit_gesture(st.gesture, "Resize notes", |p| {
                             if let Some(pt) = p.pattern_mut(pid) {
@@ -1051,6 +1062,9 @@ fn edit_canvas(
                                         }
                                     }
                                 }
+                                // Shortening trims a curve; lengthening
+                                // again in the same drag brings it back.
+                                crate::note_expr::insert(pt, origin_expr);
                             }
                         });
                         ws.roll.note_len = last_len;
@@ -1062,6 +1076,7 @@ fn edit_canvas(
                         s.doc.edit_gesture(st.gesture, "Delete notes", |p| {
                             if let Some(pt) = p.pattern_mut(pid) {
                                 pt.notes.retain(|x| x.id != n.id);
+                                crate::note_expr::prune(pt);
                             }
                         });
                     }
@@ -1161,6 +1176,36 @@ fn edit_canvas(
     ui.scene.pop_clip();
 }
 
+/// The lane under the notes: the lane picker in the label column, then
+/// velocity bars or the chosen expression curve.
+#[allow(clippy::too_many_arguments)]
+fn lower_lane(
+    ui: &mut Ui,
+    r: Rect,
+    v: &View,
+    notes: &[Note],
+    ch: &Channel,
+    s: &mut Session,
+    ws: &mut Workspace,
+    pid: Id,
+) {
+    let t = ui.theme.clone();
+    let label = Rect {
+        x: r.x,
+        w: KEYS_W,
+        ..r
+    };
+    ui.scene.rect(r, 0.0, t.panel_alt);
+    ui.scene.rect(label, 0.0, t.panel);
+    ui.scene.vline(label.right() - 0.5, r.y, r.bottom(), t.line);
+    lane_picker(ui, label, ws);
+    if ws.roll.lane == Lane::Velocity {
+        velocity_lane(ui, r, v, notes, ch, s, ws, pid);
+    } else {
+        expression_lane(ui, r, v, notes, ch, s, ws, pid);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn velocity_lane(
     ui: &mut Ui,
@@ -1172,27 +1217,11 @@ fn velocity_lane(
     ws: &mut Workspace,
     pid: Id,
 ) {
-    let t = ui.theme.clone();
     let lane = Rect {
         x: v.canvas.x,
         w: v.canvas.w,
         ..r
     };
-    let label = Rect {
-        x: r.x,
-        w: KEYS_W,
-        ..r
-    };
-    ui.scene.rect(r, 0.0, t.panel_alt);
-    ui.scene.rect(label, 0.0, t.panel);
-    ui.scene.vline(label.right() - 0.5, r.y, r.bottom(), t.line);
-    ui.text(
-        label.shrink2(8.0, 0.0),
-        "Velocity",
-        t.caption,
-        t.text_faint,
-        Align::Start,
-    );
     let color = col(ch.color);
     ui.scene.push_clip(lane);
     let inner = lane.shrink2(0.0, 8.0);
@@ -1287,16 +1316,22 @@ fn keyboard_shortcuts(
             .unwrap_or(Time::ZERO);
         let at = paste_at
             .unwrap_or_else(|| (first + (last - first).ceil_to(ws.roll.snap)).max(Time::ZERO));
+        let mut map = HashMap::new();
         let copies: Vec<Note> = ws
             .clipboard
             .iter()
-            .map(|n| Note {
-                id: Id::new(),
-                channel: ch.id,
-                start: at + (n.start - first),
-                ..*n
+            .map(|n| {
+                let id = Id::new();
+                map.insert(n.id, id);
+                Note {
+                    id,
+                    channel: ch.id,
+                    start: at + (n.start - first),
+                    ..*n
+                }
             })
             .collect();
+        let curves = crate::note_expr::remap(&ws.clipboard_expr, &map);
         let needed = copies.iter().map(|n| n.end()).max().unwrap_or(Time::ZERO);
         let len = pattern.length;
         ws.roll.selection = copies.iter().map(|n| n.id).collect();
@@ -1307,6 +1342,7 @@ fn keyboard_shortcuts(
                 if needed > len {
                     pt.length = needed.ceil_to(Time::beats(4));
                 }
+                crate::note_expr::insert(pt, curves);
             }
         });
         return;
@@ -1325,6 +1361,7 @@ fn keyboard_shortcuts(
                     n.length = n.length.round_to(grid).max(grid);
                 }
                 pt.sort_notes();
+                crate::note_expr::prune(pt);
             }
         });
     }
@@ -1335,12 +1372,14 @@ fn keyboard_shortcuts(
     let cut = ui.input.take_command("x", false);
     if copy || cut {
         ws.clipboard = sel.clone();
+        ws.clipboard_expr = crate::note_expr::gather(pattern, sel.iter().map(|n| n.id));
     }
     if cut {
         let ids: HashSet<Id> = sel.iter().map(|n| n.id).collect();
         s.doc.edit(format!("Cut {} notes", sel.len()), |p| {
             if let Some(pt) = p.pattern_mut(pid) {
                 pt.notes.retain(|n| !ids.contains(&n.id));
+                crate::note_expr::prune(pt);
             }
         });
         ws.roll.selection.clear();
@@ -1357,6 +1396,7 @@ fn keyboard_shortcuts(
             |p| {
                 if let Some(pt) = p.pattern_mut(pid) {
                     pt.notes.retain(|n| !ids.contains(&n.id));
+                    crate::note_expr::prune(pt);
                 }
             },
         );
@@ -1389,14 +1429,23 @@ fn keyboard_shortcuts(
         let start = sel.iter().map(|n| n.start).min().unwrap_or(Time::ZERO);
         let end = sel.iter().map(|n| n.end()).max().unwrap_or(Time::ZERO);
         let span = (end - start).ceil_to(ws.roll.snap).max(ws.roll.snap);
+        let mut map = HashMap::new();
         let copies: Vec<Note> = sel
             .iter()
-            .map(|n| Note {
-                id: Id::new(),
-                start: n.start + span,
-                ..*n
+            .map(|n| {
+                let id = Id::new();
+                map.insert(n.id, id);
+                Note {
+                    id,
+                    start: n.start + span,
+                    ..*n
+                }
             })
             .collect();
+        let curves = crate::note_expr::remap(
+            &crate::note_expr::gather(pattern, sel.iter().map(|n| n.id)),
+            &map,
+        );
         let new_ids: HashSet<Id> = copies.iter().map(|n| n.id).collect();
         let needed = copies.iter().map(|n| n.end()).max().unwrap_or(Time::ZERO);
         let len = pattern.length;
@@ -1407,8 +1456,503 @@ fn keyboard_shortcuts(
                 if needed > len {
                     pt.length = needed.ceil_to(Time::beats(4));
                 }
+                crate::note_expr::insert(pt, curves);
             }
         });
         ws.roll.selection = new_ids;
+    }
+}
+
+/// The note the expression lanes edit: the only selected note, else the
+/// last note clicked while it is still selected (or nothing is), else the
+/// earliest selected note.
+fn focus_note(ws: &Workspace, notes: &[Note]) -> Option<Note> {
+    let pick = |id: Id| notes.iter().find(|n| n.id == id).copied();
+    let sel = &ws.roll.selection;
+    if sel.len() == 1
+        && let Some(n) = sel.iter().next().and_then(|id| pick(*id))
+    {
+        return Some(n);
+    }
+    if let Some(n) = ws.roll.focus_note.and_then(pick)
+        && (sel.is_empty() || sel.contains(&n.id))
+    {
+        return Some(n);
+    }
+    notes.iter().find(|n| sel.contains(&n.id)).copied()
+}
+
+/// The lane picker in the label column.
+fn lane_picker(ui: &mut Ui, label: Rect, ws: &mut Workspace) {
+    let mut sel = Lane::ALL
+        .iter()
+        .position(|l| *l == ws.roll.lane)
+        .unwrap_or(0);
+    let names: Vec<&str> = Lane::ALL.iter().map(|l| l.name()).collect();
+    if ui.segmented_column(W::new("roll-lane"), label.shrink(2.0), &names, &mut sel) {
+        ws.roll.lane = Lane::ALL[sel];
+    }
+}
+
+#[derive(Clone, Default)]
+struct PointDrag {
+    note: Option<Id>,
+    /// Index of the dragged point in `origin` after insertion.
+    index: usize,
+    origin: Vec<ExpressionPoint>,
+    gesture: u64,
+    label: String,
+    /// Range the lane had when the drag began, so it does not rescale
+    /// under the pointer.
+    range: f32,
+}
+
+/// Value to lane y and back for one lane.
+#[derive(Clone, Copy)]
+struct Scale {
+    lane: Lane,
+    top: f32,
+    h: f32,
+    range: f32,
+}
+
+impl Scale {
+    fn y(&self, v: f32) -> f32 {
+        match self.lane {
+            Lane::Pitch => self.top + self.h * 0.5 * (1.0 - v / self.range),
+            _ => self.top + self.h * (1.0 - v),
+        }
+    }
+
+    fn value(&self, y: f32) -> f32 {
+        let u = ((y - self.top) / self.h.max(1.0)).clamp(0.0, 1.0);
+        match self.lane {
+            Lane::Pitch => {
+                let v = (1.0 - 2.0 * u) * self.range;
+                // A small dead zone makes zero easy to hit.
+                if v.abs() < self.range * 0.02 { 0.0 } else { v }
+            }
+            _ => 1.0 - u,
+        }
+    }
+}
+
+/// Held-value curve of one note: flat from each point to the next, so the
+/// drawing shows exactly what plays (no invented ramps).
+#[allow(clippy::too_many_arguments)]
+fn draw_steps(
+    ui: &mut Ui,
+    v: &View,
+    sc: &Scale,
+    n: &Note,
+    points: &[ExpressionPoint],
+    color: Color,
+    width: f32,
+    lead: Color,
+) {
+    let x0 = v.x(n.start.as_f64());
+    let x1 = v.x(n.end().as_f64());
+    let x_at = |p: &ExpressionPoint| v.x((n.start + p.offset).as_f64());
+    let neutral = sc.y(sc.lane.neutral());
+    // Before the first point the note plays the neutral value.
+    let first = points.first().map_or(x1, x_at);
+    if first > x0 {
+        ui.scene
+            .line(vec2(x0, neutral), vec2(first, neutral), 1.0, lead);
+    }
+    let mut prev_y = neutral;
+    for (i, p) in points.iter().enumerate() {
+        let x = x_at(p);
+        let y = sc.y(p.value);
+        let next = points.get(i + 1).map_or(x1, x_at);
+        if (y - prev_y).abs() > 0.5 {
+            ui.scene.line(vec2(x, prev_y), vec2(x, y), width, color);
+        }
+        ui.scene
+            .line(vec2(x, y), vec2(next.max(x), y), width, color);
+        prev_y = y;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn expression_lane(
+    ui: &mut Ui,
+    r: Rect,
+    v: &View,
+    notes: &[Note],
+    ch: &Channel,
+    s: &mut Session,
+    ws: &mut Workspace,
+    pid: Id,
+) {
+    let t = ui.theme.clone();
+    let lane_kind = ws.roll.lane;
+    let lane = Rect {
+        x: v.canvas.x,
+        w: v.canvas.w,
+        ..r
+    };
+    let inner = lane.shrink2(0.0, 8.0);
+    let color = col(ch.color);
+    let Some(pattern) = s.project().pattern(pid).cloned() else {
+        return;
+    };
+    let id = W::new("roll-expr");
+    let drag_id = id.with("drag");
+    let focus = focus_note(ws, notes);
+    let focus_points = focus.map_or_else(Vec::new, |n| points(&pattern, n.id, lane_kind));
+    let dragging = ui.state::<PointDrag>(drag_id).note.is_some();
+    let range = match lane_kind {
+        Lane::Pitch if dragging => ui.state::<PointDrag>(drag_id).range,
+        Lane::Pitch => ws
+            .roll
+            .pitch_range
+            .unwrap_or_else(|| fit_range(&focus_points)),
+        _ => 1.0,
+    };
+    let sc = Scale {
+        lane: lane_kind,
+        top: inner.y,
+        h: inner.h,
+        range,
+    };
+
+    // Reference line at the neutral value (centre for pitch and timbre).
+    if lane_kind != Lane::Pressure {
+        ui.scene.hline(
+            lane.x,
+            lane.right(),
+            sc.y(lane_kind.neutral()).round() + 0.5,
+            t.line_strong,
+        );
+    }
+
+    ui.scene.push_clip(lane);
+    // Other notes' curves, faint, for context.
+    for n in notes.iter().filter(|n| Some(n.id) != focus.map(|f| f.id)) {
+        let pts = points(&pattern, n.id, lane_kind);
+        if pts.is_empty() {
+            continue;
+        }
+        let (x0, x1) = (v.x(n.start.as_f64()), v.x(n.end().as_f64()));
+        if x1 < lane.x || x0 > lane.right() {
+            continue;
+        }
+        draw_steps(
+            ui,
+            v,
+            &sc,
+            n,
+            &pts,
+            color.alpha(0.35),
+            1.0,
+            Color::TRANSPARENT,
+        );
+    }
+    // The focus note: its span, its curve and its points.
+    let pointer = ui.pointer().filter(|p| lane.contains(*p));
+    let mut hot_point = None;
+    if let Some(n) = focus {
+        let (x0, x1) = (v.x(n.start.as_f64()), v.x(n.end().as_f64()));
+        ui.scene.rect(
+            Rect {
+                x: x0,
+                y: lane.y,
+                w: (x1 - x0).max(1.0),
+                h: lane.h,
+            },
+            0.0,
+            color.alpha(0.07),
+        );
+        ui.scene
+            .vline(x0.round() + 0.5, lane.y, lane.bottom(), color.alpha(0.5));
+        ui.scene
+            .vline(x1.round() - 0.5, lane.y, lane.bottom(), color.alpha(0.25));
+        draw_steps(ui, v, &sc, &n, &focus_points, color, 2.0, color.alpha(0.45));
+        hot_point = pointer.and_then(|p| {
+            focus_points.iter().position(|pt| {
+                let c = vec2(v.x((n.start + pt.offset).as_f64()), sc.y(pt.value));
+                (c.x - p.x).abs() <= 6.0 && (c.y - p.y).abs() <= 6.0
+            })
+        });
+        let active = ui.state::<PointDrag>(drag_id).clone();
+        // Sparse curves show every handle; a dense recorded take shows the
+        // line alone and only the handle under the pointer or being dragged.
+        let span = (x1 - x0).max(1.0);
+        let sparse = span / focus_points.len().max(1) as f32 >= 10.0;
+        for (i, pt) in focus_points.iter().enumerate() {
+            let on = hot_point == Some(i) || (active.note == Some(n.id) && active.index == i);
+            if !sparse && !on {
+                continue;
+            }
+            let c = vec2(v.x((n.start + pt.offset).as_f64()), sc.y(pt.value));
+            ui.scene.circle(
+                c,
+                if on { 4.5 } else { 3.5 },
+                if on { color.lighten(0.3) } else { color },
+            );
+            ui.scene.circle(c, 1.5, t.panel_alt);
+        }
+    }
+    ui.scene.pop_clip();
+
+    // Top-right: the lane's scale and Clear.
+    let mut bar = Rect {
+        x: lane.right() - 160.0,
+        y: lane.y + 3.0,
+        w: 156.0,
+        h: 18.0,
+    };
+    if !focus_points.is_empty() {
+        let clear = ui.button(W::new("roll-expr-clear"), bar.cut_right(46.0), "Clear");
+        ui.tooltip(
+            &clear,
+            &format!(
+                "Remove this note's {} curve",
+                lane_kind.name().to_lowercase()
+            ),
+        );
+        if clear.clicked
+            && let Some(n) = focus
+        {
+            let kind = lane_kind;
+            s.doc
+                .edit(format!("Clear {}", kind.name().to_lowercase()), |p| {
+                    if let Some(pt) = p.pattern_mut(pid) {
+                        set_curve(pt, n.id, kind, &[]);
+                    }
+                });
+        }
+        bar.cut_right(6.0);
+    }
+    let scale_text = match lane_kind {
+        Lane::Pitch => format!("±{} st", range.round() as i32),
+        _ => "0–100%".to_string(),
+    };
+    ui.text(bar, &scale_text, t.caption, t.text_faint, Align::End);
+
+    // One quiet line when there is nothing to show.
+    let empty = match focus {
+        None => Some("Select a note to edit its expression".to_string()),
+        Some(_) if focus_points.is_empty() => Some(format!(
+            "No {} recorded for this note",
+            lane_kind.name().to_lowercase()
+        )),
+        _ => None,
+    };
+    if let Some(text) = empty {
+        ui.text(
+            Rect {
+                x: lane.x + 8.0,
+                y: lane.y + 3.0,
+                w: (lane.w - 180.0).max(40.0),
+                h: 18.0,
+            },
+            &text,
+            t.caption,
+            t.text_faint,
+            Align::Start,
+        );
+    }
+
+    let resp = ui.interact(id, lane);
+    ui.describe(
+        id,
+        peel_ui::Role::Canvas,
+        &format!("{} lane", lane_kind.name()),
+        &focus.map_or("No note".to_string(), |n| {
+            format!("{}, {} points", note_name(n.key), focus_points.len())
+        }),
+    );
+    // Scroll changes the pitch range.
+    if lane_kind == Lane::Pitch && resp.hovered && ui.input.scroll.y != 0.0 && !dragging {
+        let i = PITCH_RANGES
+            .iter()
+            .position(|r| (*r - range).abs() < 0.5)
+            .unwrap_or(0) as i32;
+        let step = if ui.input.scroll.y > 0.0 { -1 } else { 1 };
+        let j = (i + step).clamp(0, PITCH_RANGES.len() as i32 - 1) as usize;
+        ws.roll.pitch_range = Some(PITCH_RANGES[j]);
+        ui.input.scroll = peel_ui::Vec2::ZERO;
+    }
+
+    // Which note's span the pointer is over (for picking another note).
+    let over_note = |x: f32| -> Option<Note> {
+        let beat = v.beat(x);
+        let mut under = notes
+            .iter()
+            .filter(|n| n.start.as_f64() <= beat && beat < n.end().as_f64());
+        let first = under.clone().next().copied();
+        under
+            .find(|n| !points(&pattern, n.id, lane_kind).is_empty())
+            .copied()
+            .or(first)
+    };
+    let snap = ws.roll.snap;
+    let offset_at = |n: &Note, x: f32, free: bool| -> Time {
+        let beat = v.beat(x).max(0.0);
+        let abs = Time::from_f64(beat, 960);
+        let abs = if free { abs } else { abs.round_to(snap) };
+        (abs - n.start).max(Time::ZERO).min(n.length)
+    };
+
+    if resp.hovered {
+        let in_focus = pointer.zip(focus).is_some_and(|(p, n)| {
+            v.beat(p.x) >= n.start.as_f64() && v.beat(p.x) < n.end().as_f64()
+        });
+        ui.set_cursor(if hot_point.is_some() {
+            CursorIcon::Grab
+        } else if in_focus {
+            CursorIcon::Crosshair
+        } else {
+            CursorIcon::Default
+        });
+    }
+
+    if resp.pressed
+        && let Some(p) = ui.pointer()
+    {
+        let free = ui.input.modifiers.alt;
+        let gesture = id.0 ^ (ui.time() * 1000.0) as u64;
+        let name = lane_kind.name().to_lowercase();
+        match (focus, hot_point) {
+            (Some(n), Some(i)) => {
+                *ui.state::<PointDrag>(drag_id) = PointDrag {
+                    note: Some(n.id),
+                    index: i,
+                    origin: focus_points.clone(),
+                    gesture,
+                    label: format!("Move {name} point"),
+                    range,
+                };
+            }
+            (Some(n), None)
+                if v.beat(p.x) >= n.start.as_f64() && v.beat(p.x) < n.end().as_f64() =>
+            {
+                // Insert a point and keep dragging it.
+                let new = ExpressionPoint {
+                    offset: offset_at(&n, p.x, free),
+                    value: sc.value(p.y),
+                };
+                let mut origin: Vec<ExpressionPoint> = focus_points
+                    .iter()
+                    .copied()
+                    .filter(|q| q.offset != new.offset)
+                    .collect();
+                let index = origin.partition_point(|q| q.offset < new.offset);
+                origin.insert(index, new);
+                let label = format!("Add {name} point");
+                let pts = origin.clone();
+                s.doc.edit_gesture(gesture, label.clone(), |doc| {
+                    if let Some(pt) = doc.pattern_mut(pid) {
+                        set_curve(pt, n.id, lane_kind, &pts);
+                    }
+                });
+                *ui.state::<PointDrag>(drag_id) = PointDrag {
+                    note: Some(n.id),
+                    index,
+                    origin,
+                    gesture,
+                    label,
+                    range,
+                };
+            }
+            _ => {
+                // Pick the note under the pointer to edit it.
+                if let Some(n) = over_note(p.x) {
+                    ws.roll.focus_note = Some(n.id);
+                    ws.roll.selection = std::iter::once(n.id).collect();
+                }
+            }
+        }
+    }
+
+    let st = ui.state::<PointDrag>(drag_id).clone();
+    if let Some(note) = st.note {
+        if ui.input.down[0] {
+            if let (Some(p), Some(n)) = (ui.pointer(), notes.iter().find(|n| n.id == note)) {
+                let free = ui.input.modifiers.alt;
+                let tick = Time::new(1, 960);
+                let lo = if st.index == 0 {
+                    Time::ZERO
+                } else {
+                    st.origin[st.index - 1].offset + tick
+                };
+                let hi = st
+                    .origin
+                    .get(st.index + 1)
+                    .map_or(n.length, |q| q.offset - tick);
+                let offset = offset_at(n, p.x, free).max(lo).min(hi.max(lo));
+                let s2 = Scale {
+                    range: st.range,
+                    ..sc
+                };
+                let value = s2.value(p.y);
+                let mut pts = st.origin.clone();
+                pts[st.index] = ExpressionPoint { offset, value };
+                s.doc.edit_gesture(st.gesture, st.label.clone(), |doc| {
+                    if let Some(pt) = doc.pattern_mut(pid) {
+                        set_curve(pt, note, lane_kind, &pts);
+                    }
+                });
+                // Value tag beside the point while it moves.
+                let at = vec2(v.x((n.start + offset).as_f64()), s2.y(value));
+                let text = lane_kind.format(value);
+                ui.with_layer(peel_ui::LayerId::ABOVE, |ui| {
+                    let w = 58.0;
+                    let tag = Rect {
+                        x: (at.x + 8.0).min(lane.right() - w),
+                        y: (at.y - 20.0).max(lane.y),
+                        w,
+                        h: 16.0,
+                    };
+                    ui.scene.rect(tag, t.radius_s, t.raised);
+                    ui.text(tag, &text, t.readout_small, t.text, Align::Center);
+                });
+                ui.set_cursor(CursorIcon::Grabbing);
+            }
+        } else {
+            *ui.state::<PointDrag>(drag_id) = PointDrag::default();
+            s.doc.end_gesture();
+        }
+    } else if let (Some(i), Some(n), Some(p)) = (hot_point, focus, pointer) {
+        // Hover readout for a point.
+        let pt = focus_points[i];
+        let _ = p;
+        let tip = format!(
+            "{} at {:.2} beats into the note",
+            lane_kind.format(pt.value),
+            pt.offset.as_f64()
+        );
+        let r = Rect {
+            x: v.x((n.start + pt.offset).as_f64()) - 6.0,
+            y: sc.y(pt.value) - 6.0,
+            w: 12.0,
+            h: 12.0,
+        };
+        let hover = peel_ui::Response {
+            id: id.with(("pt", i)),
+            rect: r,
+            hovered: true,
+            ..resp
+        };
+        ui.tooltip(&hover, &tip);
+        // Right-click or Delete removes the point.
+        let delete = resp.secondary_clicked
+            || ui.input.take_named(NamedKey::Delete)
+            || ui.input.take_named(NamedKey::Backspace);
+        if delete {
+            let mut pts = focus_points.clone();
+            pts.remove(i);
+            let kind = lane_kind;
+            s.doc.edit(
+                format!("Delete {} point", kind.name().to_lowercase()),
+                |doc| {
+                    if let Some(pt) = doc.pattern_mut(pid) {
+                        set_curve(pt, n.id, kind, &pts);
+                    }
+                },
+            );
+        }
     }
 }
