@@ -48,7 +48,7 @@ fn main() -> ExitCode {
 
 fn load(path: &str) -> Result<peel_document::Project, String> {
     if path == "--demo" {
-        return Ok(template::beat_and_melody());
+        return Ok(template::showcase());
     }
     let loaded = peel_project::load(std::path::Path::new(path)).map_err(|e| e.to_string())?;
     for w in loaded.warnings {

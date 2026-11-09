@@ -19,11 +19,18 @@ effects. There is no web view.
 - Pattern workflow: a Channel Rack step sequencer (with a velocity graph)
   and a Piano Roll edit the same notes; patterns are painted into the
   Playlist as linked clips, and Make unique splits one off.
-- Ten native instruments (five synthesized drums, a polyphonic synth, a
-  mono bass, an FM electric piano, a modelled piano and a sampler) and nine
-  effects (EQ with an interactive curve, compressor, limiter, delay, reverb,
-  drive, filter, chorus, utility), with over a hundred factory presets in
-  the Browser. Installed CLAP plugins show up next to them.
+- Thirteen native instruments (five synthesized drums, a polyphonic synth,
+  a mono bass, an FM electric piano, a modelled piano, a modelled electric
+  guitar with its own amp, a bowed violin with ensemble and pizzicato, a
+  saxophone and a sampler) and fourteen effects (EQ with an interactive
+  curve, compressor, limiter, Bass Lift, delay, reverb, drive, filter,
+  chorus, Vintage Chorus, flanger, phaser, Glitch for tempo-synced
+  stutters, tape stops and gates, and utility), with over 150 factory
+  presets in the Browser. Installed CLAP plugins show up next to them.
+- A demo song, "Afterglow", opens on first launch: 80 bars with a tempo
+  ramp, a slower breakdown, two drops, a drum bus, sidechain ducking,
+  reverb and delay returns, and automation of volume, pan, filters, pitch
+  and effects.
 - Arrangement: pattern, audio and automation clips; trims, fades, slicing,
   marquee selection, Alt-drag copies, markers, tempo changes, alternate
   arrangements; audio loops that follow the tempo; render to audio.
@@ -81,7 +88,7 @@ without it the bundle is ad-hoc signed for local use.
 
 ```sh
 peel render song.peelproj mix.wav --rate 48000 --bits 24
-peel render --demo demo.wav       # the starter project
+peel render --demo demo.wav       # the demo song
 peel info song.peelproj
 peel validate song.peelproj
 peel devices                      # every native instrument and effect

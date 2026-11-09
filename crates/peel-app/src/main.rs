@@ -41,7 +41,7 @@ fn main() {
     let open: Option<PathBuf> = std::env::args_os().nth(1).map(PathBuf::from);
     let prefs = prefs::Prefs::load();
     let mut session = Session::new_with_audio(
-        template::beat_and_melody(),
+        template::showcase(),
         prefs.audio_device.clone(),
         prefs.buffer_frames,
     );

@@ -1372,7 +1372,7 @@ fn the_welcome_screen_starts_a_house_project() {
     let mut h = Harness::new();
     h.studio.welcome = true;
     h.frame();
-    h.click(W::new(("welcome-template", 1usize)));
+    h.click(W::new(("welcome-template", 2usize)));
     assert!(!h.studio.welcome);
     assert_eq!(h.session().project().bpm(), 124.0);
     assert!(

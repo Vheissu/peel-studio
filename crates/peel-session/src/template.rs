@@ -1,7 +1,11 @@
 //! Project templates built from native devices only, so they work offline
 //! on a fresh install.
 
+mod showcase;
+
 use std::sync::Arc;
+
+pub use showcase::showcase;
 
 use peel_document::{
     Arrangement, Channel, Clip, ClipContent, DeviceInstance, Id, MixerTrack, Note, PALETTE,
@@ -543,6 +547,7 @@ pub type Template = (&'static str, fn() -> Project);
 /// Starter projects offered on the welcome screen.
 pub fn templates() -> Vec<Template> {
     vec![
+        ("Demo song", showcase),
         ("Beat and melody", beat_and_melody),
         ("House", house),
         ("Hip-hop", hip_hop),
