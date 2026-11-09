@@ -9,5 +9,7 @@ asset in the same commit that adds it.
 | `icons/peel-*.png` | Drawn by `scripts/make-icon.py` for this project | — | GPL-3.0-or-later (project artwork) | App and window icon |
 | `fonts/phosphor/Phosphor.ttf`, `Phosphor-Fill.ttf` | [`@phosphor-icons/web`](https://github.com/phosphor-icons/web) | 2.1.2 | MIT (`fonts/phosphor/LICENSE`) | Interface icons |
 
+| `scripts/*.js`, `scripts/*.lua`, `scripts/*.py` | Written for Peel Studio | API 1 | GPL-3.0-or-later (project code) | Factory scripting actions |
+
 Factory sounds are synthesized by the native instruments at runtime; no
 sample recordings are bundled yet.

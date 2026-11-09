@@ -1,3 +1,5 @@
+use peel_session::editing::check_times;
+pub(crate) use peel_session::editing::time;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -741,169 +743,6 @@ fn device_version(s: &Session, type_id: &str, kind: DeviceKind) -> Result<u32, S
     Err("Unknown device type; call peel_devices first".into())
 }
 
-/// Bound time arithmetic before deserializing untrusted rationals into the document.
-pub(crate) fn time(value: &str) -> Result<Time, String> {
-    let (num, den) = value.split_once('/').unwrap_or((value, "1"));
-    let num: i64 = num.trim().parse().map_err(err)?;
-    let den: i64 = den.trim().parse().map_err(err)?;
-    if num.unsigned_abs() > 1_000_000_000_000 || !(1..=1_000_000).contains(&den) {
-        return Err("Musical time exceeds supported MCP bounds".into());
-    }
-    let time = Time::try_new(num.into(), den.into()).map_err(err)?;
-    if time.as_f64().abs() > 10_000_000.0 {
-        return Err("Musical time exceeds 10000000 beats".into());
-    }
-    Ok(time)
-}
-fn check_times(value: &Value, key: Option<&str>) -> Result<(), String> {
-    match value {
-        Value::Object(fields) => {
-            for (key, value) in fields {
-                check_times(value, Some(key))?;
-            }
-        }
-        Value::Array(values) => {
-            for value in values {
-                check_times(value, key)?;
-            }
-        }
-        Value::String(s)
-            if key.is_some_and(|k| {
-                matches!(
-                    k,
-                    "start"
-                        | "length"
-                        | "offset"
-                        | "position"
-                        | "fade_in"
-                        | "fade_out"
-                        | "loop_range"
-                )
-            }) =>
-        {
-            time(s)?;
-        }
-        _ => {}
-    }
-    Ok(())
-}
-fn commit(s: &mut Session, label: &str, mut p: Project) -> Result<Value, String> {
-    if s.is_recording() {
-        return Err("Stop recording before editing the project".into());
-    }
-    validate(&p)?;
-    for pattern in &mut p.patterns {
-        Arc::make_mut(pattern).sort_notes();
-    }
-    let warnings = peel_document::validate(&p)
-        .into_iter()
-        .filter(|i| !i.is_error())
-        .map(|i| i.message)
-        .collect::<Vec<_>>();
-    if &p != s.project() {
-        s.doc.end_gesture();
-        s.doc.edit(label, |project| *project = p);
-    }
-    Ok(json!({"revision": s.doc.revision(), "warnings": warnings}))
-}
-
-fn validate(p: &Project) -> Result<(), String> {
-    let errors = peel_document::validate(p)
-        .into_iter()
-        .filter(|i| i.is_error())
-        .map(|i| i.message)
-        .collect::<Vec<_>>();
-    if !errors.is_empty() {
-        return Err(errors.join("; "));
-    }
-    if p.tempo.is_empty()
-        || p.tempo[0].start != Time::ZERO
-        || p.tempo.iter().any(|t| {
-            !(1.0..=999.0).contains(&t.bpm)
-                || t.ramp_to.is_some_and(|b| !(1.0..=999.0).contains(&b))
-        })
-        || p.tempo.windows(2).any(|t| t[1].start <= t[0].start)
-    {
-        return Err("Tempo must start at zero, be sorted and have BPM in 1..=999".into());
-    }
-    if p.time_signature.numerator == 0
-        || !p.time_signature.denominator.is_power_of_two()
-        || p.time_signature.denominator > 64
-        || !(0.0..=1.0).contains(&p.swing)
-    {
-        return Err("Invalid time signature or swing".into());
-    }
-    if !p.arrangements.iter().any(|a| a.id == p.active_arrangement) {
-        return Err("Active arrangement does not exist".into());
-    }
-    for (gain, pan) in p
-        .channels
-        .iter()
-        .map(|c| (c.gain_db, c.pan))
-        .chain(p.mixer.tracks.iter().map(|t| (t.gain_db, t.pan)))
-    {
-        if !gain.is_finite() || !(-1.0..=1.0).contains(&pan) {
-            return Err("Invalid gain or pan".into());
-        }
-    }
-    for n in p.patterns.iter().flat_map(|p| &p.notes) {
-        if n.start.is_negative()
-            || !(0.0..=1.0).contains(&n.probability)
-            || !(0.0..=1.0).contains(&n.release)
-            || !(-1.0..=1.0).contains(&n.pan)
-            || !n.fine.is_finite()
-        {
-            return Err("Invalid note start, probability, release, pan or fine pitch".into());
-        }
-    }
-    for a in &p.arrangements {
-        if a.loop_range.is_some_and(|(a, b)| a.is_negative() || a >= b) {
-            return Err("Invalid loop range".into());
-        }
-        for c in &a.clips {
-            if c.start.is_negative() || c.offset.is_negative() {
-                return Err("Clip positions must be nonnegative".into());
-            }
-            if let ClipContent::Audio {
-                source_bpm: Some(b),
-                ..
-            } = &c.content
-                && !(1.0..=999.0).contains(b)
-            {
-                return Err("Invalid source BPM".into());
-            }
-            if let ClipContent::Automation { points, .. } = &c.content
-                && points
-                    .iter()
-                    .any(|p| p.position.is_negative() || !(-1.0..=1.0).contains(&p.tension))
-            {
-                return Err("Invalid automation position or tension".into());
-            }
-        }
-    }
-    for d in p
-        .channels
-        .iter()
-        .map(|c| &c.device)
-        .chain(p.mixer.tracks.iter().flat_map(|t| &t.inserts))
-    {
-        if let Some(desc) = peel_devices::descriptor(&d.type_id) {
-            for (key, value) in &d.params {
-                let param = desc
-                    .param_by_key(key)
-                    .ok_or_else(|| format!("Unknown parameter {key} on {}", d.type_id))?;
-                if !value.is_finite() || !(param.min..=param.max).contains(value) {
-                    return Err(format!(
-                        "{key} must be between {} and {}",
-                        param.min, param.max
-                    ));
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
 fn devices(s: &Session, type_id: Option<&str>) -> Result<Value, String> {
     let mut descriptors: Vec<_> = peel_devices::all().collect();
     for plugin in s.plugins() {
@@ -944,4 +783,14 @@ impl Drop for Control {
             }
         }
     }
+}
+
+fn commit(s: &mut Session, label: &str, p: Project) -> Result<Value, String> {
+    s.apply_project_edit(s.project().id, s.doc.revision(), label, p)?;
+    let warnings = peel_document::validate(s.project())
+        .into_iter()
+        .filter(|i| !i.is_error())
+        .map(|i| i.message)
+        .collect::<Vec<_>>();
+    Ok(json!({"revision": s.doc.revision(), "warnings": warnings}))
 }

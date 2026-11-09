@@ -40,6 +40,7 @@ the specification each crate owns.
 | `peel-ui` | GPU renderer, text, input, theme, widgets | document, engine |
 | `peel-app` | The desktop application and its editors | — |
 | `peel-cli` | Headless validation and rendering | GUI |
+| `peel-extensions` | Isolated JavaScript/Lua actions and trusted Python process bridge | GUI |
 | `peel-mcp` | Stdio MCP server, agent tools, validated edits, headless host | GUI |
 
 ## Data flow
@@ -48,6 +49,7 @@ the specification each crate owns.
 flowchart LR
     UI["peel-app editors"] -->|"named transactions"| Doc["peel-document Document"]
     MCP["peel-mcp agent tools"] -->|"validated transactions on the session thread"| Doc
+    Scripts["peel-extensions script processes"] -->|"validated snapshot on session thread"| Doc
     Doc -->|"revision changed"| Session["peel-session compiler"]
     Session -->|"RenderPlan, devices, params"| Queue[["rtrb command queue"]]
     Queue --> Engine["peel-engine callback"]

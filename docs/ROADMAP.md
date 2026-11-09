@@ -52,5 +52,13 @@ across the graph.
 
 Launch options (gate, one-shot, follow actions), controller pads, stem
 separation and analysis,
-scripting and controller SDK, remote control, video, mastering assistant,
+controller SDK, remote control, video, mastering assistant,
 localization, signed installers and auto-update.
+
+## Scripts
+
+JavaScript and Lua editor actions, plus optional Python actions with package
+imports, are implemented. The Scripts panel installs files, runs actions
+against a snapshot and applies each result as one undo step. See
+[SCRIPTING.md](SCRIPTING.md). Custom panels, event callbacks and a controller
+SDK remain future work.

@@ -118,6 +118,14 @@ instrument and effect catalog, exposes device parameters and presets,
 and supports validated transactions across the full project document.
 See [docs/MCP.md](docs/MCP.md) for client configuration, tools and examples.
 
+## Scripts
+
+Run JavaScript, Lua and Python actions from **Scripts** in the status bar
+or **F8**. Actions edit a project snapshot and apply successful changes as
+one undo step. JavaScript and Lua are bundled; Python uses your chosen
+interpreter and can import packages such as PyTheory. Factory examples,
+installation and the API are in [docs/SCRIPTING.md](docs/SCRIPTING.md).
+
 ## Export
 
 Open Export from the toolbar or press Cmd/Ctrl+E. Choose a mix or one file

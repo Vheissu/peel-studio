@@ -16,6 +16,8 @@ pub struct Prefs {
     pub buffer_frames: Option<u32>,
     pub octave: i32,
     pub sample_dir: Option<PathBuf>,
+    /// Optional virtual environment interpreter for Python actions.
+    pub python: Option<PathBuf>,
     /// Audio input to record from (`None` is the system default).
     pub input_device: Option<String>,
     /// Device channels recorded: one (mono) or two (stereo), zero-based.
@@ -31,6 +33,7 @@ impl Default for Prefs {
             buffer_frames: None,
             octave: 4,
             sample_dir: None,
+            python: None,
             input_device: None,
             input_channels: Vec::new(),
         }

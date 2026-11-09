@@ -9,7 +9,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("PgUp  /  PgDn", "Back / forward one bar"),
     ("Z – M  /  Q – P", "Play the selected instrument"),
     ("−  /  =", "Octave down / up"),
-    ("F6  F7  F9", "Channels, Piano roll, Mixer"),
+    ("F6  F7  F8  F9", "Channels, Piano roll, Scripts, Mixer"),
     ("Cmd Z  /  Cmd ⇧ Z", "Undo / redo"),
     ("Cmd C  X  V", "Copy, cut, paste notes"),
     ("Cmd D", "Duplicate notes or clips"),

@@ -8,6 +8,7 @@
 mod audio;
 mod bounce;
 mod compile;
+pub mod editing;
 mod export;
 mod io;
 mod perform;

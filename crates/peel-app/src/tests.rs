@@ -13,6 +13,7 @@ struct Harness {
     studio: Studio,
     win: WindowControl,
     time: f64,
+    size: Vec2,
 }
 
 impl Harness {
@@ -23,6 +24,7 @@ impl Harness {
             studio: Studio::new(session),
             win: WindowControl::headless(),
             time: 0.0,
+            size: vec2(1440.0, 900.0),
         };
         h.frames(2);
         h
@@ -34,8 +36,8 @@ impl Harness {
             Rect {
                 x: 0.0,
                 y: 0.0,
-                w: 1440.0,
-                h: 900.0,
+                w: self.size.x,
+                h: self.size.y,
             },
             1.0,
             self.time,
@@ -1521,4 +1523,246 @@ fn export_controls_follow_the_codec_and_keep_valid_settings() {
     let export = h.rect(W::new("export-audio"));
     assert!(export.bottom() <= 900.0);
     assert!(export.right() <= 1440.0);
+}
+
+fn named_key(h: &mut Harness, key: peel_ui::NamedKey, code: peel_ui::KeyCode) {
+    h.ui.input.keys.push(peel_ui::input::KeyPress {
+        key: peel_ui::Key::Named(key),
+        code: Some(code),
+        repeat: false,
+        modifiers: peel_ui::Modifiers::default(),
+        consumed: false,
+    });
+    h.frame();
+}
+
+fn temp_scripts_dir(tag: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("peel-app-{tag}-{}", peel_document::Id::new()))
+}
+
+/// Frames until the running script finishes, for at most ten seconds.
+fn wait_for_script(h: &mut Harness) {
+    let start = std::time::Instant::now();
+    while h.studio.scripts.is_running() {
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(10),
+            "the script finished within its deadline"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        h.frame();
+    }
+}
+
+#[test]
+fn f8_and_the_status_button_open_the_scripts_panel() {
+    use crate::scripts::PANEL;
+    use peel_ui::{KeyCode, NamedKey};
+    let mut h = Harness::new();
+    h.studio.scripts = crate::scripts::Scripts::with_dir(temp_scripts_dir("scripts-open"));
+    assert!(!h.ui.is_popup_open(PANEL));
+    named_key(&mut h, NamedKey::F8, KeyCode::F8);
+    h.frame();
+    assert!(h.ui.is_popup_open(PANEL), "F8 opens the panel");
+    assert!(
+        !h.studio.scripts.factory.is_empty(),
+        "factory scripts are listed"
+    );
+    h.rect(W::new("scripts-run"));
+    named_key(&mut h, NamedKey::F8, KeyCode::F8);
+    h.frame();
+    assert!(!h.ui.is_popup_open(PANEL), "F8 closes it again");
+    h.click(W::new("scripts-open"));
+    h.frame();
+    assert!(h.ui.is_popup_open(PANEL), "the status bar button opens it");
+    h.click(PANEL.with("close"));
+    h.frame();
+    assert!(!h.ui.is_popup_open(PANEL));
+}
+
+#[test]
+fn the_scripts_button_and_panel_fit_a_small_window() {
+    use crate::scripts::PANEL;
+    let mut h = Harness::new();
+    h.studio.scripts = crate::scripts::Scripts::with_dir(temp_scripts_dir("scripts-fit"));
+    h.size = vec2(1024.0, 700.0);
+    // A long notice must not take the button's space.
+    h.studio.session.notify("x".repeat(400), true);
+    h.frames(2);
+    let button = h.rect(W::new("scripts-open"));
+    let help = h.rect(W::new("keys-help"));
+    assert!(button.right() <= help.x, "the button sits left of help");
+    assert!(button.x >= 0.0 && button.bottom() <= 700.0);
+    h.click(W::new("scripts-open"));
+    h.frame();
+    assert!(h.ui.is_popup_open(PANEL));
+    for id in ["scripts-run", "scripts-add", "scripts-refresh"] {
+        let r = h.rect(W::new(id));
+        assert!(
+            r.x >= 0.0 && r.right() <= 1024.0 && r.y >= 0.0 && r.bottom() <= 700.0 - 24.0,
+            "{id} is inside the window above the status bar: {r:?}"
+        );
+    }
+}
+
+#[test]
+fn running_a_factory_script_shows_its_result_after_closing() {
+    use crate::scripts::PANEL;
+    let mut h = Harness::new();
+    h.studio.scripts = crate::scripts::Scripts::with_dir(temp_scripts_dir("scripts-run"));
+    // Select the kick's notes so the transpose action has input.
+    let pid = h.session().selected_pattern();
+    let kick = h.session().project().channels[0].id;
+    let ids: Vec<_> = h
+        .session()
+        .project()
+        .pattern(pid)
+        .unwrap()
+        .notes_for(kick)
+        .map(|n| n.id)
+        .collect();
+    assert!(!ids.is_empty());
+    h.studio.ws.selected_channel = Some(kick);
+    h.studio.ws.roll.selection.extend(ids);
+    h.click(W::new("scripts-open"));
+    h.frame();
+    use crate::scripts::Pick;
+    assert!(h.studio.scripts.factory.len() > 1);
+    h.click(W::new(("script-factory", 1usize)));
+    assert_eq!(h.studio.scripts.selected, Some(Pick::Factory(1)));
+    h.click(W::new(("script-factory", 0usize)));
+    assert_eq!(h.studio.scripts.selected, Some(Pick::Factory(0)));
+    let name = h.studio.scripts.factory[0].name.clone();
+    assert!(!h.studio.scripts.is_running(), "nothing runs until Run");
+    h.click(W::new("scripts-run"));
+    assert!(h.studio.scripts.is_running());
+    let again = h
+        .studio
+        .scripts
+        .run_selected(&h.studio.session, &h.studio.ws, false);
+    assert!(again.is_err(), "one script at a time");
+    // Closing the panel neither stops the job nor loses its result.
+    h.click(PANEL.with("close"));
+    wait_for_script(&mut h);
+    let out = h.studio.scripts.last.clone().expect("an outcome");
+    assert_eq!(
+        out.result,
+        Ok("Applied".to_string()),
+        "{name}: {:?}",
+        out.logs
+    );
+    assert_eq!(
+        h.session().doc.undo_label(),
+        Some(format!("Script: {name}").as_str())
+    );
+    h.click(W::new("scripts-open"));
+    h.frame();
+    assert!(h.ui.is_popup_open(PANEL));
+    assert!(h.studio.scripts.last.is_some(), "the result is still shown");
+}
+
+#[test]
+fn cancelling_a_script_applies_nothing() {
+    let mut h = Harness::new();
+    h.studio.scripts = crate::scripts::Scripts::with_dir(temp_scripts_dir("scripts-cancel"));
+    h.click(W::new("scripts-open"));
+    h.frame();
+    let revision = h.session().doc.revision();
+    h.click(W::new("scripts-run"));
+    assert!(h.studio.scripts.is_running());
+    // Cancel before the next poll so a fast script cannot finish first.
+    h.studio.scripts.cancel();
+    h.frame();
+    if h.studio.scripts.is_running() {
+        assert!(
+            h.ui.widget_rect(W::new("scripts-cancel")).is_some(),
+            "Cancel shows while a script runs"
+        );
+    }
+    wait_for_script(&mut h);
+    let out = h.studio.scripts.last.clone().expect("an outcome");
+    assert!(out.result.is_err(), "a cancelled run reports it");
+    assert_eq!(h.session().doc.revision(), revision);
+}
+
+#[test]
+fn scripts_do_not_run_while_recording() {
+    let mut h = Harness::new();
+    h.studio.scripts = crate::scripts::Scripts::with_dir(temp_scripts_dir("scripts-rec"));
+    h.click(W::new("scripts-open"));
+    h.frame();
+    h.studio.recorder.armed = true;
+    h.studio.session.play();
+    h.frame();
+    h.click(W::new("scripts-run"));
+    assert!(!h.studio.scripts.is_running());
+    let refused = h
+        .studio
+        .scripts
+        .run_selected(&h.studio.session, &h.studio.ws, true);
+    assert!(refused.is_err());
+    h.studio.session.stop();
+}
+
+#[test]
+fn adding_script_files_never_overwrites() {
+    let dir = temp_scripts_dir("scripts-add");
+    let src_dir = temp_scripts_dir("scripts-src");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(&src_dir).unwrap();
+    let mut s = crate::scripts::Scripts::with_dir(dir.clone());
+    let txt = src_dir.join("notes.txt");
+    std::fs::write(&txt, "x").unwrap();
+    assert!(s.add_file(&txt).is_err(), "only .js and .lua");
+    std::fs::write(dir.join("taken.lua"), "-- installed").unwrap();
+    let src = src_dir.join("taken.lua");
+    std::fs::write(&src, "-- new").unwrap();
+    let err = s.add_file(&src).unwrap_err();
+    assert!(err.contains("already installed"), "{err}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("taken.lua")).unwrap(),
+        "-- installed"
+    );
+    // Refresh lists folder files (loaded or not) and ignores other types.
+    std::fs::write(dir.join("readme.md"), "x").unwrap();
+    s.refresh();
+    assert_eq!(s.local.len() + s.broken.len(), 1);
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::remove_dir_all(&src_dir).ok();
+}
+
+#[test]
+fn python_action_shows_interpreter_controls_and_installs_py_files() {
+    use crate::scripts::Pick;
+    let mut h = Harness::new();
+    h.size = vec2(1024.0, 700.0);
+    h.frames(2);
+    let dir = temp_scripts_dir("python-ui");
+    h.studio.scripts = crate::scripts::Scripts::with_dir(dir.clone());
+    h.click(W::new("scripts-open"));
+    h.frame();
+    let index = h
+        .studio
+        .scripts
+        .factory
+        .iter()
+        .position(|s| s.language == peel_extensions::Language::Python)
+        .unwrap();
+    h.click(W::new(("script-factory", index)));
+    h.frame();
+    assert_eq!(h.studio.scripts.selected, Some(Pick::Factory(index)));
+    h.rect(W::new("scripts-python"));
+    h.rect(W::new("scripts-python-system"));
+    h.rect(W::new("scripts-run"));
+    let source_dir = temp_scripts_dir("python-source");
+    std::fs::create_dir_all(&source_dir).unwrap();
+    let source = source_dir.join("summary.py");
+    std::fs::write(&source, "peel.log('installed')").unwrap();
+    h.studio.scripts.add_file(&source).unwrap();
+    assert_eq!(
+        h.studio.scripts.selected_script().unwrap().language,
+        peel_extensions::Language::Python
+    );
+    assert!(!h.studio.scripts.is_running());
+    std::fs::remove_dir_all(dir).ok();
+    std::fs::remove_dir_all(source_dir).ok();
 }

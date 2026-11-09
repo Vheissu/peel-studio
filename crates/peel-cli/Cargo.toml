@@ -18,3 +18,5 @@ peel-session.workspace = true
 peel-project.workspace = true
 peel-media.workspace = true
 peel-devices.workspace = true
+
+peel-extensions.workspace = true

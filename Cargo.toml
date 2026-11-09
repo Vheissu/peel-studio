@@ -26,6 +26,7 @@ peel-midi = { path = "crates/peel-midi" }
 peel-session = { path = "crates/peel-session" }
 peel-ui = { path = "crates/peel-ui" }
 peel-compose = { path = "crates/peel-compose" }
+peel-extensions = { path = "crates/peel-extensions" }
 
 # External crates (pinned minor versions; Cargo.lock pins exact builds)
 serde = { version = "1", features = ["derive", "rc"] }

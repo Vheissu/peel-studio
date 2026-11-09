@@ -19,6 +19,7 @@ pub struct Studio {
     pub welcome: bool,
     pub show_keys: bool,
     pub recorder: crate::recorder::Recorder,
+    pub scripts: crate::scripts::Scripts,
     mcp: Option<peel_mcp::Bridge>,
     recovered: Vec<peel_project::AutosaveEntry>,
     /// `PEEL_PLUGIN` debug insert still waiting for the plugin scan.
@@ -64,12 +65,14 @@ impl Studio {
             welcome: welcome || std::env::var_os("PEEL_WELCOME").is_some(),
             show_keys: std::env::var_os("PEEL_KEYS").is_some(),
             recorder: Default::default(),
+            scripts: Default::default(),
             mcp: None,
             recovered,
             debug_plugin: std::env::var("PEEL_PLUGIN").ok(),
             last_autosave: std::time::Instant::now(),
             autosaved_revision: revision,
         };
+        studio.scripts.python = studio.prefs.python.clone();
         studio.open_view();
         studio.apply_debug_env();
         studio
@@ -327,6 +330,19 @@ impl Studio {
                 self.session.arm_lane(lane, true);
             }
         }
+        if let Ok(language) = std::env::var("PEEL_SCRIPTS") {
+            self.scripts.open_requested = true;
+            // A language name selects that action for screenshots.
+            if language != "1" {
+                self.scripts.ensure_scanned();
+                self.scripts.selected = self
+                    .scripts
+                    .factory
+                    .iter()
+                    .position(|s| s.language.to_string().eq_ignore_ascii_case(&language))
+                    .map(crate::scripts::Pick::Factory);
+            }
+        }
         if std::env::var_os("PEEL_GRAPH").is_some() {
             self.ws.rack_graph = true;
         }
@@ -485,6 +501,9 @@ impl Studio {
         switch(NamedKey::F7, DockTab::PianoRoll, &mut self.ws);
         switch(NamedKey::F9, DockTab::Mixer, &mut self.ws);
         switch(NamedKey::F10, DockTab::Perform, &mut self.ws);
+        if ui.input.take_named(NamedKey::F8) {
+            crate::scripts::toggle(ui, self);
+        }
         if ui.input.take_named(NamedKey::F1) {
             self.show_keys = !self.show_keys;
         }
@@ -807,29 +826,6 @@ impl Studio {
                 ui.request_repaint();
             }
         }
-        if let Some(n) = self.session.notice().cloned() {
-            let c = if n.error { t.record } else { t.text_dim };
-            ui.text(
-                row.cut_left(row.w * 0.6),
-                &n.text,
-                t.caption,
-                c,
-                Align::Start,
-            );
-            ui.request_repaint();
-        } else if !self.session.missing_devices().is_empty() {
-            let msg = format!(
-                "Missing devices: {}",
-                self.session.missing_devices().join(", ")
-            );
-            ui.text(
-                row.cut_left(row.w * 0.6),
-                &msg,
-                t.caption,
-                t.warn,
-                Align::Start,
-            );
-        }
         let gear = ui.icon_button(
             W::new("settings-open"),
             row.cut_right(24.0),
@@ -875,6 +871,33 @@ impl Studio {
             self.show_keys = true;
         }
         row.cut_right(8.0);
+        // Reserved before the notice so a long message never covers it.
+        let w = crate::scripts::button_width(ui);
+        crate::scripts::status_button(ui, row.cut_right(w), self);
+        row.cut_right(8.0);
+        if let Some(n) = self.session.notice().cloned() {
+            let c = if n.error { t.record } else { t.text_dim };
+            ui.text(
+                row.cut_left(row.w * 0.6),
+                &n.text,
+                t.caption,
+                c,
+                Align::Start,
+            );
+            ui.request_repaint();
+        } else if !self.session.missing_devices().is_empty() {
+            let msg = format!(
+                "Missing devices: {}",
+                self.session.missing_devices().join(", ")
+            );
+            ui.text(
+                row.cut_left(row.w * 0.6),
+                &msg,
+                t.caption,
+                t.warn,
+                Align::Start,
+            );
+        }
         // Audio health: a lost or failing device gets a visible restart.
         if !self.session.audio_is_healthy() {
             let r = row.cut_right(118.0);
@@ -1006,6 +1029,7 @@ impl Studio {
         self.session.set_live_target(self.ws.selected_channel);
         self.session.poll_midi();
         self.recorder.frame(&mut self.session);
+        crate::scripts::frame(ui, self);
         if !self.welcome {
             self.shortcuts(ui, win);
         }
@@ -1053,6 +1077,7 @@ impl Studio {
             ui.open_popup(W::new("settings-panel"), Rect::ZERO);
         }
         crate::settings::panel(ui, &mut self.session, &mut self.prefs, self.ws.input_meter);
+        crate::scripts::panel(ui, self);
         if self.welcome {
             self.welcome(ui);
         } else if self.show_keys && crate::keys::overlay(ui) {

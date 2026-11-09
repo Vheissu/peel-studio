@@ -1,0 +1,17 @@
+[package]
+name = "peel-extensions"
+description = "JavaScript and Lua actions for Peel Studio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+peel-document.workspace = true
+peel-session.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rquickjs = "0.14"
+mlua = { version = "0.12", features = ["lua54", "vendored", "serde"] }

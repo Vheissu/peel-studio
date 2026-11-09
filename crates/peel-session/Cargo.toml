@@ -9,6 +9,7 @@ authors.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+serde_json.workspace = true
 peel-time.workspace = true
 peel-document.workspace = true
 peel-dsp.workspace = true

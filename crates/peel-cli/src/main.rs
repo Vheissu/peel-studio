@@ -15,6 +15,7 @@ const USAGE: &str = "usage:
   peel validate <project.peelproj>
   peel render <project.peelproj | --demo> <out.wav|mp3|flac|aiff> [options]
   peel devices
+  peel script <project.peelproj | --demo> <action.js|lua|py> <out.peelproj>
 
 render options:
   --rate <Hz>       Sample rate (default: 48000)
@@ -26,11 +27,16 @@ render options:
   --no-dither      Disable TPDF dither for integer PCM";
 
 fn main() -> ExitCode {
+    if peel_extensions::dispatch_worker() {
+        return std::process::ExitCode::SUCCESS;
+    }
+
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
         Some("info") => info(&args[1..]),
         Some("validate") => check(&args[1..]),
         Some("render") => render(&args[1..]),
+        Some("script") => script(&args[1..]),
         Some("devices") => {
             for d in peel_devices::all() {
                 println!(
@@ -168,6 +174,39 @@ fn render(args: &[String]) -> Result<(), String> {
         settings.render.path.display(),
         started.elapsed().as_secs_f32()
     );
+    Ok(())
+}
+
+/// Uses the same snapshot runner, validation and commit path as the desktop.
+fn script(args: &[String]) -> Result<(), String> {
+    if args.len() != 3 {
+        return Err(USAGE.into());
+    }
+    let project = load(&args[0])?;
+    let context = peel_extensions::ScriptContext {
+        pattern: project.patterns.first().map(|p| p.id),
+        channel: project.channels.first().map(|c| c.id),
+        ..Default::default()
+    };
+    let action = peel_extensions::Script::from_path(std::path::Path::new(&args[1]))?;
+    let mut job =
+        peel_extensions::ScriptJob::start_isolated(action, project.clone(), context, None);
+    let output = loop {
+        if let Some(result) = job.poll() {
+            break result?;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    for line in &output.logs {
+        println!("{line}");
+    }
+    let mut session = peel_session::Session::new_silent(project);
+    if args[0] != "--demo" {
+        session.path = Some(std::fs::canonicalize(&args[0]).map_err(|e| e.to_string())?);
+    }
+    output.apply(&mut session)?;
+    let path = session.save(Some(PathBuf::from(&args[2])))?;
+    println!("Saved {}", path.display());
     Ok(())
 }
 
