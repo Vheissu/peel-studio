@@ -663,6 +663,19 @@ impl Studio {
     fn status_bar(&mut self, ui: &mut Ui, r: Rect) {
         let t = ui.theme.clone();
         let mut row = r.shrink2(12.0, 0.0);
+        if let Some(f) = self.session.render_progress() {
+            let bar = row.cut_left(120.0).shrink2(0.0, 9.0);
+            ui.scene.rect(bar, 3.0, t.control);
+            ui.scene.rect(bar.with_w(bar.w * f), 3.0, t.accent);
+            row.cut_left(8.0);
+            ui.text(
+                row.cut_left(80.0),
+                "Rendering",
+                t.caption,
+                t.text_dim,
+                Align::Start,
+            );
+        }
         if let Some(rec) = self.session.recording_status() {
             let mut cell = row.cut_left(118.0);
             let pulse = 0.6 + 0.4 * (ui.time() as f32 * 4.0).sin().abs();

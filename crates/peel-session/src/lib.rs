@@ -6,6 +6,7 @@
 //! so a fader move never rebuilds the plan.
 
 mod audio;
+mod bounce;
 mod compile;
 mod export;
 mod io;
@@ -75,6 +76,7 @@ pub struct Session {
     metronome: bool,
     samples: SampleLoader,
     plugins: PluginRegistry,
+    bounce: Option<bounce::Bounce>,
     notice: Option<Notice>,
     missing: Vec<String>,
     /// Audio device selection and live MIDI input (see `io.rs`).
@@ -167,6 +169,7 @@ impl Session {
             metronome: false,
             samples: SampleLoader::new(),
             plugins,
+            bounce: None,
             notice: None,
             missing: Vec::new(),
             io,
@@ -192,6 +195,7 @@ impl Session {
             self.synced = None;
         }
         self.plugins.idle();
+        self.poll_bounce();
         self.poll_recording();
         for (asset, result) in self.samples.poll() {
             match result {
@@ -1250,6 +1254,91 @@ mod tests {
             assert!(peak > 0.3 && peak <= 1.0, "{name}: peak {peak}");
             assert!(rms > 0.04, "{name}: rms {rms}");
         }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn rendering_a_clip_to_audio_sounds_the_same() {
+        use peel_document::{ClipContent, Time};
+        let dir = std::env::temp_dir().join(format!("peel-bounce-test-{}", Id::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = Session::new_silent(template::beat_and_melody());
+        s.set_recordings_dir(Some(dir.join("renders")));
+        let export = |s: &mut Session, name: &str| {
+            let out = dir.join(name);
+            let job = s.export(ExportSettings {
+                path: out.clone(),
+                sample_rate: 48_000,
+                bits: 32,
+                tail_seconds: 0.0,
+            });
+            loop {
+                if let Some(r) = job.take_result() {
+                    r.expect("export");
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            peel_media::decode_file(&out).unwrap().left().to_vec()
+        };
+        let before = export(&mut s, "before.wav");
+        let bass = s
+            .project()
+            .arrangement()
+            .clips
+            .iter()
+            .find(|c| c.start == Time::beats(16))
+            .unwrap()
+            .clone();
+        let lanes_before = s.project().arrangement().tracks.len();
+        s.render_clip_to_audio(bass.id).expect("start");
+        let start = Instant::now();
+        while s.render_progress().is_some() {
+            assert!(start.elapsed().as_secs() < 30, "render finished");
+            s.tick();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let arr = s.project().arrangement();
+        assert_eq!(arr.tracks.len(), lanes_before + 1);
+        assert!(
+            arr.clips.iter().find(|c| c.id == bass.id).unwrap().muted,
+            "the pattern clip is kept, muted"
+        );
+        let lane_at = arr.tracks.iter().position(|t| t.id == bass.track).unwrap();
+        let audio = arr
+            .clips
+            .iter()
+            .find(|c| matches!(c.content, ClipContent::Audio { .. }))
+            .expect("audio clip")
+            .clone();
+        assert_eq!(audio.track, arr.tracks[lane_at + 1].id, "on the lane below");
+        assert_eq!(audio.start, bass.start);
+        assert_eq!(s.doc.undo_label(), Some("Render to audio"));
+        // Wait for the new audio to decode, then the song sounds the same.
+        let ClipContent::Audio { asset, .. } = audio.content else {
+            unreachable!()
+        };
+        while s.sample(asset).is_none() {
+            assert!(start.elapsed().as_secs() < 30, "decoded");
+            s.tick();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let after = export(&mut s, "after.wav");
+        let rms = |x: &[f32]| (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt();
+        let beat = 48_000.0 * 60.0 / 118.0;
+        let (a, b) = ((17.0 * beat) as usize, (31.0 * beat) as usize);
+        let (r0, r1) = (rms(&before[a..b]), rms(&after[a..b]));
+        assert!((20.0 * (r1 / r0).log10()).abs() < 0.5, "{r0} vs {r1}");
+        let diff: Vec<f32> = before[a..b]
+            .iter()
+            .zip(&after[a..b])
+            .map(|(x, y)| x - y)
+            .collect();
+        assert!(
+            rms(&diff) < r0 * 0.1,
+            "nearly identical: residue {} of {r0}",
+            rms(&diff)
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

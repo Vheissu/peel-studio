@@ -47,16 +47,16 @@ pub(crate) fn clip_assets(p: &Project) -> Vec<Id> {
 }
 
 /// What a file contains: sample rate, channels, frames and seconds.
-struct FileInfo {
-    sample_rate: u32,
-    channels: u16,
-    frames: u64,
-    seconds: f64,
+pub(crate) struct FileInfo {
+    pub(crate) sample_rate: u32,
+    pub(crate) channels: u16,
+    pub(crate) frames: u64,
+    pub(crate) seconds: f64,
 }
 
 /// Reads a file's header (decoding it only when the container does not state
 /// its length, which some MP3 files do not).
-fn describe(path: &Path) -> Result<FileInfo, String> {
+pub(crate) fn describe(path: &Path) -> Result<FileInfo, String> {
     let info = peel_media::probe(path).map_err(|e| e.to_string())?;
     let rate = f64::from(info.sample_rate.max(1));
     let frames = match (info.frames, info.duration_seconds) {
@@ -76,7 +76,7 @@ fn describe(path: &Path) -> Result<FileInfo, String> {
 
 /// Length in quarter notes of a clip that plays `seconds` of audio from
 /// `start`, rounded up to a sixteenth note.
-fn clip_length(tempo: &TempoMap, start: Time, seconds: f64) -> Time {
+pub(crate) fn clip_length(tempo: &TempoMap, start: Time, seconds: f64) -> Time {
     let from = start.as_f64();
     let end = tempo.seconds_to_beat(tempo.beat_to_seconds(from) + seconds);
     let grid = CLIP_GRID as f64;
@@ -88,7 +88,7 @@ fn clip_length(tempo: &TempoMap, start: Time, seconds: f64) -> Time {
 /// using the track of its existing audio clips; failing that it adopts an
 /// otherwise unused track named like the lane; failing that a new one is
 /// created. A full mixer sends the clip to the master instead.
-fn route_for_lane(
+pub(crate) fn route_for_lane(
     p: &mut Project,
     lane: Id,
     name: &str,

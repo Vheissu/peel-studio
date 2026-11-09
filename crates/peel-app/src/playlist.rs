@@ -1205,6 +1205,7 @@ fn clips(
             MenuItem::new(if c.muted { "Unmute clip" } else { "Mute clip" }),
             MenuItem::Separator,
             MenuItem::new("Delete clip").shortcut("Del"),
+            MenuItem::new("Render to audio").enabled(s.render_progress().is_none()),
         ];
         if let ClipContent::Automation { .. } = c.content {
             let items = [
@@ -1304,6 +1305,11 @@ fn clips(
                     s.doc.edit("Delete clip", |p| {
                         p.arrangement_mut().clips.retain(|x| x.id != cid)
                     });
+                }
+                6 => {
+                    if let Err(e) = s.render_clip_to_audio(c.id) {
+                        s.notify(e, true);
+                    }
                 }
                 _ => {}
             }
