@@ -486,6 +486,7 @@ fn pitch_follows_the_key() {
         "peel.synth.bass",
         "peel.keys.tine",
         "peel.keys.grand",
+        "peel.guitar.electric",
         "peel.sampler",
         "peel.wind.sax",
     ] {
