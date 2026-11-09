@@ -65,6 +65,9 @@ struct Take {
     notes: usize,
     tempo_segments: Vec<peel_document::TempoSegment>,
     awaiting_note: bool,
+    pending_notes: Vec<Note>,
+    pending_expression: Vec<NoteExpression>,
+    pending_points: usize,
 }
 
 #[derive(Default)]
@@ -72,8 +75,6 @@ pub struct Recorder {
     pub armed: bool,
     held: HashMap<(Id, u32), Held>,
     take: Option<Take>,
-    gesture: Option<u64>,
-    takes: u64,
     snapshots: usize,
     warned: bool,
     overflow_warned: bool,
@@ -131,6 +132,9 @@ impl Recorder {
             notes: 0,
             tempo_segments: s.project().tempo.clone(),
             awaiting_note: false,
+            pending_notes: Vec::new(),
+            pending_expression: Vec::new(),
+            pending_points: 0,
         });
         self.overflow_warned = false;
         self.snapshots = 0;
@@ -295,7 +299,8 @@ impl Recorder {
                 .expression
                 .iter()
                 .map(|e| e.pitch.len() + e.pressure.len() + e.timbre.len())
-                .sum::<usize>(),
+                .sum::<usize>()
+                .saturating_add(take.pending_points),
         );
         let mut limit = false;
         while cursor < end - 1e-9 {
@@ -356,27 +361,31 @@ impl Recorder {
                 }
                 previous = value;
             }
-            let count = curve.pitch.len() + curve.pressure.len() + curve.timbre.len();
+            // A plain recorded note remains a plain note: live controllers
+            // still affect it, and neutral performances need no extra data.
+            let neutral = curve.pitch.iter().all(|p| p.value == 0.0)
+                && curve.pressure.iter().all(|p| p.value == 0.0)
+                && curve.timbre.iter().all(|p| p.value == 0.5);
+            let count = if neutral {
+                0
+            } else {
+                curve.pitch.len() + curve.pressure.len() + curve.timbre.len()
+            };
             if count > point_budget {
                 limit = true;
                 break;
             }
             point_budget -= count;
             notes.push(saved);
-            expressions.push(curve);
+            if !neutral {
+                expressions.push(curve);
+            }
+            take.pending_points += count;
             take.notes += 1;
             cursor = stop;
         }
-        if !notes.is_empty() {
-            let gesture = *self.gesture.get_or_insert(0x7ec0_0000 + self.takes);
-            s.doc.edit_gesture(gesture, "Record notes", |p| {
-                if let Some(pattern) = p.pattern_mut(pid) {
-                    pattern.notes.extend(notes);
-                    pattern.expression.extend(expressions);
-                    pattern.sort_notes();
-                }
-            });
-        }
+        take.pending_notes.extend(notes);
+        take.pending_expression.extend(expressions);
         if limit {
             self.overflow(s);
         }
@@ -400,12 +409,52 @@ impl Recorder {
     fn finish(&mut self, s: &mut Session) {
         let at = self.take.as_ref().map_or(0.0, |t| t.clock.cursor);
         self.flush(s, None, at);
-        self.take = None;
+        let take = self.take.take();
         self.held.clear();
         self.snapshots = 0;
-        if self.gesture.take().is_some() {
-            self.takes += 1;
-            s.doc.end_gesture();
+        let Some(mut take) = take.filter(|t| t.project == s.project().id) else {
+            return;
+        };
+        let Some(pattern) = s.project().pattern(take.pattern) else {
+            return;
+        };
+        take.pending_notes
+            .retain(|n| s.project().channel(n.channel).is_some());
+        if take.pending_notes.is_empty() {
+            return;
+        }
+        let ids: std::collections::HashSet<_> = take.pending_notes.iter().map(|n| n.id).collect();
+        let mut budget = 1_000_000usize.saturating_sub(
+            pattern
+                .expression
+                .iter()
+                .map(|e| e.pitch.len() + e.pressure.len() + e.timbre.len())
+                .sum::<usize>(),
+        );
+        let mut omitted = false;
+        take.pending_expression.retain(|e| {
+            if !ids.contains(&e.note) {
+                return false;
+            }
+            let count = e.pitch.len() + e.pressure.len() + e.timbre.len();
+            if count > budget {
+                omitted = true;
+                return false;
+            }
+            budget -= count;
+            true
+        });
+        // One final document edit remains one undo step even when a mapped
+        // controller or another editor changed the document during the take.
+        s.doc.edit("Record notes", |p| {
+            if let Some(pattern) = p.pattern_mut(take.pattern) {
+                pattern.notes.extend(take.pending_notes);
+                pattern.expression.extend(take.pending_expression);
+                pattern.sort_notes();
+            }
+        });
+        if omitted {
+            self.overflow(s);
         }
     }
 

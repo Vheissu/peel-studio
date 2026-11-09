@@ -186,9 +186,10 @@ including the state when the note starts. Sustain extends the recorded
 note until the pedal lifts. A note held across a pattern boundary becomes
 separate notes with the carried expression at the next loop's start.
 
-Stopping or disarming closes held notes. Changing the tempo ends the take
-and disarms recording. One undo removes the take and its
-curves. The Piano Roll's lower lane switches between Velocity, Pitch,
+Stopping or disarming closes held notes and writes the complete take as one
+undoable edit. Changing the tempo ends the take and disarms recording.
+Neutral performances keep plain notes; notes with curves replay their
+recorded performance state independently of live controllers. The Piano Roll's lower lane switches between Velocity, Pitch,
 Pressure and Timbre. Select a note to inspect or edit its control points;
 Clear removes the chosen curve. Values hold until the next point, with the
 instrument's usual smoothing. Curves end at the note's gate; its release
@@ -196,7 +197,9 @@ tail keeps the final recorded state.
 
 Projects containing note expression require the updated project reader.
 Their manifest uses schema 2 so older Peel versions refuse to open or
-overwrite them instead of losing the curves.
+overwrite them instead of losing the curves. Standard MIDI file import and
+export still handle notes rather than these curves; export reports the
+omission. Save a Peel project or export audio to preserve expression.
 
 ## Scripts
 

@@ -216,10 +216,7 @@ fn stopped_and_invalid_expression_never_enter_a_take() {
     r.finish(&mut s);
     let pt = s.project().pattern(pid).unwrap();
     let note = pt.notes_for(ch).next().unwrap();
-    assert_eq!(
-        pt.expression_for(note.id).unwrap().at(Time::new(1, 2)),
-        ExpressionValue::default()
-    );
+    assert!(pt.expression_for(note.id).is_none());
 }
 
 #[test]
@@ -357,4 +354,48 @@ fn a_tempo_edit_finishes_the_take_instead_of_reusing_a_stale_clock() {
             .all(|i| !i.is_error())
     );
     s.stop();
+}
+
+#[test]
+fn a_take_is_one_undo_even_when_a_mapped_control_edits_between_notes() {
+    let (mut s, mut r, pid, ch) = setup();
+    let gain = s.project().channel(ch).unwrap().gain_db;
+    on(&mut s, &mut r, ch, 1, 0.5);
+    expression(&mut s, &mut r, ch, 1, 0.75, 3.0, 0.7);
+    off(&mut s, &mut r, ch, 1, 1.0);
+    assert_eq!(
+        s.project().pattern(pid).unwrap().notes_for(ch).count(),
+        0,
+        "take is buffered until it ends"
+    );
+    s.doc.edit_gesture(123, "Mapped controller", |p| {
+        p.channels.iter_mut().find(|c| c.id == ch).unwrap().gain_db = -12.0
+    });
+    on(&mut s, &mut r, ch, 2, 1.5);
+    expression(&mut s, &mut r, ch, 2, 1.75, -2.0, 0.4);
+    off(&mut s, &mut r, ch, 2, 2.0);
+    r.finish(&mut s);
+    assert_eq!(s.project().pattern(pid).unwrap().notes_for(ch).count(), 2);
+    s.doc.undo();
+    assert_eq!(s.project().pattern(pid).unwrap().notes_for(ch).count(), 0);
+    assert!(s.project().pattern(pid).unwrap().expression.is_empty());
+    assert_eq!(
+        s.project().channel(ch).unwrap().gain_db,
+        -12.0,
+        "undo recording must keep the knob edit"
+    );
+    s.doc.undo();
+    assert_eq!(s.project().channel(ch).unwrap().gain_db, gain);
+}
+
+#[test]
+fn a_neutral_take_keeps_plain_notes_and_legacy_controller_behavior() {
+    let (mut s, mut r, pid, ch) = setup();
+    on(&mut s, &mut r, ch, 1, 1.0);
+    expression(&mut s, &mut r, ch, 1, 1.25, 0.0, 0.0);
+    off(&mut s, &mut r, ch, 1, 2.0);
+    r.finish(&mut s);
+    let pattern = s.project().pattern(pid).unwrap();
+    assert_eq!(pattern.notes_for(ch).count(), 1);
+    assert!(pattern.expression.is_empty());
 }
