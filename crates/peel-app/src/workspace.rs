@@ -92,6 +92,8 @@ pub struct PlaylistView {
     pub snap: Time,
     pub tool: Tool,
     pub selection: HashSet<Id>,
+    /// Copied clips and their lane indices at copy time; separate from note copies.
+    pub clipboard: Vec<(peel_document::Clip, usize)>,
     /// The tempo strip under the ruler is open.
     pub show_tempo: bool,
     /// Frames left in which to fit the whole song into view (set for a
@@ -206,6 +208,7 @@ impl Default for Workspace {
                 snap: Time::beats(1),
                 tool: Tool::Draw,
                 selection: HashSet::new(),
+                clipboard: Vec::new(),
                 show_tempo: false,
                 fit: 8,
             },

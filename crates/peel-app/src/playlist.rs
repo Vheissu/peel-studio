@@ -75,6 +75,8 @@ enum ClipAction {
     Rename,
     Mute,
     Duplicate,
+    Copy,
+    Cut,
     Delete,
     Reverse,
     Render,
@@ -1018,12 +1020,12 @@ fn selected_clips(s: &Session, ws: &Workspace) -> Vec<Clip> {
         .collect()
 }
 
-fn delete_selection(s: &mut Session, ws: &mut Workspace) {
+fn delete_selection(s: &mut Session, ws: &mut Workspace, label: &str) {
     let selected: HashSet<Id> = selected_clips(s, ws).iter().map(|c| c.id).collect();
     if selected.is_empty() {
         return;
     }
-    s.doc.edit("Delete clips", |p| {
+    s.doc.edit(label, |p| {
         p.arrangement_mut()
             .clips
             .retain(|c| !selected.contains(&c.id));
@@ -1034,6 +1036,69 @@ fn delete_selection(s: &mut Session, ws: &mut Workspace) {
         ws.focus = None;
     }
     ws.playlist.selection.clear();
+}
+
+fn copy_selection(s: &Session, ws: &mut Workspace) {
+    let lanes: HashMap<Id, usize> = s
+        .project()
+        .arrangement()
+        .tracks
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (t.id, i))
+        .collect();
+    let copied: Vec<_> = selected_clips(s, ws)
+        .into_iter()
+        .filter_map(|c| lanes.get(&c.track).copied().map(|lane| (c, lane)))
+        .collect();
+    if !copied.is_empty() {
+        ws.playlist.clipboard = copied;
+    }
+}
+
+fn paste_clips(s: &mut Session, ws: &mut Workspace, at: Time, lane: usize) {
+    let copied = &ws.playlist.clipboard;
+    let Some(first) = copied.iter().map(|(c, _)| c.start).min() else {
+        return;
+    };
+    let project = s.project();
+    if copied.iter().any(|(c, _)| match c.content {
+        ClipContent::Pattern { pattern } => project.pattern(pattern).is_none(),
+        ClipContent::Audio { track, .. } => project.mixer.track(track).is_none(),
+        ClipContent::Automation { .. } => false,
+    }) {
+        s.notify("The source of a copied clip was removed", true);
+        return;
+    }
+    let top = copied.iter().map(|(_, lane)| *lane).min().unwrap_or(0);
+    let bottom = copied.iter().map(|(_, lane)| *lane).max().unwrap_or(top);
+    let height = bottom - top + 1;
+    let tracks = &s.project().arrangement().tracks;
+    if height > tracks.len() {
+        s.notify("Not enough lanes to paste these clips", true);
+        return;
+    }
+    // Near the bottom, shift the entire group up rather than collapsing its lanes.
+    let lane = lane.min(tracks.len() - height);
+    let at = at.max(Time::ZERO).floor_to(ws.playlist.snap);
+    let copies: Vec<Clip> = copied
+        .iter()
+        .map(|(c, source_lane)| Clip {
+            id: Id::new(),
+            track: tracks[lane + source_lane - top].id,
+            start: at + (c.start - first),
+            ..c.clone()
+        })
+        .collect();
+    ws.playlist.selection = copies.iter().map(|c| c.id).collect();
+    if let Some(c) = copies
+        .iter()
+        .find(|c| matches!(c.content, ClipContent::Audio { .. }))
+    {
+        ws.focus = Some(Focus::Clip(c.id));
+    }
+    s.doc
+        .edit("Paste clips", |p| p.arrangement_mut().clips.extend(copies));
 }
 
 fn duplicate_selection(s: &mut Session, ws: &mut Workspace) {
@@ -1333,6 +1398,15 @@ fn clips(
 
     // Right click opens the clip menu.
     let menu_id = W::new("pl-clip-menu");
+    let context_target = W::new("pl-context-target");
+    if resp.secondary_clicked
+        && let Some(p) = pointer
+    {
+        *ui.state::<Option<(Time, usize)>>(context_target) = Some((
+            Time::from_f64(v.beat(p.x).max(0.0), 960).floor_to(snap),
+            v.lane_at(p.y).max(0) as usize,
+        ));
+    }
     let mut deleted_point = false;
     if resp.secondary_clicked
         && let Some((c, Part::AutoBody)) = &hit
@@ -1414,6 +1488,14 @@ fn clips(
             ),
             (MenuItem::Separator, ClipAction::None),
             (
+                MenuItem::new("Copy").shortcut(format!("{cmd}+C")),
+                ClipAction::Copy,
+            ),
+            (
+                MenuItem::new("Cut").shortcut(format!("{cmd}+X")),
+                ClipAction::Cut,
+            ),
+            (
                 MenuItem::new(if multiple {
                     "Duplicate clips"
                 } else {
@@ -1494,8 +1576,13 @@ fn clips(
                             }
                         });
                 }
+                ClipAction::Copy => copy_selection(s, ws),
+                ClipAction::Cut => {
+                    copy_selection(s, ws);
+                    delete_selection(s, ws, "Cut clips");
+                }
                 ClipAction::Duplicate => duplicate_selection(s, ws),
-                ClipAction::Delete => delete_selection(s, ws),
+                ClipAction::Delete => delete_selection(s, ws, "Delete clips"),
                 ClipAction::Reverse => {
                     let cid = c.id;
                     s.doc.edit("Reverse clip", |p| {
@@ -1520,6 +1607,50 @@ fn clips(
         }
         if !ui.is_popup_open(menu_id) {
             *ui.state::<Option<Clip>>(menu_id) = None;
+        }
+    }
+    // Empty-grid menu: keep the clicked position while the menu moves the pointer.
+    let canvas_menu = W::new("pl-canvas-menu");
+    if resp.secondary_clicked
+        && hit.is_none()
+        && let Some(p) = pointer
+    {
+        let at = Time::from_f64(v.beat(p.x).max(0.0), 960).floor_to(snap);
+        let lane = (v.lane_at(p.y).max(0) as usize).min(tracks.len().saturating_sub(1));
+        *ui.state::<Option<(Time, usize)>>(canvas_menu) = Some((at, lane));
+        ui.open_popup(canvas_menu, Rect::from_center(p, 1.0, 1.0));
+    }
+    if let Some((at, lane)) = *ui.state::<Option<(Time, usize)>>(canvas_menu) {
+        let pos = ui.popup_rect().map(|r| vec2(r.x, r.y)).unwrap_or_default();
+        let cmd = if cfg!(target_os = "macos") {
+            "Cmd"
+        } else {
+            "Ctrl"
+        };
+        let items = [
+            MenuItem::new("Paste")
+                .shortcut(format!("{cmd}+V"))
+                .enabled(!ws.playlist.clipboard.is_empty()),
+            MenuItem::Separator,
+            MenuItem::new("Select all")
+                .shortcut(format!("{cmd}+A"))
+                .enabled(!s.project().arrangement().clips.is_empty()),
+        ];
+        match ui.menu(canvas_menu, pos, &items) {
+            Some(0) => paste_clips(s, ws, at, lane),
+            Some(2) => {
+                ws.playlist.selection = s
+                    .project()
+                    .arrangement()
+                    .clips
+                    .iter()
+                    .map(|c| c.id)
+                    .collect();
+            }
+            _ => {}
+        }
+        if !ui.is_popup_open(canvas_menu) {
+            *ui.state::<Option<(Time, usize)>>(canvas_menu) = None;
         }
     }
     if let Some(name) = crate::rename::show(ui, W::new("pl-rename-pattern"))
@@ -1798,15 +1929,55 @@ fn clips(
         s.doc.end_gesture();
     }
 
-    // Keyboard: delete selected clips.
-    if !ui.text_focus() && !ws.playlist.selection.is_empty() && ui.pointer_in(lanes) {
-        if ui.input.take_named(peel_ui::NamedKey::Delete)
-            || ui.input.take_named(peel_ui::NamedKey::Backspace)
-        {
-            delete_selection(s, ws);
+    // The pointer or an open arrangement menu chooses the editor. Consume keys
+    // before the piano roll sees them, including commands on an empty selection.
+    let own_menu = ui.is_popup_open(menu_id) || ui.is_popup_open(canvas_menu);
+    if !ui.text_focus() && (own_menu || (!ui.any_popup() && ui.pointer_in(lanes))) {
+        let all = ui.input.take_command("a", false);
+        let copy = ui.input.take_command("c", false);
+        let cut = ui.input.take_command("x", false);
+        let paste = ui.input.take_command("v", false);
+        let duplicate = ui.input.take_command("d", false);
+        let delete = ui.input.take_named(peel_ui::NamedKey::Delete)
+            || ui.input.take_named(peel_ui::NamedKey::Backspace);
+        if all {
+            ws.playlist.selection = s
+                .project()
+                .arrangement()
+                .clips
+                .iter()
+                .map(|c| c.id)
+                .collect();
         }
-        if ui.input.take_command("d", false) {
+        if copy || cut {
+            copy_selection(s, ws);
+        }
+        if cut {
+            delete_selection(s, ws, "Cut clips");
+        }
+        if paste {
+            let target = if own_menu {
+                *ui.state::<Option<(Time, usize)>>(context_target)
+            } else {
+                pointer.map(|p| {
+                    (
+                        Time::from_f64(v.beat(p.x).max(0.0), 960),
+                        v.lane_at(p.y).max(0) as usize,
+                    )
+                })
+            };
+            if let Some((at, lane)) = target {
+                paste_clips(s, ws, at, lane);
+            }
+        }
+        if delete {
+            delete_selection(s, ws, "Delete clips");
+        }
+        if duplicate {
             duplicate_selection(s, ws);
+        }
+        if own_menu && (all || copy || cut || paste || duplicate || delete) {
+            ui.close_popup();
         }
     }
 
