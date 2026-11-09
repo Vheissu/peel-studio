@@ -15,7 +15,7 @@ use crate::workspace::{Focus, Workspace};
 /// inspector lays out three 90 px columns: wide enough for names such as
 /// "Hammer Noise" without truncation. Longer names still fit-and-tooltip.
 pub(crate) const CELL_W: f32 = 76.0;
-pub(crate) const CELL_H: f32 = 66.0;
+pub(crate) const CELL_H: f32 = 54.0;
 
 #[derive(Default)]
 struct WaveCache {
@@ -26,8 +26,8 @@ struct WaveCache {
 /// Draws the Inspector. Returns true when the user asked to hide it.
 pub fn draw(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) -> bool {
     let t = ui.theme.clone();
-    ui.scene.rect(r, t.radius_l, t.panel);
-    let mut body = r.shrink2(12.0, 0.0);
+    ui.scene.rect(r, 0.0, t.panel);
+    let mut body = r.shrink2(10.0, 0.0);
     let focus = match ws.focus {
         Some(Focus::Channel(id)) if s.project().channel(id).is_some() => Some(Focus::Channel(id)),
         Some(Focus::Track(id)) if s.project().mixer.track(id).is_some() => Some(Focus::Track(id)),
@@ -35,10 +35,13 @@ pub fn draw(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) -> bool {
         _ => None,
     };
     // Pane header: what kind of thing is selected, and Hide.
-    let mut head = body.cut_top(t.header_h).shrink2(0.0, 5.0);
+    let head_full = body.cut_top(t.header_h);
+    ui.scene
+        .hline(r.x, r.right(), head_full.bottom() - 0.5, t.line);
+    let mut head = head_full.shrink2(0.0, 5.0);
     let hide = ui.icon_button(
         W::new("inspector-hide"),
-        head.cut_right(28.0),
+        head.cut_right(24.0),
         icons::CARET_DOUBLE_RIGHT,
         false,
         None,
@@ -815,8 +818,8 @@ pub(crate) fn knob_cell(
 ) -> peel_ui::Response {
     let t = ui.theme.clone();
     let mut c = cell;
-    let kr = c.cut_top(44.0);
-    let knob = Rect::from_center(kr.center(), 40.0, 40.0);
+    let kr = c.cut_top(36.0);
+    let knob = Rect::from_center(kr.center(), 32.0, 32.0);
     let resp = ui.knob(id, knob, norm, default, color, bipolar);
     ui.name(&resp, name);
     ui.value_text(&resp, value);

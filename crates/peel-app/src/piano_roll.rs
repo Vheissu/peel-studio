@@ -117,14 +117,13 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
         actions.note_tools = ui.widget_rect(W::new("roll-note-tools"));
     }
 
-    let mut area = r.shrink2(8.0, 0.0);
-    area.cut_bottom(8.0);
+    // The editor runs edge to edge in the dock: keys, canvas and the
+    // velocity lane meet at separators rather than sitting in boxes.
+    let mut area = r;
     let vel_r = area.cut_bottom(VEL_H);
-    area.cut_bottom(4.0);
+    area.cut_bottom(1.0);
     let hbar_row = area.cut_bottom(SCROLLBAR);
-    area.cut_bottom(4.0);
     let vbar_col = area.cut_right(SCROLLBAR);
-    area.cut_right(4.0);
     let mut top = area.cut_top(RULER_H);
     let keys_r = area.cut_left(KEYS_W);
     top.cut_left(KEYS_W);
@@ -614,6 +613,8 @@ fn grid(
         }
         if k % 12 == 0 {
             ui.scene.hline(c.x, c.right(), y + v.row_h, t.grid_bar);
+        } else if v.row_h >= 8.0 {
+            ui.scene.hline(c.x, c.right(), y + v.row_h, t.grid_step);
         }
     }
     let sig = s.project().time_signature;
@@ -760,9 +761,23 @@ fn keyboard(ui: &mut Ui, r: Rect, v: &View, ch: &Channel, s: &mut Session, memo_
         } else {
             t.key_white
         };
+        if black {
+            // The neighbouring white keys continue behind the black one,
+            // so the keyboard reads as one instrument rather than strips.
+            ui.scene.rect(
+                Rect {
+                    x: r.x,
+                    y,
+                    w: r.w - 1.0,
+                    h: v.row_h,
+                },
+                0.0,
+                t.key_white,
+            );
+        }
         ui.scene.rect_ex(
             key_r.shrink2(0.0, 0.5),
-            [0.0, 3.0, 3.0, 0.0],
+            [0.0, 1.5, 1.5, 0.0],
             fill,
             0.0,
             Color::TRANSPARENT,
@@ -776,7 +791,7 @@ fn keyboard(ui: &mut Ui, r: Rect, v: &View, ch: &Channel, s: &mut Session, memo_
                 },
                 &note_name(k as u8),
                 t.caption.size(10.5),
-                Color::hex(0x4A5260),
+                Color::hex(0x4C4F54),
                 Align::End,
             );
         }
@@ -1109,7 +1124,7 @@ fn edit_canvas(
         };
         ui.scene.rect_stroke(
             nr,
-            3.0,
+            1.5,
             fill,
             1.0,
             if sel {
@@ -1123,11 +1138,11 @@ fn edit_canvas(
             Rect {
                 x: nr.x + 2.0,
                 y: nr.y + 2.0,
-                w: 2.0,
+                w: 1.5,
                 h: (nr.h - 4.0).max(1.0),
             },
-            1.0,
-            ink_on(fill).alpha(0.35),
+            0.0,
+            ink_on(fill).alpha(0.3),
         );
         if nr.w > 30.0 && v.row_h >= 13.0 {
             ui.text(
@@ -1168,7 +1183,9 @@ fn velocity_lane(
         w: KEYS_W,
         ..r
     };
-    ui.scene.rect(r, t.radius_s, t.panel_alt);
+    ui.scene.rect(r, 0.0, t.panel_alt);
+    ui.scene.rect(label, 0.0, t.panel);
+    ui.scene.vline(label.right() - 0.5, r.y, r.bottom(), t.line);
     ui.text(
         label.shrink2(8.0, 0.0),
         "Velocity",

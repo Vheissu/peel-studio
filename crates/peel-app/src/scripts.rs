@@ -434,7 +434,7 @@ pub fn column(ui: &mut Ui, r: Rect, studio: &mut Studio) {
         .as_ref()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| peel_extensions::default_python_label().into());
-    ui.scene.rect(r, t.radius_l, t.panel);
+    ui.scene.rect(r, 0.0, t.panel);
     ui.describe_node(PANEL, Semantics::new(Role::Group).label("Scripts").rect(r));
     {
         let mut body = r.shrink2(12.0, 0.0);

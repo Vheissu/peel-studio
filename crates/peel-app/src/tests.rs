@@ -3353,3 +3353,69 @@ fn a_pending_reset_does_not_neutralize_a_new_target() {
     assert!(!h.studio.ws.inst.expr.bend.neutral_due(), "owed reset dropped");
     assert!((h.session().pitch_bend_value() - 0.5).abs() < 1.0e-6);
 }
+
+#[test]
+fn nearby_marker_names_never_overlap() {
+    // Two long names two bars apart in a narrow window, stored out of
+    // position order: each tag must end before the next marker's line.
+    let mut h = Harness::new();
+    h.size = vec2(1200.0, 720.0);
+    let bar = h.session().project().time_signature.bar_length();
+    let late = peel_document::Marker {
+        id: peel_document::Id::new(),
+        position: bar.mul_int(6),
+        name: "Second long section name".into(),
+    };
+    let early = peel_document::Marker {
+        id: peel_document::Id::new(),
+        position: bar.mul_int(4),
+        name: "First long section name".into(),
+    };
+    let same = peel_document::Marker {
+        id: peel_document::Id::new(),
+        position: bar.mul_int(6),
+        name: "Same spot".into(),
+    };
+    let stored = vec![late.clone(), early.clone(), same.clone()];
+    let markers = stored.clone();
+    h.studio
+        .session
+        .doc
+        .edit("Markers", |p| p.arrangement_mut().markers = markers);
+    h.frames(3);
+
+    let a = h.rect(W::new(("marker", early.id)));
+    let b = h.rect(W::new(("marker", late.id)));
+    let c = h.rect(W::new(("marker", same.id)));
+    let natural = h.ui.measure(&early.name, h.ui.theme.caption).x;
+    assert!(a.w < natural, "the first name is cut to fit: {a:?}");
+    assert!(a.right() <= b.x - 2.0, "{a:?} runs into {b:?}");
+    // Of two markers on the same spot, the later stored one gets the room
+    // and the other keeps a flag-sized hit target.
+    assert_eq!(b.x, c.x);
+    assert!(b.w < c.w && b.w > 0.0, "{b:?} vs {c:?}");
+    // Laying out never reorders the document.
+    let ids: Vec<_> = h
+        .session()
+        .project()
+        .arrangement()
+        .markers
+        .iter()
+        .map(|m| m.id)
+        .collect();
+    assert_eq!(ids, stored.iter().map(|m| m.id).collect::<Vec<_>>());
+}
+
+#[test]
+fn marker_tags_stop_before_the_next_marker_and_the_edge() {
+    use crate::playlist::marker_tags;
+    // Unsorted input: widths follow position order, not input order.
+    let tags = marker_tags(&[300.0, 100.0, 140.0], &[200.0, 200.0, 200.0], 400.0);
+    assert!(100.0 + tags[1].0 <= 140.0, "{tags:?}");
+    assert!(tags[1].1, "40 px is room for a name: {tags:?}");
+    assert!(140.0 + tags[2].0 <= 300.0, "{tags:?}");
+    assert!(300.0 + tags[0].0 <= 400.0, "{tags:?}");
+    // Too close for a name: a flag only.
+    let tags = marker_tags(&[100.0, 110.0], &[80.0, 80.0], 400.0);
+    assert!(!tags[0].1 && 100.0 + tags[0].0 <= 110.0, "{tags:?}");
+}

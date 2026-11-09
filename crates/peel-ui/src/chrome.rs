@@ -195,7 +195,7 @@ impl Ui {
         } else {
             t.text_faint.mix(t.text, hot * 0.7)
         };
-        self.icon(r, icon, 18.0, color);
+        self.icon(r, icon, 17.0, color);
         if resp.hovered {
             self.set_cursor(CursorIcon::Pointer);
         }

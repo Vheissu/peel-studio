@@ -154,6 +154,8 @@ struct ToggleSeen(bool);
 
 /// Keyboard step of a splitter, in logical pixels.
 const SPLITTER_STEP: f32 = 16.0;
+/// Pointer grab width of a splitter, however thin its seam is drawn.
+const SPLITTER_HIT: f32 = 8.0;
 
 /// Icon fonts live in the Unicode private use area.
 fn is_icon_glyph(label: &str) -> bool {
@@ -324,7 +326,7 @@ impl Ui {
         });
         let t = self.theme.clone();
         let c = r.center();
-        let rad = (r.w.min(r.h) * 0.5 - 1.0).clamp(3.0, 6.0);
+        let rad = (r.w.min(r.h) * 0.5 - 1.0).clamp(3.0, 5.0);
         let k = self.animate_bool(id.with("led"), on);
         // No halo: lit LEDs are a flat, slightly muted dot.
         let fill = t.control_hover.mix(color, k * 0.82);
@@ -494,11 +496,13 @@ impl Ui {
         let t = self.theme.clone();
         let size = r.w.min(r.h);
         let c = r.center();
-        let ring = size * 0.5 - 2.5;
-        let thick = (size * 0.075).clamp(2.0, 3.5);
+        // A thin value arc around a flat cap with a pointer: the arc and
+        // pointer carry the value, the cap only gives it something to sit on.
+        let thick = (size * 0.07).clamp(1.5, 2.5);
+        let ring = size * 0.5 - thick * 0.5 - 0.5;
         let h = self.animate_bool(id.with("hot"), hot);
         self.scene
-            .arc(c, ring, thick, KNOB_START, KNOB_SWEEP, t.control_hover);
+            .arc(c, ring, thick, KNOB_START, KNOB_SWEEP, t.line_strong);
         let v = norm.clamp(0.0, 1.0);
         let col = color.lighten(h * 0.12);
         if bipolar {
@@ -510,18 +514,17 @@ impl Ui {
             self.scene
                 .arc(c, ring, thick, KNOB_START, KNOB_SWEEP * v, col);
         }
-        let body = ring - thick - 1.5;
-        self.scene.circle_stroke(
-            c,
-            body,
-            t.control.mix(t.control_hover, h * 0.6),
-            1.0,
-            t.line_strong,
-        );
+        let body = ring - thick * 0.5 - 1.5;
+        self.scene
+            .circle(c, body, t.control.mix(t.control_hover, h * 0.7));
         let a = KNOB_START + KNOB_SWEEP * v;
         let dir = vec2(a.sin(), -a.cos());
-        self.scene
-            .line(c + dir * (body * 0.3), c + dir * (body - 2.0), 2.0, t.text);
+        self.scene.line(
+            c + dir * (body * 0.2),
+            c + dir * (body - 0.5),
+            (size * 0.06).clamp(1.5, 2.0),
+            t.text,
+        );
     }
 
     /// Vertical fader. `norm` is the fader position (0..=1).
@@ -539,7 +542,7 @@ impl Ui {
         if adjust_norm(&adj, norm, default) {
             resp.changed = true;
         }
-        let cap_h = 22.0;
+        let cap_h = 16.0;
         let travel = (r.h - cap_h).max(1.0);
         if resp.double_clicked {
             *norm = default;
@@ -560,30 +563,20 @@ impl Ui {
         let t = self.theme.clone();
         let cx = r.center().x;
         let track = Rect {
-            x: cx - 2.0,
+            x: cx - 1.5,
             y: r.y + cap_h * 0.5,
-            w: 4.0,
+            w: 3.0,
             h: travel,
         };
-        self.scene.rect(track, 2.0, t.bg);
-        // Unity and tick marks.
+        self.scene.rect(track, 0.0, t.bg);
+        // Scale ticks on the left only, longer at the ends and the middle.
         for i in 0..=10 {
             let y = track.y + travel * i as f32 / 10.0;
-            let w = if i % 5 == 0 { 7.0 } else { 4.0 };
+            let w = if i % 5 == 0 { 6.0 } else { 3.0 };
             self.scene.rect(
                 Rect {
-                    x: cx + 6.0,
-                    y: y - 0.5,
-                    w,
-                    h: 1.0,
-                },
-                0.0,
-                t.line_strong,
-            );
-            self.scene.rect(
-                Rect {
-                    x: cx - 6.0 - w,
-                    y: y - 0.5,
+                    x: cx - 9.0 - w,
+                    y: y.round() - 0.5,
                     w,
                     h: 1.0,
                 },
@@ -599,31 +592,32 @@ impl Ui {
             w: track.w,
             h: track.bottom() - (cap_y + cap_h * 0.5),
         };
-        self.scene.rect(fill, 2.0, color.with_alpha(0.75));
+        self.scene.rect(fill, 0.0, color.with_alpha(0.8));
         let hot = self.animate_bool(id.with("hot"), resp.hovered || resp.active);
         let cap = Rect {
-            x: cx - 13.0,
+            x: cx - 11.0,
             y: cap_y,
-            w: 26.0,
+            w: 22.0,
             h: cap_h,
         };
-        self.scene
-            .shadow(cap.translate(vec2(0.0, 2.0)), 4.0, 3.0, t.shadow.alpha(0.7));
-        self.scene.rect_gradient_v(
+        // Flat cap with a dark rim so it reads over the fill; the index
+        // line marks the exact position.
+        self.scene.rect_stroke(
             cap,
-            4.0,
-            t.control_active.lighten(0.08 + hot * 0.06),
-            t.control.darken(0.05),
+            t.radius_s,
+            t.control_active.lighten(hot * 0.08),
+            1.0,
+            t.bg,
         );
         self.scene.rect(
             Rect {
-                x: cap.x + 5.0,
+                x: cap.x + 3.0,
                 y: cap.center().y - 1.0,
-                w: cap.w - 10.0,
+                w: cap.w - 6.0,
                 h: 2.0,
             },
-            1.0,
-            t.text.alpha(0.85),
+            0.0,
+            t.text,
         );
         self.focus_ring(id, r, t.radius_m);
         self.describe_norm(id, r, *norm, Some(true));
@@ -1069,9 +1063,9 @@ impl Ui {
         if self.accessibility_active() {
             self.describe_meter(id, r, peaks.0.max(peaks.1), now);
         }
-        let bars = r.columns(2, 2.0);
+        let bars = r.columns(2, 1.0);
         for (i, b) in bars.iter().enumerate() {
-            self.scene.rect(*b, 1.5, t.bg);
+            self.scene.rect(*b, 0.0, t.bg);
             let h = b.h * level[i];
             if h > 0.5 {
                 let fill = Rect {
@@ -1088,9 +1082,9 @@ impl Ui {
                     ..*b
                 };
                 self.scene.push_clip(fill);
-                self.scene.rect(seg(0.0, amber_from), 1.5, t.play);
+                self.scene.rect(seg(0.0, amber_from), 0.0, t.play);
                 self.scene.rect(seg(amber_from, red_from), 0.0, t.accent);
-                self.scene.rect(seg(red_from, 1.0), 1.5, t.record);
+                self.scene.rect(seg(red_from, 1.0), 0.0, t.record);
                 self.scene.pop_clip();
             }
             if hold[i] > 0.01 {
@@ -1195,7 +1189,7 @@ impl Ui {
                 resp.hovered || resp.active || self.pointer_in(view),
             );
             self.scene
-                .rect(thumb, 2.0, t.text_faint.alpha(0.25 + hot * 0.35));
+                .rect(thumb, 1.0, t.text_faint.alpha(0.25 + hot * 0.35));
         }
         if max.x > 0.0 {
             let track = Rect {
@@ -1221,7 +1215,7 @@ impl Ui {
                 resp.hovered || resp.active || self.pointer_in(view),
             );
             self.scene
-                .rect(thumb, 2.0, t.text_faint.alpha(0.25 + hot * 0.35));
+                .rect(thumb, 1.0, t.text_faint.alpha(0.25 + hot * 0.35));
         }
     }
 
@@ -1241,8 +1235,7 @@ impl Ui {
         let t = self.theme.clone();
         let len = if horizontal { track.w } else { track.h };
         let max = (content - view).max(0.0);
-        self.scene
-            .rect(track, track.h.min(track.w) * 0.5, t.panel_alt);
+        self.scene.rect(track, 0.0, t.well);
         if max <= 0.0 || len <= 0.0 {
             return false;
         }
@@ -1289,7 +1282,7 @@ impl Ui {
         let hot = self.animate_bool(id.with("hot"), resp.hovered || resp.active);
         let r = thumb(*offset);
         self.scene
-            .rect(r, r.h.min(r.w) * 0.5, t.text_faint.alpha(0.35 + hot * 0.4));
+            .rect(r.shrink(1.0), 1.0, t.text_faint.alpha(0.35 + hot * 0.4));
         (*offset - before).abs() > f32::EPSILON
     }
 
@@ -1318,7 +1311,15 @@ impl Ui {
 
     /// A draggable divider. Returns the pointer delta along its axis.
     pub fn splitter(&mut self, id: Id, r: Rect, vertical_bar: bool) -> f32 {
-        let resp = self.interact(id, r);
+        // The seam may be only a couple of pixels wide; the grab zone
+        // reaches into the pane edges so it stays easy to hit.
+        let reach = ((SPLITTER_HIT - if vertical_bar { r.w } else { r.h }) * 0.5).max(0.0);
+        let hit = if vertical_bar {
+            r.shrink2(-reach, 0.0)
+        } else {
+            r.shrink2(0.0, -reach)
+        };
+        let resp = self.interact(id, hit);
         self.focusable(id, r, FocusKind::Spin);
         self.a11y_node(id, r, 0, || {
             Semantics::new(Role::Splitter).vertical(vertical_bar)
@@ -1381,7 +1382,7 @@ impl Ui {
         }
         let t = self.theme.clone();
         let style = t.body;
-        let row_h = 28.0;
+        let row_h = 26.0;
         let mut w: f32 = 160.0;
         let mut h = 8.0;
         for item in items {

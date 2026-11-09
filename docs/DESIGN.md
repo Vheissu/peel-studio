@@ -1,64 +1,175 @@
+---
+name: Peel Studio
+description: Pattern-and-playlist DAW. Source of truth is Theme::dark() in crates/peel-ui/src/theme.rs.
+colors:
+  bg: "#0F1011"
+  panel: "#1C1E21"
+  panel-alt: "#23262A"
+  raised: "#2A2D32"
+  control: "#31353B"
+  control-hover: "#3B4047"
+  control-active: "#464C54"
+  line: "#2B2E33"
+  line-strong: "#3A3E44"
+  well: "#151719"
+  text: "#EEEFF0"
+  text-dim: "#ADB1B7"
+  text-faint: "#8C9199"
+  text-on-accent: "#1E1406"
+  accent: "#F0A443"
+  focus: "#6EC4E6"
+  record: "#EE5F5B"
+  play: "#9FD65B"
+  warn: "#E8C45C"
+  shadow: "rgba(0, 0, 0, 0.5)"
+  grid-bar: "rgba(255, 255, 255, 0.12)"
+  grid-beat: "rgba(255, 255, 255, 0.06)"
+  grid-step: "rgba(255, 255, 255, 0.028)"
+  key-white: "#D6D8DB"
+  key-black: "#26282C"
+typography:
+  caption:
+    fontFamily: "Barlow Semi Condensed"
+    fontSize: "11.5px"
+    fontWeight: 500
+  body:
+    fontFamily: "Barlow Semi Condensed"
+    fontSize: "13px"
+    fontWeight: 500
+  label:
+    fontFamily: "Barlow Semi Condensed"
+    fontSize: "13px"
+    fontWeight: 600
+  heading:
+    fontFamily: "Barlow Semi Condensed"
+    fontSize: "14px"
+    fontWeight: 600
+  readout:
+    fontFamily: "Barlow Semi Condensed"
+    fontSize: "19px"
+    fontWeight: 600
+    fontFeature: "tnum"
+  readout-small:
+    fontFamily: "Barlow Semi Condensed"
+    fontSize: "12px"
+    fontWeight: 500
+    fontFeature: "tnum"
+rounded:
+  s: "2px"
+  m: "3px"
+  l: "3px"
+spacing:
+  unit: "4px"
+  seam: "2px"
+  control-h: "24px"
+  control-h-compact: "20px"
+  rail-w: "36px"
+  header-h: "32px"
+  top-bar-h: "40px"
+  status-h: "24px"
+components:
+  button-primary:
+    backgroundColor: "{colors.accent}"
+    textColor: "{colors.text-on-accent}"
+    typography: "{typography.label}"
+    rounded: "{rounded.m}"
+    height: "{spacing.control-h}"
+  button-secondary:
+    backgroundColor: "{colors.control}"
+    textColor: "{colors.text}"
+    typography: "{typography.label}"
+    rounded: "{rounded.m}"
+    height: "{spacing.control-h}"
+  button-secondary-hover:
+    backgroundColor: "{colors.control-hover}"
+  button-secondary-active:
+    backgroundColor: "{colors.control-active}"
+  text-field:
+    backgroundColor: "{colors.bg}"
+    textColor: "{colors.text}"
+    typography: "{typography.body}"
+    rounded: "{rounded.m}"
+    padding: "0 8px"
+    height: "{spacing.control-h}"
+---
+
 # Design
+
+The frontmatter is normative and mirrors `Theme::dark()`. Change the theme
+first, then this file.
 
 ## Reference
 
-An analog mixing console at night. Graphite panels, a colored cap on every
-channel, amber VU backlight, a coral tally light when recording, and crisp
-white legends. Peel Studio borrows the console's logic rather than its
-skeuomorphism: color identifies a channel everywhere it appears, and the
-interface stays dark and quiet so notes, waveforms and the playhead are the
-brightest things on screen.
+A pattern-and-playlist DAW workspace in the FL Studio mould: compact
+toolbars, continuous editing surfaces and color reserved for the music.
+Peel Studio borrows the hierarchy, not the assets or the gloss. The chrome
+is neutral graphite and stays quiet. Clips, notes, lit steps, waveforms
+and the playhead are the brightest things on screen, and a channel's color
+identifies it everywhere it appears.
 
 ## Color
 
 | Token | Value | Use |
 | --- | --- | --- |
-| `bg` | `#14171D` | Window background and gutters between panes |
-| `panel` | `#1C2129` | Panes (browser, playlist, dock, inspector) |
-| `panel_alt` | `#20262F` | Editor canvases inside a pane |
-| `raised` | `#252D38` | Selected rows, active tabs, step cells |
-| `control` | `#2B3441` | Buttons and knob bodies |
-| `well` | `#171B22` | Recessed tray behind a group of quiet controls |
-| `text` | `#F1F4F8` | Primary text |
-| `text_dim` | `#ACB7C7` | Secondary text |
-| `text_faint` | `#7D8899` | Labels and hints |
-| `accent` | `#F2B66D` | Primary action, playhead, tempo (VU backlight amber) |
-| `play` | `#86D49E` | Play state, signal present, meters below -6 dB |
-| `record` | `#F07880` | Recording and clipping |
-| `focus` | `#60D6E8` | Keyboard focus and selection outlines only, never text |
+| `bg` | `#0F1011` | Seams between panes, rails, status bar |
+| `panel` | `#1C1E21` | Panes and the top bar |
+| `panel_alt` | `#23262A` | Editor canvases, mixer strips |
+| `raised` | `#2A2D32` | Selected rows, hovered lane headers |
+| `control` | `#31353B` | Buttons, channel buttons, knob caps, step cells |
+| `well` | `#151719` | Recessed trays: transport groups, insert slots, scrollbar tracks |
+| `text` | `#EEEFF0` | Primary text |
+| `text_dim` | `#ADB1B7` | Secondary text |
+| `text_faint` | `#8C9199` | Labels and hints |
+| `accent` | `#F0A443` | Primary action, playhead, tempo |
+| `play` | `#9FD65B` | Play state, signal present, meters below -3 dB (amber above, coral at clip) |
+| `record` | `#EE5F5B` | Recording and clipping |
+| `focus` | `#6EC4E6` | Keyboard focus and drop targets only, never text |
 
-Channel colors come from a 12-entry palette modeled on console knob caps
-and patch cables (`peel_document::PALETTE`). A channel's color carries into
-its rack button, piano roll notes, mixer cap and playlist clips.
+Channel colors come from a 12-entry palette (`peel_document::PALETTE`).
+A channel's color carries into its rack button, piano roll notes, mixer
+cap and playlist clips. Chrome never borrows it.
 
-Hierarchy comes from value steps between surfaces. There are no decorative
-gradients, glows or borders; shadows appear only under things that float
-(menus, tooltips, drag previews, fader caps).
+There are no decorative gradients or glows. Shadows appear only under
+things that float above the workspace: menus, tooltips, sheets and drag
+previews.
 
 ## Type
 
 Barlow Semi Condensed (SIL OFL), a low-contrast grotesk drawn from
-California highway signage. Signage type is built to be read at a glance,
-which is what a musician needs from across a desk, and the semi-condensed
-width fits names into narrow mixer strips. One family carries every role
-through size and weight. Readouts (position, tempo, levels) use its
-tabular figures so numbers do not jitter while they change.
+California highway signage. It reads at a glance, and the semi-condensed
+width fits names into narrow mixer strips and rack buttons. One family
+carries every role through size and weight. Readouts (position, tempo,
+levels) use its tabular figures so numbers do not jitter while they change.
 
 | Role | Size | Weight |
 | --- | --- | --- |
 | Caption | 11.5 | Medium |
 | Body | 13 | Medium |
 | Label | 13 | SemiBold |
-| Heading | 15 | SemiBold |
-| Readout | 18 to 20 | SemiBold, tabular |
+| Heading | 14 | SemiBold |
+| Readout | 19 | SemiBold, tabular |
+| Small readout | 12 | Medium, tabular |
+
+Pane titles use Label, not Heading: they name the pane and get out of the
+way.
 
 ## Shape
 
-4 px base unit; groups of 8, 12, 16 and 24. Corner radius 4 px for small
-controls, 6 px for buttons and rows, 8 px for panes. Panes sit on the
-background with a 6 px gutter. Nothing is nested more than one surface
-deep. Pane headers are 38 px, rails 40 px wide, the top bar 44 px and the
-status bar 24 px.
+4 px base unit. Corner radius 2 px for small controls, step cells, clips
+and insert slots, 3 px for buttons, menus and sheets. Panes, editor
+canvases and mixer strips are square.
+
+Panes are not cards. They meet at a 2 px `bg` seam that doubles as the
+splitter, and a splitter's grab zone is 8 px wide whatever its seam. The
+splitters are handled after the panes draw, so the seam wins over a pane
+edge that reaches into it. Inside a pane, a 1 px `line` separates the
+header from the body. Editors run edge to edge: the playlist's lane
+headers, ruler and canvas meet at separators, as do the piano roll's keys,
+canvas and velocity lane. Nothing is nested more than one surface deep.
+
+Pane headers are 32 px, rails 36 px wide, the top bar 40 px and the
+status bar 24 px. Rack rows are 26 px with 2 px between them; browser rows
+are 24 px.
 
 ## Layout
 
@@ -75,7 +186,7 @@ status:   notices                                  device · MIDI · settings
   Inspector and Scripts (never both) and holds the usage-hints toggle
   and keyboard shortcuts. Rails sit on `bg`, so they read as navigation;
   the selected entry gets a 2 px accent bar on the edge facing its pane.
-- The dock collapses to its 38 px tab header, so every editor stays one
+- The dock collapses to its 32 px tab header, so every editor stays one
   click away. Its tabs keep their labels while the editor's tools fit
   beside them, otherwise all four become icons together.
 - The pattern picker sits in the dock header beside the Channels and
@@ -108,14 +219,20 @@ Related quiet controls share a `well` with 1 px `line_strong` dividers
 between groups (transport, time, editing tools, pattern length). A tool
 that is one of a set (Draw, Select, Erase) shows the selection the way
 the segmented control does. Tabs are text with a 2 px accent underline.
-Property rows put a 72 px caption label left of the value. Inspector knob cells
-are at least 76 px and stretch to fill the row, so a default inspector
-shows three columns with whole parameter names; a name that still does
-not fit is cut and shown in full in the knob's tooltip. When a toolbar runs
-short, names go before controls: the pattern picker shrinks to its swatch
-and the piano roll's channel to its color, both keeping the name in their
-tooltip and accessible label. LEDs are flat
-dots without a halo.
+Property rows put a 72 px caption label left of the value.
+
+Knobs are a thin value arc around a flat cap with a pointer, and no rim.
+The arc carries the value in the control's color, and bipolar knobs fill
+from the top. Sizes: 22 px in the rack, 28 px for mixer pan, 32 px in the
+inspector. Inspector knob cells are at least 76 px and stretch to fill the
+row, so a default inspector shows three columns with whole parameter names. A name
+that still does not fit is cut and shown in full in the knob's tooltip.
+Faders are a 3 px track filled in the track's color, ticks on one side
+and a flat cap with an index line. LEDs are flat dots without a halo.
+
+When a toolbar runs short, names go before controls: the pattern picker
+shrinks to its swatch and the piano roll's channel to its color, both
+keeping the name in their tooltip and accessible label.
 
 Wide device panels flow parameter groups left to right in descriptor order,
 with 16 px gaps, then wrap onto another line. Cells may shrink to 68 px in
@@ -127,9 +244,20 @@ through the factory presets, with each load as one undo step. Changed
 values show Edited and a Revert button; narrow panels put “edited” in the
 preset name and let the preset menu reload it.
 
+## Step grid
+
+Each step is a 2 px-radius cell. Beats alternate between a darker and a
+lighter neutral so a bar reads as four groups, with a wider gap between
+beats than between steps. A lit step takes the channel color, mixed toward
+the cell value as velocity drops. The playing step brightens. Only the
+selected channel's row gets a band, edge to edge; other rows have no fill
+of their own.
+
 ## Mixer
 
-Strips scroll sideways with the master pinned on the right. Three sizes
+Strips sit side by side with a 1 px seam and the channel color across the
+top edge. Insert slots are recessed into a `well`. Strips scroll sideways
+with the master pinned on the right. Three sizes
 in the dock header (Compact 64 px, Expanded 92, Full 124) decide which
 rows a strip has; the dock height decides how many insert and send rows
 fit, so the fader keeps at least about 96 px. When it cannot, rows go in a

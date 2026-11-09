@@ -95,16 +95,13 @@ impl View {
 
 pub fn draw(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) {
     let t = ui.theme.clone();
-    ui.scene.rect(r, t.radius_l, t.panel);
+    ui.scene.rect(r, 0.0, t.panel);
     let mut body = r;
     let head = body.cut_top(ui.theme.header_h);
     header(ui, head, s, ws);
-    body = body.shrink2(8.0, 0.0);
-    body.cut_bottom(6.0);
+    ui.scene.hline(r.x, r.right(), head.bottom() - 0.5, t.line);
     let hbar_row = body.cut_bottom(SCROLLBAR);
-    body.cut_bottom(4.0);
     let vbar_col = body.cut_right(SCROLLBAR);
-    body.cut_right(4.0);
 
     let arr = s.project().arrangement().clone();
     let ruler_h = if arr.markers.is_empty() {
@@ -337,7 +334,7 @@ pub fn draw(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) {
 
 fn header(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) {
     let t = ui.theme.clone();
-    let mut row = r.shrink2(10.0, 6.0);
+    let mut row = r.shrink2(8.0, 4.0);
     // Arrangement picker (the playlist's title).
     let arr_name = s.project().arrangement().name.clone();
     let title_w = ui.measure(&arr_name, t.label).x.min(150.0) + 58.0;
@@ -634,6 +631,34 @@ pub fn add_marker(s: &mut Session, at: Time) -> Id {
     id
 }
 
+/// Space kept between a marker's tag and the next marker's line.
+const MARKER_GAP: f32 = 4.0;
+/// A tag narrower than this shows only its flag; the name is in the tooltip.
+const MARKER_MIN_LABEL: f32 = 28.0;
+/// Width of a flag-only tag, which is still a hit target.
+const MARKER_FLAG_W: f32 = 9.0;
+
+/// Tag widths for markers at screen `xs` with `natural` label widths, in
+/// input order. Each tag ends before the next marker to its right (by
+/// position, whatever the input order) and before `right`. Of markers at
+/// the same spot, the last one gets the room and the others show only a
+/// flag. The bool is whether the tag has room for its name.
+pub(crate) fn marker_tags(xs: &[f32], natural: &[f32], right: f32) -> Vec<(f32, bool)> {
+    let mut order: Vec<usize> = (0..xs.len()).collect();
+    order.sort_by(|&a, &b| xs[a].total_cmp(&xs[b]));
+    let mut out = vec![(MARKER_FLAG_W, false); xs.len()];
+    for (k, &i) in order.iter().enumerate() {
+        let limit = order
+            .get(k + 1)
+            .map_or(right, |&n| (xs[n] - MARKER_GAP).min(right));
+        let w = natural[i].min(limit - xs[i]);
+        if w >= MARKER_MIN_LABEL {
+            out[i] = (w, true);
+        }
+    }
+    out
+}
+
 /// Marker tags in the ruler's lower row: click to jump, drag to move,
 /// right-click or double-click to rename, right-click to delete.
 fn markers(ui: &mut Ui, r: Rect, v: &View, s: &mut Session) {
@@ -647,11 +672,15 @@ fn markers(ui: &mut Ui, r: Rect, v: &View, s: &mut Session) {
         h: MARKER_H - 2.0,
         ..r
     };
+    let xs: Vec<f32> = list.iter().map(|m| v.x(m.position.as_f64())).collect();
+    let natural: Vec<f32> = list
+        .iter()
+        .map(|m| ui.measure(&m.name, t.caption).x + 14.0)
+        .collect();
+    let layout = marker_tags(&xs, &natural, r.right());
     ui.scene.push_clip(r);
     let mut rects = Vec::new();
-    for m in &list {
-        let x = v.x(m.position.as_f64());
-        let w = ui.measure(&m.name, t.caption).x + 14.0;
+    for (m, (&x, &(w, labelled))) in list.iter().zip(xs.iter().zip(&layout)) {
         let tag = Rect { x, w, ..row };
         rects.push(tag);
         if tag.right() < r.x || tag.x > r.right() {
@@ -659,22 +688,31 @@ fn markers(ui: &mut Ui, r: Rect, v: &View, s: &mut Session) {
         }
         ui.scene
             .vline(x, r.y + 12.0, row.bottom(), t.text.alpha(0.7));
-        ui.scene.rect(tag, 3.0, t.control);
-        ui.scene.rect(Rect { w: 3.0, ..tag }, 1.5, t.text_dim);
-        ui.text(
-            Rect {
-                x: tag.x + 8.0,
-                w: tag.w - 8.0,
+        ui.scene.rect(tag, t.radius_s, t.control);
+        ui.scene.rect(Rect { w: 3.0, ..tag }, 0.0, t.text_dim);
+        if labelled {
+            // Scrolled partly off the left edge, the name stays readable
+            // in the part of the tag still showing.
+            let lx = (tag.x + 8.0).max(r.x + 4.0);
+            let label = Rect {
+                x: lx,
+                w: tag.right() - lx - 4.0,
                 ..tag
-            },
-            &m.name,
-            t.caption,
-            t.text,
-            Align::Start,
-        );
+            };
+            if label.w > 0.0 {
+                let name = ui.fit_text(&m.name, t.caption, label.w);
+                ui.with_clip(label, |ui| {
+                    ui.text(label, &name, t.caption, t.text, Align::Start)
+                });
+            }
+        }
     }
     ui.scene.pop_clip();
-    for (m, tag) in list.iter().zip(rects) {
+    // Flag-only tags register last, so a flag sharing a spot with a
+    // labelled tag stays reachable on top of it.
+    let mut order: Vec<usize> = (0..list.len()).collect();
+    order.sort_by_key(|&i| !layout[i].1);
+    for (m, tag) in order.into_iter().map(|i| (&list[i], rects[i])) {
         let visible = Rect {
             x: tag.x.max(r.x),
             w: (tag.right().min(r.right()) - tag.x.max(r.x)).max(0.0),
@@ -686,14 +724,17 @@ fn markers(ui: &mut Ui, r: Rect, v: &View, s: &mut Session) {
         let id = W::new(("marker", m.id));
         let resp = ui.interact_button(id, visible, &m.name);
         if resp.hovered || resp.active {
-            ui.scene.outline(visible, 3.0, 1.0, t.text_dim);
+            ui.scene.outline(visible, t.radius_s, 1.0, t.text_dim);
             ui.set_cursor(if resp.dragging {
                 CursorIcon::Grabbing
             } else {
                 CursorIcon::Pointer
             });
         }
-        ui.tooltip(&resp, "Click to jump. Drag to move.");
+        ui.tooltip(
+            &resp,
+            &format!("{}  ·  click to jump, drag to move", m.name),
+        );
         if resp.dragging
             && ui.drag_distance() > 3.0
             && let Some(p) = ui.pointer()
@@ -756,18 +797,25 @@ fn bar_time(s: &Session) -> Time {
 fn track_heads(ui: &mut Ui, r: Rect, v: &View, tracks: &[Track], s: &mut Session) {
     let t = ui.theme.clone();
     ui.scene.push_clip(r);
+    ui.scene
+        .vline(r.right() - 0.5, r.y, r.bottom(), t.line_strong);
     for (i, tr) in tracks.iter().enumerate() {
         let y = v.lane_y(i);
+        // One continuous header column: lanes are divided by the same
+        // separator the canvas uses, not boxed one by one.
         let row = Rect {
             x: r.x,
-            y: y + 2.0,
-            w: r.w - 6.0,
-            h: v.lane_h - 4.0,
+            y,
+            w: r.w - 1.0,
+            h: v.lane_h,
         };
         if row.bottom() < r.y || row.y > r.bottom() {
             continue;
         }
-        ui.scene.rect(row, t.radius_m, t.raised.alpha(0.55));
+        if ui.pointer_in(row) {
+            ui.scene.rect(row, 0.0, t.raised.alpha(0.5));
+        }
+        ui.scene.hline(row.x, r.right(), row.bottom(), t.line);
         let stripe = tr.color.map(col).unwrap_or_else(|| {
             let first = s
                 .project()
@@ -783,14 +831,16 @@ fn track_heads(ui: &mut Ui, r: Rect, v: &View, tracks: &[Track], s: &mut Session
                 });
             first.unwrap_or(t.text_faint)
         });
-        ui.scene.rect_ex(
-            Rect { w: 3.0, ..row },
-            [t.radius_m, 0.0, 0.0, t.radius_m],
-            stripe,
+        ui.scene.rect(
+            Rect {
+                w: 3.0,
+                ..row.shrink2(0.0, 1.0)
+            },
             0.0,
-            Color::TRANSPARENT,
+            stripe,
         );
         let mut inner = row.shrink2(10.0, 0.0);
+        inner.cut_right(2.0);
         let led_r = inner.cut_right(20.0);
         // Record arm, shown on hover or while armed.
         let arm_r = inner.cut_right(24.0);
@@ -938,9 +988,9 @@ fn clip_rect(v: &View, lane: usize, c: &Clip) -> Rect {
     let x1 = v.x(c.end().as_f64());
     Rect {
         x: x0 + 1.0,
-        y: v.lane_y(lane) + 2.0,
-        w: (x1 - x0 - 2.0).max(4.0),
-        h: v.lane_h - 4.0,
+        y: v.lane_y(lane) + 1.0,
+        w: (x1 - x0 - 1.0).max(4.0),
+        h: v.lane_h - 1.0,
     }
 }
 
@@ -1750,7 +1800,7 @@ fn clips(
         let sel = ws.playlist.selection.contains(&c.id);
         let hovered = hit.as_ref().is_some_and(|(h, _)| h.id == c.id);
         let lane_muted = tracks.get(lane).is_some_and(|t| t.muted) || c.muted;
-        let body = t.panel.mix(pc, if lane_muted { 0.12 } else { 0.30 });
+        let body = t.panel.mix(pc, if lane_muted { 0.12 } else { 0.36 });
         ui.scene.rect(
             cr,
             t.radius_s,
