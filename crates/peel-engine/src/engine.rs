@@ -121,7 +121,7 @@ pub struct Engine {
     stamps: Vec<u32>,
     stamp: u32,
     active: ActiveNotes,
-    /// Fresh ids after a transport restart keep new curves away from release tails.
+    /// Each articulation gets a fresh id so new curves leave old release tails alone.
     next_sequence_voice: u32,
 
     plan: Box<RenderPlan>,
@@ -883,8 +883,8 @@ impl Engine {
                     continue;
                 };
                 let slot = plan.channels.get(ev.channel as usize).map(|c| c.slot);
-                // Voice ids are unique per realized note, but be exact if two
-                // slots ever reuse one: look at every note sharing the id.
+                // Source ids identify realized notes across plan updates.
+                // Check the slot and key before retaining the actual DSP voice.
                 let start = notes.partition_point(|n| n.source_voice < voice);
                 for n in notes[start..]
                     .iter_mut()
@@ -936,6 +936,7 @@ impl Engine {
         let Engine {
             plan,
             stage,
+            live,
             active,
             slots,
             telemetry,
@@ -1004,16 +1005,17 @@ impl Engine {
             }
             let end = note.points.partition_point(|p| p.beat <= beat);
             if let Some(state) = end.checked_sub(1).and_then(|i| note.points.get(i)) {
-                stage.push_on(
-                    slot,
-                    offset,
-                    EventKind::VoiceExpression {
-                        voice: actual_voice,
-                        pitch: state.pitch,
-                        pressure: state.pressure,
-                        timbre: state.timbre,
-                    },
-                );
+                let kind = EventKind::VoiceExpression {
+                    voice: actual_voice,
+                    pitch: state.pitch,
+                    pressure: state.pressure,
+                    timbre: state.timbre,
+                };
+                if stage.push_on(slot, offset, kind) {
+                    live.clear_deferred_expression(route.slot, kind);
+                } else {
+                    live.defer_expression(route.slot, kind);
+                }
             }
         }
     }
@@ -1228,6 +1230,7 @@ impl Engine {
             plan,
             transport,
             stage,
+            live,
             active,
             slots,
             telemetry,
@@ -1296,16 +1299,17 @@ impl Engine {
                     timbre,
                 } => {
                     if let Some(actual_voice) = active.voice_for_source(route.slot, voice) {
-                        stage.push_on(
-                            slot,
-                            offset,
-                            EventKind::VoiceExpression {
-                                voice: actual_voice,
-                                pitch,
-                                pressure,
-                                timbre,
-                            },
-                        );
+                        let kind = EventKind::VoiceExpression {
+                            voice: actual_voice,
+                            pitch,
+                            pressure,
+                            timbre,
+                        };
+                        if stage.push_on(slot, offset, kind) {
+                            live.clear_deferred_expression(route.slot, kind);
+                        } else {
+                            live.defer_expression(route.slot, kind);
+                        }
                     }
                 }
                 SeqKind::NoteOff {

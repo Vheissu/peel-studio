@@ -218,6 +218,39 @@ fn recorded_expression_is_sample_accurate_and_independent_of_chunk_size() {
 }
 
 #[test]
+fn a_refused_last_expression_point_recovers_when_the_next_chunk_has_room() {
+    use peel_engine::EngineConfig;
+    let config = EngineConfig {
+        events_per_block: 4,
+        max_block: 256,
+        ..config()
+    };
+    let mut e = OfflineEngine::new(SR, &config);
+    e.send(Cmd::InstallDevice {
+        slot: 0,
+        device: Box::new(Probe {
+            voices: [None; 8],
+            release: 0,
+        }),
+    });
+    e.try_set_plan(Box::new(curved_plan())).unwrap();
+    e.send(Cmd::Play);
+    render_blocks(&mut e, BEAT - 1, 256);
+    for key in 70..74 {
+        e.send(Cmd::LiveNote {
+            slot: 0,
+            key,
+            velocity: 1.0,
+            on: true,
+        });
+    }
+    let (before, _) = render_blocks(&mut e, 32, 32);
+    assert_value(before[31], 0.75); // four queued live notes consume the soft cap
+    let (after, _) = render_blocks(&mut e, 32, 32);
+    assert_value(after[0], 0.89); // the held sequence voice receives its deferred last point
+}
+
+#[test]
 fn expression_events_follow_the_tempo_map_during_a_ramp() {
     use peel_time::{TempoMap, TempoSegment, Time};
     let mut p = curved_plan();
@@ -380,6 +413,7 @@ fn expression_playback_seek_loop_and_plan_chase_never_allocate_or_free() {
     let config = EngineConfig {
         device_slots: 4,
         max_block: 256,
+        events_per_block: 4,
         ..config()
     };
     let make = |p: RenderPlan| Cmd::SetCompensatedPlan {
@@ -404,6 +438,17 @@ fn expression_playback_seek_loop_and_plan_chase_never_allocate_or_free() {
     let (mut l, mut r) = ([0.0; 256], [0.0; 256]);
     assert_no_alloc::assert_no_alloc(|| {
         for i in 0..1000 {
+            if i == 46 {
+                // Fill the exact chunk containing the next expression point.
+                for key in 70..74 {
+                    e.handle_command(Cmd::LiveNote {
+                        slot: 0,
+                        key,
+                        velocity: 1.0,
+                        on: true,
+                    });
+                }
+            }
             if i == 200 {
                 e.handle_command(replacement.take().unwrap());
             }
