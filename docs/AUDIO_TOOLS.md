@@ -182,7 +182,8 @@ A manual recording offset can correct an interface's reported latency.
 In Pattern mode, Record captures accepted hardware, computer-keyboard,
 mouse-piano and scripted notes through the same performance feed. Pitch
 bend, channel/polyphonic aftertouch and MPE slide are saved with each note,
-including the state when the note starts. Sustain extends the recorded
+including the state when the note starts. MPE strike and release velocities
+are retained too. Sustain extends the recorded
 note until the pedal lifts. A note held across a pattern boundary becomes
 separate notes with the carried expression at the next loop's start.
 
