@@ -14,7 +14,12 @@ use serde::{Deserialize, Serialize};
 use crate::{Color, Id};
 
 pub const FORMAT: &str = "peel-project";
-pub const SCHEMA_VERSION: u32 = 1;
+/// Schema used when a project does not need newer musical data.
+pub const BASE_SCHEMA_VERSION: u32 = 1;
+/// First schema that stores per-note expression without data loss in older readers.
+pub const NOTE_EXPRESSION_SCHEMA: u32 = 2;
+/// Newest project schema this reader supports.
+pub const SCHEMA_VERSION: u32 = NOTE_EXPRESSION_SCHEMA;
 
 /// Key used for a step that has not been given a pitch (C5 in Peel's
 /// convention, MIDI 60).

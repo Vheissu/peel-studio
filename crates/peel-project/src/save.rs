@@ -130,7 +130,15 @@ pub fn save_with(project: &Project, path: &Path, opts: &SaveOptions) -> Result<S
     // 2. The new root.
     let manifest = Manifest {
         format: MANIFEST_FORMAT.to_string(),
-        schema: project.schema,
+        // Older readers discard unknown pattern fields. Raising the minimum
+        // schema keeps them from opening or overwriting recorded expression.
+        schema: project.schema.max(
+            if project.patterns.iter().any(|p| !p.expression.is_empty()) {
+                peel_document::NOTE_EXPRESSION_SCHEMA
+            } else {
+                peel_document::BASE_SCHEMA_VERSION
+            },
+        ),
         project_id: project.id,
         revision: project.revision,
         title: project.meta.title.clone(),
@@ -211,7 +219,7 @@ fn preflight(project: &Project) -> Result<()> {
     check_finite(project)
 }
 
-/// Sorted, de-duplicated device type ids used by channels and inserts.
+/// Sorted device type ids and musical-data features needed by this project.
 pub fn required_capabilities(project: &Project) -> Vec<String> {
     let mut ids: Vec<String> = project
         .channels
@@ -225,6 +233,9 @@ pub fn required_capabilities(project: &Project) -> Vec<String> {
                 .flat_map(|t| t.inserts.iter().map(|d| d.type_id.clone())),
         )
         .collect();
+    if project.patterns.iter().any(|p| !p.expression.is_empty()) {
+        ids.push("note_expression".to_string());
+    }
     ids.sort();
     ids.dedup();
     ids

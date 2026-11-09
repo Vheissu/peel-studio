@@ -67,7 +67,7 @@ fn layout_and_manifest_contents() {
 
     let manifest = read_manifest(&root).unwrap();
     assert_eq!(manifest.format, "peel-project-manifest");
-    assert_eq!(manifest.schema, peel_document::SCHEMA_VERSION);
+    assert_eq!(manifest.schema, project.schema);
     assert_eq!(manifest.project_id, project.id);
     assert_eq!(manifest.revision, 41);
     assert_eq!(manifest.title, "Rich Song");
@@ -266,14 +266,17 @@ fn newer_schema_is_rejected_not_recovered() {
     save(&project, &root).unwrap();
 
     let text = fs::read_to_string(&root).unwrap();
-    let bumped = text.replace("\"schema\": 1", "\"schema\": 2");
+    let bumped = text.replace(
+        "\"schema\": 1",
+        &format!("\"schema\": {}", peel_document::SCHEMA_VERSION + 1),
+    );
     assert_ne!(text, bumped);
     fs::write(&root, bumped).unwrap();
 
     match load(&root) {
         Err(ProjectError::FutureSchema { found, supported }) => {
-            assert_eq!(found, 2);
-            assert_eq!(supported, 1);
+            assert_eq!(found, peel_document::SCHEMA_VERSION + 1);
+            assert_eq!(supported, peel_document::SCHEMA_VERSION);
         }
         other => panic!("expected FutureSchema, got {other:?}"),
     }
@@ -631,8 +634,19 @@ fn recorded_note_expression_survives_sharded_save_load_and_undo() {
         }],
     };
     p.pattern_mut(pid).unwrap().expression.push(curve);
+    assert_eq!(p.schema, peel_document::BASE_SCHEMA_VERSION);
     save(&p, &path).unwrap();
+    let manifest = read_manifest(&path).unwrap();
+    assert_eq!(manifest.schema, peel_document::NOTE_EXPRESSION_SCHEMA);
+    assert!(
+        manifest
+            .required_capabilities
+            .iter()
+            .any(|c| c == "note_expression")
+    );
+    p.schema = manifest.schema;
     let mut doc = Document::new(load(&path).unwrap().project);
+    assert_eq!(doc.project(), &p);
     assert_eq!(
         doc.project().patterns[0].expression,
         p.patterns[0].expression
@@ -647,4 +661,21 @@ fn recorded_note_expression_survives_sharded_save_load_and_undo() {
     );
     assert!(doc.redo().is_some());
     assert!(doc.project().patterns[0].expression.is_empty());
+}
+
+#[test]
+fn plain_projects_keep_the_legacy_schema_and_omit_expression_capability() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("Legacy.peelproj");
+    let project = rich_project(None);
+    save(&project, &path).unwrap();
+    let manifest = read_manifest(&path).unwrap();
+    assert_eq!(manifest.schema, peel_document::BASE_SCHEMA_VERSION);
+    assert!(
+        !manifest
+            .required_capabilities
+            .iter()
+            .any(|c| c == "note_expression")
+    );
+    assert_eq!(load(&path).unwrap().project, project);
 }

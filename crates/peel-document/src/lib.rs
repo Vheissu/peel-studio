@@ -60,7 +60,7 @@ impl Project {
         };
         Project {
             format: FORMAT.to_string(),
-            schema: SCHEMA_VERSION,
+            schema: BASE_SCHEMA_VERSION,
             id: Id::new(),
             revision: 0,
             meta: ProjectMeta {

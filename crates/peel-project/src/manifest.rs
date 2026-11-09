@@ -24,7 +24,7 @@ pub struct Manifest {
     pub app_version: String,
     /// RFC 3339 UTC time of the save.
     pub saved_at: String,
-    /// Device type ids the project needs (channel devices and mixer inserts).
+    /// Device type ids and musical-data features the project needs.
     pub required_capabilities: Vec<String>,
     /// Name of the data directory beside the root, informational.
     pub data_dir: String,
@@ -61,6 +61,10 @@ impl Manifest {
 
     /// Parses and checks a root manifest: format, schema range and hash shape.
     pub fn parse(bytes: &[u8]) -> Result<Manifest> {
+        Self::parse_with_schema_limit(bytes, peel_document::SCHEMA_VERSION)
+    }
+
+    fn parse_with_schema_limit(bytes: &[u8], supported: u32) -> Result<Manifest> {
         let value: serde_json::Value = serde_json::from_slice(bytes)
             .map_err(|e| ProjectError::NotAProject(format!("root is not valid JSON: {e}")))?;
         match value.get("format").and_then(|f| f.as_str()) {
@@ -74,10 +78,10 @@ impl Manifest {
         // Check the schema before the full parse so a future layout reports as
         // "newer version" rather than as a parse error.
         if let Some(schema) = value.get("schema").and_then(|s| s.as_u64()) {
-            if schema > u64::from(peel_document::SCHEMA_VERSION) {
+            if schema > u64::from(supported) {
                 return Err(ProjectError::FutureSchema {
                     found: u32::try_from(schema).unwrap_or(u32::MAX),
-                    supported: peel_document::SCHEMA_VERSION,
+                    supported,
                 });
             }
             if schema == 0 {
@@ -101,5 +105,22 @@ impl Manifest {
         let mut bytes = serde_json::to_vec_pretty(self).expect("manifest serializes");
         bytes.push(b'\n');
         bytes
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expression_files_are_refused_by_the_previous_reader_before_shards_are_read() {
+        let bytes = br#"{"format":"peel-project-manifest","schema":2}"#;
+        assert!(matches!(
+            Manifest::parse_with_schema_limit(bytes, 1),
+            Err(ProjectError::FutureSchema {
+                found: 2,
+                supported: 1
+            })
+        ));
     }
 }
