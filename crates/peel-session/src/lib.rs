@@ -50,6 +50,7 @@ struct DeviceSlot {
     type_id: String,
     params: BTreeMap<String, f32>,
     sample: Option<Id>,
+    state: Option<String>,
 }
 
 /// A short user-facing notice (save result, missing device, errors).
@@ -272,9 +273,21 @@ impl Session {
         self.missing.clear();
         for inst in wanted {
             match self.devices.get_mut(&inst.id) {
-                Some(slot) if slot.type_id == inst.type_id => {
+                Some(slot) if slot.type_id == inst.type_id && slot.state == inst.state => {
                     // Parameter changes.
                     let desc = peel_devices::descriptor(&inst.type_id);
+                    // Removing an override (including undoing its first edit)
+                    // restores the descriptor default on the live device.
+                    for key in slot.params.keys().filter(|k| !inst.params.contains_key(*k)) {
+                        if let Some(pd) = desc.and_then(|d| d.param_by_key(key)) {
+                            let _ = self.engine.send(EngineCommand::SetParam {
+                                slot: slot.slot,
+                                id: pd.id,
+                                value: pd.default,
+                            });
+                        }
+                    }
+                    slot.params.retain(|key, _| inst.params.contains_key(key));
                     for (k, v) in &inst.params {
                         if slot.params.get(k) != Some(v) {
                             if let Some(pd) = desc.and_then(|d| d.param_by_key(k)) {
@@ -370,6 +383,13 @@ impl Session {
         if states.is_empty() {
             return;
         }
+        // This state already belongs to the live instance. Updating the
+        // mirror prevents a later document edit from reloading that instance.
+        for (id, state) in &states {
+            if let Some(slot) = self.devices.get_mut(id) {
+                slot.state = Some(state.clone());
+            }
+        }
         self.doc.patch(|p| {
             for (id, state) in states {
                 if let Some(d) = find_device_mut(p, id) {
@@ -412,6 +432,7 @@ impl Session {
                 type_id: inst.type_id.clone(),
                 params: inst.params.clone(),
                 sample: inst.sample,
+                state: inst.state.clone(),
             },
         );
         if inst.sample.is_some() {
@@ -1684,3 +1705,6 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 }
+
+#[cfg(test)]
+mod sync_tests;

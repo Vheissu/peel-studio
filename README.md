@@ -103,6 +103,19 @@ peel validate song.peelproj
 peel devices                      # every native instrument and effect
 ```
 
+## MCP
+
+Agents can use Peel Studio through MCP to compose, arrange, mix, play,
+record, import files and export audio. Launch `peel-studio --mcp` to share
+a desktop session with an agent, or `peel-studio --mcp-headless` for a
+silent session without a window. A separate `peel-mcp` executable supports
+headless playback with `--audio`.
+
+Edits use the app's undo history. The server discovers the current
+instrument and effect catalog, exposes device parameters and presets,
+and supports validated transactions across the full project document.
+See [docs/MCP.md](docs/MCP.md) for client configuration, tools and examples.
+
 ## Export
 
 Open Export from the toolbar or press Cmd/Ctrl+E. Choose a mix or one file

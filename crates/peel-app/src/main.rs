@@ -38,7 +38,35 @@ fn main() {
         env_logger::Env::default().default_filter_or("info,wgpu_core=warn,wgpu_hal=warn,naga=warn"),
     )
     .init();
-    let open: Option<PathBuf> = std::env::args_os().nth(1).map(PathBuf::from);
+    let mut mcp = false;
+    let mut headless = false;
+    let mut open: Option<PathBuf> = None;
+    for arg in std::env::args_os().skip(1) {
+        if arg == "--mcp" {
+            mcp = true;
+        } else if arg == "--mcp-headless" {
+            headless = true;
+        } else if arg == "--help" || arg == "-h" {
+            eprintln!("Usage: peel-studio [--mcp | --mcp-headless] [project.peelproj]");
+            return;
+        } else if arg.to_string_lossy().starts_with('-') || open.is_some() {
+            eprintln!("Unknown argument: {}", arg.to_string_lossy());
+            std::process::exit(2);
+        } else {
+            open = Some(PathBuf::from(arg));
+        }
+    }
+    if mcp && headless {
+        eprintln!("Choose either --mcp or --mcp-headless");
+        std::process::exit(2);
+    }
+    if headless {
+        if let Err(error) = peel_mcp::run_headless(open, false) {
+            eprintln!("Peel MCP: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     let prefs = prefs::Prefs::load();
     let mut session = Session::new_with_audio(
         template::showcase(),
@@ -57,6 +85,9 @@ fn main() {
         let mut studio = studio::Studio::new(session);
         if let Some(path) = open {
             studio.open_path(path);
+        }
+        if mcp {
+            studio.enable_mcp();
         }
         studio
     });

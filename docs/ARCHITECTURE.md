@@ -40,12 +40,14 @@ the specification each crate owns.
 | `peel-ui` | GPU renderer, text, input, theme, widgets | document, engine |
 | `peel-app` | The desktop application and its editors | — |
 | `peel-cli` | Headless validation and rendering | GUI |
+| `peel-mcp` | Stdio MCP server, agent tools, validated edits, headless host | GUI |
 
 ## Data flow
 
 ```mermaid
 flowchart LR
     UI["peel-app editors"] -->|"named transactions"| Doc["peel-document Document"]
+    MCP["peel-mcp agent tools"] -->|"validated transactions on the session thread"| Doc
     Doc -->|"revision changed"| Session["peel-session compiler"]
     Session -->|"RenderPlan, devices, params"| Queue[["rtrb command queue"]]
     Queue --> Engine["peel-engine callback"]
@@ -153,3 +155,17 @@ idle window costs nothing.
 
 See [ROADMAP.md](ROADMAP.md) for what is implemented and the order the rest
 of the specification is planned in.
+
+## MCP
+
+`peel-studio --mcp` runs the stdio protocol on a dedicated thread and
+queues calls to the desktop session. The UI drains a bounded queue before
+its usual session upkeep. Plugins, document edits and export job handles
+stay on the session's owning thread. `peel-mcp` and
+`peel-studio --mcp-headless` pump the same bridge without a display.
+
+The official Rust MCP SDK handles the wire protocol. Tool schemas and
+argument decoding come from one typed command enum. Advanced edits apply
+an RFC 6902 patch to a copy, check the revision and validate the whole
+candidate before committing a single undo transaction. MCP adds no work
+to the realtime callback. See [MCP.md](MCP.md) for connection instructions.

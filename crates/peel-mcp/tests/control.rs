@@ -1,0 +1,311 @@
+use peel_document::{Id, Project};
+use peel_mcp::{Control, decode, tools};
+use peel_session::Session;
+use serde_json::{Value, json};
+
+struct Host {
+    s: Session,
+    c: Control,
+}
+impl Host {
+    fn new() -> Self {
+        Self {
+            s: Session::new_silent(Project::empty("Test")),
+            c: Control::default(),
+        }
+    }
+    fn call(&mut self, name: &str, args: Value) -> Result<Value, String> {
+        let action = decode(&format!("peel_{name}"), args.as_object().unwrap().clone())?;
+        let result = self.c.execute(&mut self.s, action);
+        self.s.tick();
+        result
+    }
+    fn patch(&mut self, operations: Value) -> Result<Value, String> {
+        self.call("edit_project",json!({"expected_project_id":self.s.project().id,"expected_revision":self.s.doc.revision(),"label":"Agent edit","operations":operations}))
+    }
+    fn channel(&mut self) -> Value {
+        self.call(
+            "add_channel",
+            json!({"name":"Kick","type_id":"peel.drum.kick"}),
+        )
+        .unwrap()
+    }
+}
+
+#[test]
+fn tools_have_strict_schemas_and_resolvable_references() {
+    let tools = tools();
+    assert!(tools.len() >= 30);
+    let mut names = std::collections::HashSet::new();
+    fn check_refs(value: &Value, root: &Value) {
+        if let Some(reference) = value.get("$ref").and_then(Value::as_str) {
+            assert!(
+                root.pointer(reference.strip_prefix('#').unwrap()).is_some(),
+                "{reference}"
+            );
+        }
+        match value {
+            Value::Object(map) => {
+                for v in map.values() {
+                    check_refs(v, root);
+                }
+            }
+            Value::Array(values) => {
+                for v in values {
+                    check_refs(v, root);
+                }
+            }
+            _ => {}
+        }
+    }
+    for tool in tools {
+        assert!(names.insert(tool.name.clone()));
+        assert!(tool.description.as_ref().is_some_and(|d| !d.is_empty()));
+        let schema = Value::Object((*tool.input_schema).clone());
+        assert_eq!(schema["type"], "object");
+        assert_eq!(schema["additionalProperties"], false);
+        assert!(schema["properties"].get("action").is_none());
+        check_refs(&schema, &schema);
+    }
+}
+
+#[test]
+fn compose_arrange_and_undo_use_the_same_document() {
+    let mut h = Host::new();
+    let channel = h.channel();
+    let pattern = h.s.project().patterns[0].id;
+    let lane = h.s.project().arrangement().tracks[0].id;
+    h.call("set_notes",json!({"pattern":pattern,"channel":channel["channel"],"notes":[{"start":"1/3","length":"1/3","key":60,"velocity":0.8}]})).unwrap();
+    h.call(
+        "place_pattern",
+        json!({"pattern":pattern,"lane":lane,"start":"0","length":"4"}),
+    )
+    .unwrap();
+    assert_eq!(
+        h.s.project().pattern(pattern).unwrap().notes[0]
+            .start
+            .to_string(),
+        "1/3"
+    );
+    assert_eq!(h.s.project().arrangement().clips.len(), 1);
+    h.call("history", json!({"direction":"undo"})).unwrap();
+    assert!(h.s.project().arrangement().clips.is_empty());
+    assert_eq!(h.s.project().pattern(pattern).unwrap().notes.len(), 1);
+    h.call("history", json!({"direction":"redo"})).unwrap();
+    assert_eq!(h.s.project().arrangement().clips.len(), 1);
+    h.call(
+        "transport",
+        json!({"mode":"song","command":"play","looping":false}),
+    )
+    .unwrap();
+    assert!(h.s.is_playing());
+    h.c.disconnect(&mut h.s);
+    assert!(!h.s.is_playing());
+}
+
+#[test]
+fn patches_are_atomic_validated_and_revision_checked() {
+    let mut h = Host::new();
+    h.channel();
+    let before = h.s.project().clone();
+    let history = h.s.doc.history_labels().count();
+    for operations in [
+        json!([{"op":"replace","path":"/meta/title","value":"Partial"},{"op":"remove","path":"/missing"}]),
+        json!([{"op":"replace","path":"/channels/0/track","value":Id::new()}]),
+        json!([{"op":"replace","path":"/tempo/0/bpm","value":0}]),
+        json!([{"op":"replace","path":"/mixer/tracks/0/output","value":before.mixer.tracks[0].id}]),
+        json!([{"op":"replace","path":"/patterns/0/length","value":"0"}]),
+        json!([{"op":"replace","path":"/patterns/0/length","value":"-170141183460469231731687303715884105728"}]),
+        json!([{"op":"replace","path":"/channels/0/pan","value":5}]),
+        json!([{"op":"replace","path":"/id","value":Id::new()}]),
+    ] {
+        assert!(h.patch(operations).is_err());
+        assert_eq!(h.s.project(), &before);
+        assert_eq!(h.s.doc.history_labels().count(), history);
+    }
+    assert!(h.call("edit_project",json!({"expected_project_id":before.id,"expected_revision":before.revision-1,"label":"Stale","operations":[{"op":"replace","path":"/meta/title","value":"Oops"}]})).unwrap_err().contains("Stale"));
+    h.patch(json!([{"op":"replace","path":"/meta/title","value":"Agent song"},{"op":"replace","path":"/tempo/0/bpm","value":110}])).unwrap();
+    assert_eq!(h.s.project().meta.title, "Agent song");
+    assert_eq!(h.s.doc.history_labels().count(), history + 1);
+    h.call("history", json!({"direction":"undo"})).unwrap();
+    assert_eq!(h.s.project().meta.title, "Test");
+    assert_eq!(h.s.project().bpm(), 120.0);
+}
+
+#[test]
+fn factory_device_discovery_and_range_checks() {
+    let mut h = Host::new();
+    for desc in peel_devices::all() {
+        let result = h.call("devices", json!({"type_id":desc.type_id})).unwrap();
+        assert_eq!(
+            result["devices"][0]["params"].as_array().unwrap().len(),
+            desc.params.len()
+        );
+    }
+    let channel = h.channel();
+    let param = peel_devices::descriptor("peel.drum.kick").unwrap().params[0];
+    let before = h.s.project().clone();
+    let mut params = serde_json::Map::new();
+    params.insert(param.key.into(), json!(param.max + 100.0));
+    assert!(
+        h.call(
+            "set_device",
+            json!({"device":channel["device"],"params":params})
+        )
+        .is_err()
+    );
+    assert_eq!(h.s.project(), &before);
+    params.insert(param.key.into(), json!(param.default));
+    h.call(
+        "set_device",
+        json!({"device":channel["device"],"params":params}),
+    )
+    .unwrap();
+}
+
+#[test]
+fn patch_supports_automation_sends_markers_and_alternate_arrangements() {
+    let mut h = Host::new();
+    let channel = h.channel();
+    let p = h.s.project();
+    let lane = p.arrangement().tracks[0].id;
+    let master = p.mixer.tracks[0].id;
+    let arrangement = Id::new();
+    let operations = json!([
+        {"op":"add","path":"/mixer/tracks/1/sends","value":[{"target":master,"gain_db":-12.0}]},
+        {"op":"add","path":"/arrangements/0/markers/-","value":{"id":Id::new(),"position":"4","name":"Drop"}},
+        {"op":"add","path":"/arrangements/0/clips/-","value":{"id":Id::new(),"track":lane,"start":"0","length":"4","content":{"type":"automation","target":{"kind":"track_pan","track":channel["track"]},"points":[{"position":"0","value":0.0},{"position":"4","value":1.0,"tension":0.5}]}}},
+        {"op":"add","path":"/arrangements/-","value":{"id":arrangement,"name":"Alternate","tracks":[],"clips":[]}},
+        {"op":"replace","path":"/active_arrangement","value":arrangement}
+    ]);
+    h.patch(operations).unwrap();
+    assert_eq!(h.s.project().active_arrangement, arrangement);
+    assert_eq!(h.s.project().arrangements[0].markers.len(), 1);
+    assert_eq!(h.s.project().mixer.tracks[1].sends.len(), 1);
+}
+
+#[test]
+fn invalid_transport_does_not_partially_change_playback() {
+    let mut h = Host::new();
+    h.call("transport", json!({"command":"play"})).unwrap();
+    let mode = h.s.mode();
+    assert!(
+        h.call(
+            "transport",
+            json!({"command":"stop","mode":"song","beat":-1})
+        )
+        .is_err()
+    );
+    assert!(h.s.is_playing());
+    assert_eq!(h.s.mode(), mode);
+}
+
+#[test]
+fn replacement_and_no_op_edits_preserve_work() {
+    let mut h = Host::new();
+    h.channel();
+    let before = h.s.project().clone();
+    h.patch(json!([])).unwrap();
+    assert_eq!(h.s.project(), &before);
+    assert!(
+        h.call("new_project", json!({"title":"Oops"}))
+            .unwrap_err()
+            .contains("Unsaved")
+    );
+    assert!(
+        h.call("open_project", json!({"path":"/missing.peelproj"}))
+            .unwrap_err()
+            .contains("Unsaved")
+    );
+    assert_eq!(h.s.project(), &before);
+    h.call("new_project", json!({"title":"New","discard_changes":true}))
+        .unwrap();
+    assert_eq!(h.s.project().meta.title, "New");
+}
+
+#[test]
+fn schemas_and_decoding_reject_wrong_arguments() {
+    assert!(
+        decode(
+            "peel_status",
+            json!({"extra":true}).as_object().unwrap().clone()
+        )
+        .is_err()
+    );
+    assert!(
+        decode(
+            "peel_status",
+            json!({"action":"new_project"}).as_object().unwrap().clone()
+        )
+        .is_err()
+    );
+    assert!(decode("peel_unknown", Default::default()).is_err());
+    let mut h = Host::new();
+    assert!(h.call("new_ids", json!({"count":257})).is_err());
+    assert!(
+        h.call("save_project", json!({"path":"relative.peelproj"}))
+            .is_err()
+    );
+    assert!(h.call("recording", json!({"command":"start"})).is_err());
+    assert!(
+        h.call("performance", json!({"command":"scene","scene":1}))
+            .is_err()
+    );
+}
+
+#[test]
+fn transforms_preserve_unselected_notes_and_undo_as_one_step() {
+    let mut h = Host::new();
+    let channel = h.channel();
+    let pattern = h.s.project().patterns[0].id;
+    let result = h.call("set_notes",json!({"pattern":pattern,"channel":channel["channel"],"notes":[{"start":"0","length":"1","key":60,"velocity":0.8},{"start":"2","length":"1","key":64,"velocity":0.7}]})).unwrap();
+    let unselected = h.s.project().patterns[0].notes[1];
+    let before = h.s.doc.history_labels().count();
+    h.call("transform_notes",json!({"pattern":pattern,"selection":[result["notes"][0]],"tool":{"kind":"chop","division":"1/4","gate":0.8}})).unwrap();
+    assert_eq!(h.s.project().patterns[0].notes.len(), 5);
+    assert_eq!(h.s.project().patterns[0].notes[4], unselected);
+    assert_eq!(h.s.doc.history_labels().count(), before + 1);
+    h.call("history", json!({"direction":"undo"})).unwrap();
+    assert_eq!(h.s.project().patterns[0].notes.len(), 2);
+    let before = h.s.project().clone();
+    assert!(
+        h.call(
+            "transform_notes",
+            json!({"pattern":pattern,"tool":{"kind":"chop","division":"-1","gate":0.8}})
+        )
+        .is_err()
+    );
+    assert_eq!(h.s.project(), &before);
+}
+
+#[test]
+fn stale_project_identity_is_rejected_even_at_the_same_revision() {
+    let mut h = Host::new();
+    let old = h.s.project().id;
+    h.call("new_project", json!({"title":"Different"})).unwrap();
+    assert_eq!(h.s.doc.revision(), 0);
+    assert!(h.call("edit_project",json!({"expected_project_id":old,"expected_revision":0,"label":"Wrong project","operations":[{"op":"replace","path":"/meta/title","value":"Oops"}]})).is_err());
+    assert_eq!(h.s.project().meta.title, "Different");
+}
+
+#[test]
+fn demo_can_be_edited_with_the_current_device_catalog() {
+    let mut h = Host::new();
+    h.call("new_project", json!({"title":"Demo","demo":true}))
+        .unwrap();
+    h.patch(json!([{"op":"replace","path":"/meta/artist","value":"Agent"}]))
+        .unwrap();
+    assert_eq!(h.s.project().meta.artist, "Agent");
+}
+
+#[test]
+fn closing_input_and_disconnecting_release_the_audio_input() {
+    let mut h = Host::new();
+    let _input = h.s.open_injected_input(48_000, 1);
+    assert!(h.s.input_is_open());
+    h.call("close_input", json!({})).unwrap();
+    assert!(!h.s.input_is_open());
+    let _input = h.s.open_injected_input(48_000, 1);
+    h.c.disconnect(&mut h.s);
+    assert!(!h.s.input_is_open());
+}

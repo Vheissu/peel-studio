@@ -32,3 +32,4 @@ serde_json.workspace = true
 peel-effects.workspace = true
 peel-host-clap = { path = "../peel-host-clap" }
 peel-compose.workspace = true
+peel-mcp = { path = "../peel-mcp" }

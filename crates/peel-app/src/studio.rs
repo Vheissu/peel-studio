@@ -19,6 +19,7 @@ pub struct Studio {
     pub welcome: bool,
     pub show_keys: bool,
     pub recorder: crate::recorder::Recorder,
+    mcp: Option<peel_mcp::Bridge>,
     recovered: Vec<peel_project::AutosaveEntry>,
     /// `PEEL_PLUGIN` debug insert still waiting for the plugin scan.
     debug_plugin: Option<String>,
@@ -63,6 +64,7 @@ impl Studio {
             welcome: welcome || std::env::var_os("PEEL_WELCOME").is_some(),
             show_keys: std::env::var_os("PEEL_KEYS").is_some(),
             recorder: Default::default(),
+            mcp: None,
             recovered,
             debug_plugin: std::env::var("PEEL_PLUGIN").ok(),
             last_autosave: std::time::Instant::now(),
@@ -71,6 +73,18 @@ impl Studio {
         studio.open_view();
         studio.apply_debug_env();
         studio
+    }
+
+    pub fn enable_mcp(&mut self) {
+        match peel_mcp::Bridge::start_stdio() {
+            Ok(bridge) => {
+                self.mcp = Some(bridge);
+                self.welcome = false;
+            }
+            Err(error) => self
+                .session
+                .notify(format!("Could not start MCP: {error}"), true),
+        }
     }
 
     /// View defaults for a newly opened project: an arranged song opens in
@@ -954,6 +968,21 @@ impl App for Studio {
 
 impl Studio {
     fn update_inner(&mut self, ui: &mut Ui, win: &WindowControl) {
+        if let Some(bridge) = &mut self.mcp {
+            let project = self.session.project().id;
+            let recording = self.session.is_recording();
+            let live_target = self.session.live_target();
+            bridge.pump(&mut self.session);
+            if recording != self.session.is_recording() {
+                self.recorder.armed = self.session.is_recording();
+            }
+            if live_target != self.session.live_target() {
+                self.ws.selected_channel = self.session.live_target();
+            }
+            if project != self.session.project().id {
+                self.reset_workspace();
+            }
+        }
         self.session.tick();
         // Input meter: peak hold with a fall of about 20 dB a second.
         let (l, r) = self.session.input_level();
