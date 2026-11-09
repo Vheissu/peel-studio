@@ -5,12 +5,12 @@
 //! closing a Windows device waits for its callback to finish. So every call
 //! into `midir` that is not a callback happens on one worker thread owned by
 //! [`MidiInput`]. The methods the UI calls only queue a request or read the
-//! worker's last result, and never wait.
+//! worker's last result, without waiting for the MIDI service.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -100,17 +100,29 @@ struct Shared {
     /// The set of open ports changed since `poll_ports` last said so.
     changed: AtomicBool,
     events: AtomicU64,
+    callbacks: RwLock<u64>,
 }
 
 impl Shared {
     fn snapshot(&self) -> std::sync::MutexGuard<'_, Snapshot> {
         self.snapshot.lock().unwrap_or_else(PoisonError::into_inner)
     }
+
+    fn deliver(&self, generation: u64, event: &MidiEvent, handler: &MidiHandler) {
+        let current = self
+            .callbacks
+            .read()
+            .unwrap_or_else(PoisonError::into_inner);
+        if *current == generation {
+            self.events.fetch_add(1, Ordering::Relaxed);
+            handler(event);
+        }
+    }
 }
 
 enum Command {
     Poll,
-    Select(PortSelection),
+    Select(PortSelection, u64),
     CloseAll,
     Flush(Sender<()>),
     Quit,
@@ -147,6 +159,7 @@ impl MidiInput {
             }),
             changed: AtomicBool::new(false),
             events: AtomicU64::new(0),
+            callbacks: RwLock::new(0),
         });
         let (commands, rx) = channel();
         let worker_shared = shared.clone();
@@ -176,8 +189,20 @@ impl MidiInput {
 
     /// Chooses which ports to keep open. Takes effect on the worker thread.
     pub fn select(&self, selection: PortSelection) {
+        // Wait only for an in-flight user handler, never for port operations.
+        // Once this returns no callback belonging to the old selection can
+        // arrive after the session flushes its live notes and expression.
+        let generation = {
+            let mut current = self
+                .shared
+                .callbacks
+                .write()
+                .unwrap_or_else(PoisonError::into_inner);
+            *current = current.wrapping_add(1);
+            *current
+        };
         self.shared.snapshot().selection = selection.clone();
-        let _ = self.commands.send(Command::Select(selection));
+        let _ = self.commands.send(Command::Select(selection, generation));
     }
 
     pub fn selection(&self) -> PortSelection {
@@ -241,6 +266,7 @@ fn run(
         handler,
         scanner: None,
         selection,
+        generation: 0,
         open: Vec::new(),
         failures: HashMap::new(),
     };
@@ -256,8 +282,11 @@ fn run(
         for command in batch {
             match command {
                 Command::Poll => rescan = true,
-                Command::Select(selection) => {
+                Command::Select(selection, generation) => {
+                    // Even retained ports need callbacks from the new generation.
+                    worker.close_all();
                     worker.selection = selection;
+                    worker.generation = generation;
                     rescan = true;
                 }
                 Command::CloseAll => {
@@ -300,6 +329,7 @@ struct Worker {
     /// Used only to list ports; every connection gets a client of its own.
     scanner: Option<midir::MidiInput>,
     selection: PortSelection,
+    generation: u64,
     open: Vec<Connection>,
     failures: HashMap<String, Failure>,
 }
@@ -389,14 +419,14 @@ impl Worker {
         client.ignore(midir::Ignore::All);
         let handler = self.handler.clone();
         let shared = self.shared.clone();
+        let generation = self.generation;
         client
             .connect(
                 port,
                 &format!("{CLIENT_NAME} input"),
                 move |_stamp, bytes, parser| {
                     parser.parse(bytes, |event| {
-                        shared.events.fetch_add(1, Ordering::Relaxed);
-                        handler(&event);
+                        shared.deliver(generation, &event, handler.as_ref());
                     });
                 },
                 Parser::new(),
@@ -425,5 +455,54 @@ impl Worker {
         if changed {
             self.shared.changed.store(true, Ordering::Relaxed);
         }
+    }
+}
+
+#[cfg(test)]
+mod callback_tests {
+    use super::*;
+
+    #[test]
+    fn old_port_callbacks_cannot_arrive_after_selection_reset() {
+        let shared = Arc::new(Shared {
+            snapshot: Mutex::new(Snapshot::default()),
+            changed: AtomicBool::new(false),
+            events: AtomicU64::new(0),
+            callbacks: RwLock::new(0),
+        });
+        let seen = Arc::new(AtomicU64::new(0));
+        let count = seen.clone();
+        let handler: Arc<MidiHandler> = Arc::new(move |_| {
+            count.fetch_add(1, Ordering::Relaxed);
+        });
+        let event = MidiEvent::PitchBend {
+            channel: 0,
+            value: 8191,
+        };
+        shared.deliver(0, &event, handler.as_ref());
+        let (commands, requests) = channel();
+        let input = MidiInput {
+            shared: shared.clone(),
+            commands,
+            thread: None,
+        };
+        input.select(PortSelection::Nothing);
+        let Command::Select(PortSelection::Nothing, generation) = requests.recv().unwrap() else {
+            panic!("selection request");
+        };
+        // The session clears expression only after select invalidates old callbacks.
+        seen.store(0, Ordering::Relaxed);
+        shared.deliver(0, &event, handler.as_ref());
+        assert_eq!(
+            seen.load(Ordering::Relaxed),
+            0,
+            "late old-port expression was rejected"
+        );
+        shared.deliver(generation, &event, handler.as_ref());
+        assert_eq!(
+            seen.load(Ordering::Relaxed),
+            1,
+            "new-port expression still arrives"
+        );
     }
 }

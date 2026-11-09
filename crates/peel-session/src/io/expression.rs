@@ -120,15 +120,15 @@ impl Session {
             .live
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(live) = guard.as_ref().filter(|live| live.target().get().is_some()) {
-            if !live.expression_batch(&[
+        if let Some(live) = guard.as_ref().filter(|live| live.target().get().is_some())
+            && !live.expression_batch(&[
                 EventKind::PitchBendRange { semitones },
                 EventKind::PitchBend {
                     semitones: self.pitch_bend_value() * semitones,
                 },
-            ]) {
-                return Err("Live expression queue is full".into());
-            }
+            ])
+        {
+            return Err("Live expression queue is full".into());
         }
         bridge
             .expression

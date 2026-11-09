@@ -173,3 +173,23 @@ fn expression_rejects_nonfinite_values_and_reinitializes_midi_after_reset() {
     assert_eq!(dev.events.midi_at(2).unwrap().data, [0xb0, 6, 9]);
     assert_eq!(dev.events.midi_at(7).unwrap().data, [0x90, 60, 127]);
 }
+
+#[test]
+fn midi_new_strike_clears_old_key_pressure_before_note_on() {
+    let mut dev = device(fixture::MIDI_SINE);
+    assert!(dev.push_expression(0, EventKind::ChannelPressure { value: 0.4 }));
+    assert!(dev.push_expression(
+        0,
+        EventKind::PolyPressure {
+            key: 60,
+            value: 0.8
+        }
+    ));
+    dev.events.clear();
+    on(&mut dev, 60, 1);
+    assert_eq!(dev.events.len(), 2);
+    assert_eq!(dev.events.midi_at(0).unwrap().data, [0xa0, 60, 0]);
+    assert_eq!(dev.events.midi_at(1).unwrap().data, [0x90, 60, 127]);
+    assert_eq!(dev.expression.pressure, 0.4);
+    assert_eq!(dev.expression.keys[60], None);
+}

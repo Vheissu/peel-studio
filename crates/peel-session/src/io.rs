@@ -81,7 +81,8 @@ pub(crate) struct MidiBridge {
 
 impl MidiBridge {
     pub(crate) fn set(&self, live: Option<LiveInput>) {
-        *self.live.lock().unwrap_or_else(PoisonError::into_inner) = live;
+        let mut guard = self.live.lock().unwrap_or_else(PoisonError::into_inner);
+        *guard = live;
         self.expression.clear();
     }
 
@@ -510,13 +511,14 @@ impl Session {
 
     /// Opens every input (the default) or a single one.
     pub fn select_midi_input(&mut self, selection: PortSelection) {
-        if self.io.selection != selection {
-            self.io.bridge.release_all();
+        if self.io.selection == selection {
+            return;
         }
         self.io.selection = selection.clone();
         if let Some(midi) = &self.io.midi {
             midi.select(selection);
         }
+        self.io.bridge.release_all();
     }
 
     /// Turns hardware MIDI input on or off. It is on for [`Session::new`]

@@ -586,6 +586,17 @@ impl LiveState {
         self.shared.pedal.store(false, Ordering::Relaxed);
     }
 
+    /// Forgets keys owned by a device that has been removed or restarted,
+    /// without lifting the pedal or releasing other instruments.
+    pub(crate) fn forget_slot(&mut self, slot: u32) {
+        for held in &mut self.held {
+            if *held == slot {
+                *held = LIVE_TARGET_NONE;
+            }
+        }
+        self.sustained.retain(|(owner, _)| *owner != slot);
+    }
+
     /// Notes the start of a device callback of `frames` frames (0 = unknown).
     pub fn begin_callback(&mut self, now_ns: u64, frames: usize) {
         self.prev_cb_ns = self.cb_ns;
@@ -794,6 +805,27 @@ mod tests {
             all.extend(out.iter().map(|a| a.op));
         }
         all
+    }
+
+    #[test]
+    fn restarting_one_slot_preserves_the_other_slots_sustain() {
+        let mut s = state();
+        run(
+            &mut s,
+            &[
+                ev(0, LiveKind::Sustain { down: true }),
+                on(1, 60),
+                off(1, 60),
+                on(2, 64),
+                off(2, 64),
+                on(1, 67),
+            ],
+        );
+        s.forget_slot(1);
+        assert!(s.pedal);
+        assert_eq!(s.held[67], LIVE_TARGET_NONE);
+        let ops = run(&mut s, &[ev(0, LiveKind::Sustain { down: false })]);
+        assert_eq!(ops, vec![LiveOp::Off { slot: 2, key: 64 }]);
     }
 
     #[test]

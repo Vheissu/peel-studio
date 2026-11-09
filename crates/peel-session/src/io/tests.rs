@@ -381,6 +381,17 @@ fn expression_accepts_hardware_and_software_with_one_filter_and_readback() {
     });
     assert_eq!(s.channel_pressure_value(), 1.0);
     assert_eq!(s.poly_pressure_value(60), 64.0 / 127.0);
+    s.handle_midi_event(MidiEvent::NoteOn {
+        channel: 2,
+        key: 60,
+        velocity: 100,
+    });
+    assert_eq!(s.poly_pressure_value(60), 0.0);
+    assert_eq!(s.pitch_bend_value(), 1.0);
+    assert_eq!(s.channel_pressure_value(), 1.0);
+    assert!(s.poly_pressure(60, 0.75));
+    s.live_note(piano, 60, 1.0, true);
+    assert_eq!(s.poly_pressure_value(60), 0.0);
     assert!(!s.pitch_bend(f32::NAN));
     assert!(!s.channel_pressure(f32::INFINITY));
     assert!(!s.poly_pressure(128, 0.5));

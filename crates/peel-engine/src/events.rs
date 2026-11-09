@@ -172,20 +172,19 @@ impl Staging {
         result
     }
 
-    /// Adds `AllNotesOff` / `AllSoundOff`. Never fails: the last entry is
-    /// overwritten if the buffer is completely full.
+    /// Adds a release or expression reset. Never fails: the latest entry is
+    /// evicted if the buffer is completely full. Keeps timestamp order even
+    /// when events from concurrent MIDI producers arrive out of order.
     pub fn push_control(&mut self, slot: usize, offset: u32, kind: EventKind) {
         let Some(buf) = self.bufs.get_mut(slot) else {
             return;
         };
         let ev = DeviceEvent { offset, kind };
         if buf.events.len() >= buf.total_cap {
-            if let Some(last) = buf.events.last_mut() {
-                *last = ev;
-            }
-        } else {
-            buf.events.push(ev);
+            buf.events.pop();
         }
+        let pos = buf.events.partition_point(|event| event.offset <= offset);
+        buf.events.insert(pos, ev);
         self.mark(slot);
     }
 
@@ -329,5 +328,30 @@ impl ActiveNotes {
 
     pub fn clear(&mut self) {
         self.notes.clear();
+    }
+}
+
+#[cfg(test)]
+mod control_tests {
+    use super::*;
+
+    #[test]
+    fn expression_resets_stay_sample_ordered_even_when_full() {
+        let mut staging = Staging::new(1, 4);
+        assert!(staging.push_on(0, 90, EventKind::ChannelPressure { value: 0.5 }));
+        staging.push_control(0, 20, EventKind::ResetExpression);
+        assert_eq!(staging.events(0)[0].offset, 20);
+        // Fill the hard reserve, then deliver an earlier reset from another producer.
+        for offset in 100..120 {
+            staging.push_control(0, offset, EventKind::ResetExpression);
+        }
+        staging.push_control(0, 40, EventKind::ResetExpression);
+        assert!(
+            staging
+                .events(0)
+                .windows(2)
+                .all(|events| events[0].offset <= events[1].offset)
+        );
+        assert!(staging.events(0).iter().any(|event| event.offset == 40));
     }
 }
