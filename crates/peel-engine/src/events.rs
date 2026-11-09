@@ -98,6 +98,13 @@ impl Staging {
         self.bufs.get(slot).map_or(&[], |b| b.events.as_slice())
     }
 
+    /// Checks a complete ordinary-event transaction without consuming release reserve.
+    pub fn has_on_room(&self, slot: usize, count: usize) -> bool {
+        self.bufs
+            .get(slot)
+            .is_some_and(|b| count <= b.soft_cap.saturating_sub(b.events.len()))
+    }
+
     /// Adds a note-on (or any non-release event) after everything at or
     /// before its offset. Returns false when the soft capacity is exhausted;
     /// the caller counts the dropped note.
@@ -244,6 +251,8 @@ pub(crate) struct ActiveNote {
     pub slot: u32,
     pub key: u8,
     pub voice: u32,
+    /// Compiled note identity for sequence-to-runtime lookup; zero for live notes.
+    pub source_voice: u32,
     /// Started by a `LiveNote` command rather than the sequence.
     pub live: bool,
     /// Scratch flag used while reconciling voices on plan swap.
@@ -300,7 +309,14 @@ impl ActiveNotes {
     pub fn contains_voice(&self, slot: u32, voice: u32) -> bool {
         self.notes
             .iter()
-            .any(|n| !n.live && n.slot == slot && n.voice == voice)
+            .any(|n| !n.live && n.slot == slot && n.source_voice == voice)
+    }
+
+    pub fn voice_for_source(&self, slot: u32, source: u32) -> Option<u32> {
+        self.notes
+            .iter()
+            .find(|n| !n.live && n.slot == slot && n.source_voice == source)
+            .map(|n| n.voice)
     }
 
     /// Removes the sequence note with this voice id on this slot.
@@ -308,7 +324,15 @@ impl ActiveNotes {
         let i = self
             .notes
             .iter()
-            .rposition(|n| !n.live && n.slot == slot && n.voice == voice)?;
+            .rposition(|n| !n.live && n.slot == slot && n.source_voice == voice)?;
+        Some(self.notes.swap_remove(i))
+    }
+
+    pub fn remove_live_voice(&mut self, slot: u32, voice: u32) -> Option<ActiveNote> {
+        let i = self
+            .notes
+            .iter()
+            .rposition(|n| n.live && n.slot == slot && n.voice == voice)?;
         Some(self.notes.swap_remove(i))
     }
 

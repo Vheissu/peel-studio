@@ -370,6 +370,7 @@ impl Control {
             revision: plan.revision,
             tempo: plan.tempo.clone(),
             sequence: Vec::new(),
+            expression_notes: Vec::new(),
             length_beats: plan.length_beats,
             loop_range: plan.loop_range,
             channels: plan.channels.clone(),

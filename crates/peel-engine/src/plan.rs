@@ -25,6 +25,8 @@ pub struct RenderPlan {
     /// Note events sorted by `(beat, order)`; ties keep note-offs before
     /// note-ons (see [`SeqEvent::order`]).
     pub sequence: Vec<SeqEvent>,
+    /// Curved notes with prepared state for seeks and plan changes. Sorted by voice.
+    pub expression_notes: Vec<ExpressionNote>,
     /// Musical end of the material (quarter notes). Song mode stops (or
     /// keeps running silently) after it; pattern mode loops at it.
     pub length_beats: f64,
@@ -53,6 +55,7 @@ impl RenderPlan {
             revision: 0,
             tempo: TempoMap::constant(120.0),
             sequence: Vec::new(),
+            expression_notes: Vec::new(),
             length_beats: 4.0,
             loop_range: Some((0.0, 4.0)),
             channels: Vec::new(),
@@ -125,7 +128,7 @@ pub struct SeqEvent {
     /// Musical position in quarter notes from the plan origin.
     pub beat: f64,
     pub channel: ChannelIndex,
-    /// Tie-break for equal beats: note-offs use 0, note-ons use 1.
+    /// Tie-break for equal beats: note-offs 0, note-ons 1, expression 2.
     pub order: u8,
     pub kind: SeqKind,
 }
@@ -144,6 +147,33 @@ pub enum SeqKind {
         velocity: f32,
         voice: u32,
     },
+    Expression {
+        voice: u32,
+        pitch: f32,
+        pressure: f32,
+        timbre: f32,
+    },
+}
+
+/// Expression snapshot at an absolute musical position.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ExpressionState {
+    pub beat: f64,
+    pub pitch: f32,
+    pub pressure: f32,
+    pub timbre: f32,
+}
+
+/// Control-prepared note interval for bounded, allocation-free expression chase.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExpressionNote {
+    pub start_beat: f64,
+    pub end_beat: f64,
+    pub channel: ChannelIndex,
+    pub key: u8,
+    pub velocity: f32,
+    pub voice: u32,
+    pub points: Vec<ExpressionState>,
 }
 
 /// One instrument channel: a device slot feeding a mixer track.

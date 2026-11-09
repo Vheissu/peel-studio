@@ -121,6 +121,8 @@ pub struct Engine {
     stamps: Vec<u32>,
     stamp: u32,
     active: ActiveNotes,
+    /// Fresh ids after a transport restart keep new curves away from release tails.
+    next_sequence_voice: u32,
 
     plan: Box<RenderPlan>,
     compensation: Box<crate::compensation::Compensation>,
@@ -195,6 +197,7 @@ impl Engine {
             stamps: vec![0; device_slots],
             stamp: 0,
             active: ActiveNotes::new(),
+            next_sequence_voice: 1,
             plan: Box::new(RenderPlan::empty()),
             compensation: Box::new(
                 crate::compensation::Compensation::prepare(&RenderPlan::empty(), &[], max_block)
@@ -719,6 +722,7 @@ impl Engine {
                 slot,
                 key,
                 voice,
+                source_voice: 0,
                 live: true,
                 keep: true,
             });
@@ -866,7 +870,9 @@ impl Engine {
         for n in self.active.as_mut_slice() {
             n.keep = n.live;
         }
-        self.active.as_mut_slice().sort_unstable_by_key(|n| n.voice);
+        self.active
+            .as_mut_slice()
+            .sort_unstable_by_key(|n| n.source_voice);
         let mut remaining = sequence_notes;
         {
             let plan = &*self.plan;
@@ -879,8 +885,11 @@ impl Engine {
                 let slot = plan.channels.get(ev.channel as usize).map(|c| c.slot);
                 // Voice ids are unique per realized note, but be exact if two
                 // slots ever reuse one: look at every note sharing the id.
-                let start = notes.partition_point(|n| n.voice < voice);
-                for n in notes[start..].iter_mut().take_while(|n| n.voice == voice) {
+                let start = notes.partition_point(|n| n.source_voice < voice);
+                for n in notes[start..]
+                    .iter_mut()
+                    .take_while(|n| n.source_voice == voice)
+                {
                     if !n.keep && n.key == key && slot == Some(n.slot) {
                         n.keep = true;
                         remaining -= 1;
@@ -918,6 +927,95 @@ impl Engine {
         t.cursor = cursor_at(plan, &t.origin, self.engine_sample, sr);
         t.loop_armed = valid_loop(plan, sr).is_some_and(|(_, end)| beat < end);
         t.end_armed = plan.length_beats.is_finite() && beat < plan.length_beats;
+        self.chase_expression_notes(beat, 0);
+    }
+
+    /// Chases only notes with recorded expression. Their prepared intervals
+    /// avoid searching note-on/off pairs or allocating during a transport jump.
+    fn chase_expression_notes(&mut self, beat: f64, offset: u32) {
+        let Engine {
+            plan,
+            stage,
+            active,
+            slots,
+            telemetry,
+            next_sequence_voice,
+            ..
+        } = self;
+        for note in plan.expression_notes.iter().take(MAX_SWAP_SCAN) {
+            if note.start_beat >= beat || note.end_beat <= beat {
+                continue;
+            }
+            let Some(route) = plan.channels.get(note.channel as usize) else {
+                continue;
+            };
+            let slot = route.slot as usize;
+            if !slots.get(slot).is_some_and(Option::is_some) {
+                continue;
+            }
+            let existing = active.remove_voice(route.slot, note.voice);
+            let mut actual_voice = note.voice;
+            let sounding = if let Some(existing) = existing {
+                if existing.key == note.key {
+                    actual_voice = existing.voice;
+                    active.push(existing);
+                    true
+                } else {
+                    stage_off(
+                        stage,
+                        active,
+                        telemetry,
+                        slot,
+                        offset,
+                        EventKind::NoteOff {
+                            key: existing.key,
+                            velocity: 0.0,
+                            voice: existing.voice,
+                        },
+                    );
+                    false
+                }
+            } else {
+                false
+            };
+            if !sounding {
+                if active.is_full() || !stage.has_on_room(slot, 2) {
+                    telemetry.dropped_notes.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
+                actual_voice = sequence_voice(next_sequence_voice);
+                stage.push_on(
+                    slot,
+                    offset,
+                    EventKind::NoteOn {
+                        key: note.key,
+                        velocity: clean_velocity(note.velocity),
+                        voice: actual_voice,
+                    },
+                );
+                active.push(ActiveNote {
+                    slot: route.slot,
+                    key: note.key,
+                    voice: actual_voice,
+                    source_voice: note.voice,
+                    live: false,
+                    keep: false,
+                });
+            }
+            let end = note.points.partition_point(|p| p.beat <= beat);
+            if let Some(state) = end.checked_sub(1).and_then(|i| note.points.get(i)) {
+                stage.push_on(
+                    slot,
+                    offset,
+                    EventKind::VoiceExpression {
+                        voice: actual_voice,
+                        pitch: state.pitch,
+                        pressure: state.pressure,
+                        timbre: state.timbre,
+                    },
+                );
+            }
+        }
     }
 
     /// The transport is about to jump or stop at engine sample `at`: let the
@@ -1108,6 +1206,7 @@ impl Engine {
                     t.origin.wrap(&plan.tempo, start, end, sr);
                     t.cursor = cursor_at(plan, &t.origin, seg_end, sr);
                     t.next_click = ceil_beat(start);
+                    self.chase_expression_notes(start, offset);
                     seg_start = seg_end;
                 }
                 Boundary::End => {
@@ -1132,6 +1231,7 @@ impl Engine {
             active,
             slots,
             telemetry,
+            next_sequence_voice,
             ..
         } = self;
         let seq = &plan.sequence;
@@ -1159,22 +1259,54 @@ impl Engine {
                     {
                         continue;
                     }
-                    let kind = EventKind::NoteOn {
-                        key,
-                        velocity: clean_velocity(velocity),
-                        voice,
-                    };
-                    if active.is_full() || !stage.push_on(slot, offset, kind) {
+                    let expressed = plan
+                        .expression_notes
+                        .binary_search_by_key(&voice, |n| n.voice)
+                        .is_ok();
+                    if voice >= LIVE_VOICE_BASE
+                        || active.is_full()
+                        || !stage.has_on_room(slot, if expressed { 2 } else { 1 })
+                    {
                         telemetry.dropped_notes.fetch_add(1, Ordering::Relaxed);
                         continue;
                     }
+                    let actual_voice = sequence_voice(next_sequence_voice);
+                    stage.push_on(
+                        slot,
+                        offset,
+                        EventKind::NoteOn {
+                            key,
+                            velocity: clean_velocity(velocity),
+                            voice: actual_voice,
+                        },
+                    );
                     active.push(ActiveNote {
                         slot: route.slot,
                         key,
-                        voice,
+                        voice: actual_voice,
+                        source_voice: voice,
                         live: false,
                         keep: false,
                     });
+                }
+                SeqKind::Expression {
+                    voice,
+                    pitch,
+                    pressure,
+                    timbre,
+                } => {
+                    if let Some(actual_voice) = active.voice_for_source(route.slot, voice) {
+                        stage.push_on(
+                            slot,
+                            offset,
+                            EventKind::VoiceExpression {
+                                voice: actual_voice,
+                                pitch,
+                                pressure,
+                                timbre,
+                            },
+                        );
+                    }
                 }
                 SeqKind::NoteOff {
                     key,
@@ -1182,7 +1314,7 @@ impl Engine {
                     voice,
                 } => {
                     // Only notes the engine actually started are released.
-                    if active.remove_voice(route.slot, voice).is_some() {
+                    if let Some(note) = active.remove_voice(route.slot, voice) {
                         stage_off(
                             stage,
                             active,
@@ -1192,7 +1324,7 @@ impl Engine {
                             EventKind::NoteOff {
                                 key,
                                 velocity: clean_velocity(velocity),
-                                voice,
+                                voice: note.voice,
                             },
                         );
                     }
@@ -1669,16 +1801,32 @@ fn stage_off(
     offset: u32,
     kind: EventKind,
 ) {
-    if let OffResult::Evicted(EventKind::NoteOn { key, voice, .. }) =
-        stage.push_off(slot, offset, kind)
+    if let OffResult::Evicted(EventKind::NoteOn { voice, .. }) = stage.push_off(slot, offset, kind)
     {
         if voice >= LIVE_VOICE_BASE {
-            active.remove_live(slot as u32, key);
+            active.remove_live_voice(slot as u32, voice);
         } else {
-            active.remove_voice(slot as u32, voice);
+            if let Some(index) = active
+                .as_mut_slice()
+                .iter()
+                .position(|n| !n.live && n.slot == slot as u32 && n.voice == voice)
+            {
+                active.swap_remove(index);
+            }
         }
         telemetry.dropped_notes.fetch_add(1, Ordering::Relaxed);
     }
+}
+
+/// A repeated compiled note gets a fresh DSP identity on every articulation.
+fn sequence_voice(next: &mut u32) -> u32 {
+    let voice = *next;
+    *next = if voice + 1 >= LIVE_VOICE_BASE {
+        1
+    } else {
+        voice + 1
+    };
+    voice
 }
 
 /// Smallest whole beat at or after `beat`.

@@ -265,6 +265,7 @@ pub fn plan(
         revision: 1,
         tempo,
         sequence,
+        expression_notes: Vec::new(),
         length_beats,
         loop_range,
         audio: Vec::new(),

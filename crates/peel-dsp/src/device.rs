@@ -86,6 +86,14 @@ pub enum EventKind {
     ChannelPressure { value: f32 },
     /// Polyphonic aftertouch for sounding voices of `key`, 0..=1.
     PolyPressure { key: u8, value: f32 },
+    /// Complete expression for one voice. Overrides global expression for that voice.
+    /// Pitch is semitones (-120..120), pressure is 0..1 and timbre is 0..1 (neutral .5).
+    VoiceExpression {
+        voice: u32,
+        pitch: f32,
+        pressure: f32,
+        timbre: f32,
+    },
     /// Clear transient pitch and pressure without ending sequence voices.
     ResetExpression,
     /// Release every sounding voice normally (tails continue).

@@ -41,6 +41,7 @@ use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::plan::Slot;
 use crate::telemetry::Telemetry;
+mod capture;
 
 /// Value of the live target when no instrument is selected.
 pub const LIVE_TARGET_NONE: u32 = u32::MAX;
@@ -125,6 +126,7 @@ pub struct LiveStats {
     pub dropped: AtomicU64,
     /// Recorded notes refused because nobody drained the record ring.
     pub record_dropped: AtomicU64,
+    pub performance_dropped: AtomicU64,
 }
 
 impl LiveStats {
@@ -163,12 +165,50 @@ pub struct RecordedNote {
     pub time_ns: u64,
 }
 
+/// An accepted performance event. Notes and expression share this ordered ring.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RecordedPerformanceKind {
+    NoteOn {
+        key: u8,
+        velocity: f32,
+    },
+    NoteOff {
+        key: u8,
+        velocity: f32,
+    },
+    Expression {
+        pitch: f32,
+        pressure: f32,
+        timbre: f32,
+    },
+    Reset,
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RecordedPerformanceEvent {
+    pub slot: Slot,
+    pub voice: u32,
+    pub midi_channel: Option<u8>,
+    pub beat: f64,
+    pub playing: bool,
+    pub sustain: bool,
+    pub time_ns: u64,
+    pub kind: RecordedPerformanceKind,
+}
+
 /// Control-side end of the record ring.
 pub struct RecordedReceiver {
     rx: Consumer<RecordedNote>,
+    performance: Consumer<RecordedPerformanceEvent>,
 }
 
 impl RecordedReceiver {
+    pub fn drain_performance_into(&mut self, out: &mut Vec<RecordedPerformanceEvent>) -> usize {
+        let before = out.len();
+        while let Ok(event) = self.performance.pop() {
+            out.push(event);
+        }
+        out.len() - before
+    }
     pub fn pop(&mut self) -> Option<RecordedNote> {
         self.rx.pop().ok()
     }
@@ -245,6 +285,8 @@ pub(crate) enum LiveKind {
     Sustain { down: bool },
     AllNotesOff,
     Expression { kind: EventKind },
+    VoiceOn { key: u8, velocity: f32, voice: u32 },
+    VoiceOff { key: u8, voice: u32 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -259,6 +301,8 @@ pub(crate) struct LiveEvent {
 struct Tx {
     events: Producer<LiveEvent>,
     record: Producer<RecordedNote>,
+    performance: Producer<RecordedPerformanceEvent>,
+    capture: capture::Capture,
 }
 
 struct Inner {
@@ -278,6 +322,17 @@ pub struct LiveInput {
 impl LiveInput {
     /// Plays or releases `key` on the instrument in `slot`.
     pub fn note(&self, slot: Slot, key: u8, velocity: f32, on: bool) -> bool {
+        self.note_channel(slot, key, velocity, on, None)
+    }
+
+    pub fn note_channel(
+        &self,
+        slot: Slot,
+        key: u8,
+        velocity: f32,
+        on: bool,
+        midi_channel: Option<u8>,
+    ) -> bool {
         let key = key.min(127);
         let velocity = if on { clean_velocity(velocity) } else { 0.0 };
         let shared = &self.inner.shared;
@@ -311,6 +366,7 @@ impl LiveInput {
                 shared.stats.record_dropped.fetch_add(1, Ordering::Relaxed);
             }
         }
+        tx.capture_note(shared, t_ns, slot, key, velocity, on, midi_channel);
         true
     }
 
@@ -339,6 +395,7 @@ impl LiveInput {
         let ok = push_event(&mut tx, shared, ev, !down);
         if ok {
             shared.pedal.store(down, Ordering::Relaxed);
+            tx.capture_sustain(shared, t_ns, down);
         }
         ok
     }
@@ -354,7 +411,11 @@ impl LiveInput {
             kind: LiveKind::AllNotesOff,
         };
         let mut tx = self.lock();
-        push_event(&mut tx, shared, ev, true)
+        let ok = push_event(&mut tx, shared, ev, true);
+        if ok {
+            tx.capture_reset(shared, ev.t_ns, slot);
+        }
+        ok
     }
 
     /// [`all_notes_off`](LiveInput::all_notes_off) on the current target, or
@@ -399,6 +460,19 @@ impl LiveInput {
                         value: value.clamp(0.0, 1.0),
                     }
                 }
+                EventKind::VoiceExpression {
+                    voice,
+                    pitch,
+                    pressure,
+                    timbre,
+                } if pitch.is_finite() && pressure.is_finite() && timbre.is_finite() => {
+                    EventKind::VoiceExpression {
+                        voice,
+                        pitch: pitch.clamp(-120.0, 120.0),
+                        pressure: pressure.clamp(0.0, 1.0),
+                        timbre: timbre.clamp(0.0, 1.0),
+                    }
+                }
                 EventKind::ResetExpression => kind,
                 _ => return false,
             };
@@ -426,6 +500,7 @@ impl LiveInput {
                 },
                 false,
             );
+            tx.capture_expression(shared, t_ns, slot, kind);
         }
         true
     }
@@ -483,6 +558,17 @@ fn clean_velocity(v: f32) -> f32 {
 /// What the router asks the engine to do with a live event.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum LiveOp {
+    VoiceOn {
+        slot: u32,
+        key: u8,
+        velocity: f32,
+        voice: u32,
+    },
+    VoiceOff {
+        slot: u32,
+        key: u8,
+        voice: u32,
+    },
     On {
         slot: u32,
         key: u8,
@@ -540,12 +626,15 @@ impl LiveState {
         let shared = Arc::new(LiveShared::new(telemetry));
         let (events_tx, rx) = RingBuffer::new(LIVE_QUEUE_CAPACITY);
         let (record_tx, record_rx) = RingBuffer::new(RECORD_CAPACITY);
+        let (performance_tx, performance_rx) = RingBuffer::new(RECORD_CAPACITY);
         let input = LiveInput {
             inner: Arc::new(Inner {
                 shared: shared.clone(),
                 tx: Mutex::new(Tx {
                     events: events_tx,
                     record: record_tx,
+                    performance: performance_tx,
+                    capture: capture::Capture::default(),
                 }),
             }),
         };
@@ -553,7 +642,10 @@ impl LiveState {
             rx,
             shared,
             input: Some(input),
-            record: Some(RecordedReceiver { rx: record_rx }),
+            record: Some(RecordedReceiver {
+                rx: record_rx,
+                performance: performance_rx,
+            }),
             sample_rate: sample_rate as f64,
             pedal: false,
             held: [LIVE_TARGET_NONE; 128],
@@ -654,6 +746,29 @@ impl LiveState {
     /// engine must do to `out`. `offset` is where in the block it happens.
     pub fn route(&mut self, ev: LiveEvent, offset: u32, out: &mut Vec<LiveAction>) {
         match ev.kind {
+            LiveKind::VoiceOn {
+                key,
+                velocity,
+                voice,
+            } => emit(
+                out,
+                offset,
+                LiveOp::VoiceOn {
+                    slot: ev.slot,
+                    key,
+                    velocity,
+                    voice,
+                },
+            ),
+            LiveKind::VoiceOff { key, voice } => emit(
+                out,
+                offset,
+                LiveOp::VoiceOff {
+                    slot: ev.slot,
+                    key,
+                    voice,
+                },
+            ),
             LiveKind::NoteOn { key, velocity } => {
                 if ev.slot == LIVE_TARGET_NONE {
                     return;

@@ -226,8 +226,10 @@ impl NoteExpression {
 impl Pattern {
     /// Removes expression for deleted notes and points beyond shortened notes.
     pub fn retain_expression(&mut self) {
+        let lengths: std::collections::HashMap<_, _> =
+            self.notes.iter().map(|n| (n.id, n.length)).collect();
         self.expression.retain_mut(|expression| {
-            let Some(note) = self.notes.iter().find(|n| n.id == expression.note) else {
+            let Some(&length) = lengths.get(&expression.note) else {
                 return false;
             };
             for points in [
@@ -235,7 +237,7 @@ impl Pattern {
                 &mut expression.pressure,
                 &mut expression.timbre,
             ] {
-                points.retain(|p| p.offset >= Time::ZERO && p.offset <= note.length);
+                points.retain(|p| p.offset >= Time::ZERO && p.offset <= length);
             }
             true
         });

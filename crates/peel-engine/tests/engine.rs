@@ -230,14 +230,14 @@ fn loop_wrap_releases_notes_at_the_wrap_and_retriggers() {
             .map(|(i, _)| i)
             .collect()
     };
-    let voice1_off = find(&|e| matches!(e.kind, EventKind::NoteOff { voice: 1, .. }));
+    let voice1_off = find(&|e| matches!(e.kind, EventKind::NoteOff { key: 60, .. }));
     let abs: Vec<u64> = voice1_off.iter().map(|&i| log[i].abs()).collect();
     assert_eq!(
         &abs[..3],
         &[24_000, 48_000, 72_000],
         "cut exactly at the wrap"
     );
-    let voice1_on = find(&|e| matches!(e.kind, EventKind::NoteOn { voice: 1, .. }));
+    let voice1_on = find(&|e| matches!(e.kind, EventKind::NoteOn { key: 60, .. }));
     let abs: Vec<u64> = voice1_on.iter().map(|&i| log[i].abs()).collect();
     assert_eq!(
         &abs[..3],
@@ -245,11 +245,24 @@ fn loop_wrap_releases_notes_at_the_wrap_and_retriggers() {
         "retriggered every pass"
     );
 
+    let runtime_ids: Vec<_> = log
+        .iter()
+        .filter_map(|e| match e.kind {
+            EventKind::NoteOn { voice, .. } => Some(voice),
+            _ => None,
+        })
+        .collect();
+    let unique_ids: std::collections::HashSet<_> = runtime_ids.iter().copied().collect();
+    assert_eq!(
+        runtime_ids.len(),
+        unique_ids.len(),
+        "loop articulations need fresh ids for independent tails"
+    );
     // At the wrap sample the release precedes the new note-on.
     let off_idx = voice1_off[0];
     let on_idx = log
         .iter()
-        .position(|e| e.abs() == 24_000 && matches!(e.kind, EventKind::NoteOn { voice: 2, .. }))
+        .position(|e| e.abs() == 24_000 && matches!(e.kind, EventKind::NoteOn { key: 64, .. }))
         .unwrap();
     assert!(
         off_idx < on_idx,
@@ -870,12 +883,20 @@ fn note_offs_are_never_dropped_in_favor_of_note_ons() {
                 _ => None,
             })
             .collect();
-        for v in 0..30 {
+        let original_voices: Vec<_> = log
+            .iter()
+            .filter_map(|e| match e.kind {
+                EventKind::NoteOn { voice, .. } if e.abs() == 0 => Some(voice),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(original_voices.len(), 30);
+        for v in original_voices {
             assert!(released.contains(&v), "note-off for voice {v} was lost");
         }
         let started_new = log
             .iter()
-            .filter(|e| matches!(e.kind, EventKind::NoteOn { voice, .. } if voice >= 100))
+            .filter(|e| e.abs() == 6000 && matches!(e.kind, EventKind::NoteOn { .. }))
             .count();
         assert_eq!(started_new, 10, "22 note-ons made room for the note-offs");
     }

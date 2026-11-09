@@ -731,6 +731,16 @@ impl EngineHandle {
 
     /// Moves every note recorded since the last call into `out` (oldest
     /// first) and returns how many.
+    pub fn drain_recorded_performance(
+        &mut self,
+        out: &mut Vec<crate::live::RecordedPerformanceEvent>,
+    ) -> usize {
+        self.live
+            .recorded
+            .as_mut()
+            .map_or(0, |r| r.drain_performance_into(out))
+    }
+
     pub fn drain_recorded(&mut self, out: &mut Vec<RecordedNote>) -> usize {
         self.live.recorded.as_mut().map_or(0, |r| r.drain_into(out))
     }

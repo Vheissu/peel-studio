@@ -134,12 +134,14 @@ pub use input::{
 pub use input_stream::{InputDeviceInfo, InputError, InputInfo, InputRequest, list_input_devices};
 pub use latency::{CaptureStart, LatencyReport, take_start_beat};
 pub use live::{
-    LIVE_TARGET_NONE, LiveInput, LiveStats, LiveTarget, LiveTiming, RecordedNote, RecordedReceiver,
+    LIVE_TARGET_NONE, LiveInput, LiveStats, LiveTarget, LiveTiming, RecordedNote,
+    RecordedPerformanceEvent, RecordedPerformanceKind, RecordedReceiver,
 };
 pub use offline::OfflineEngine;
 pub use plan::{
     AUTOMATION_UNSET, AudioRegion, AutomationLane, AutomationTarget, ChannelIndex, ChannelRoute,
-    RenderPlan, SeqEvent, SeqKind, Slot, TrackIndex, TrackRoute, TrackSend,
+    ExpressionNote, ExpressionState, RenderPlan, SeqEvent, SeqKind, Slot, TrackIndex, TrackRoute,
+    TrackSend,
 };
 pub use telemetry::Telemetry;
 
@@ -150,7 +152,7 @@ pub const MAX_TRACKS: usize = telemetry::MAX_METERS;
 pub const MAX_ACTIVE_NOTES: usize = 4096;
 /// Voice ids at or above this value are reserved for live notes
 /// (`LIVE_VOICE_BASE + key`). Plan voice ids must stay below it.
-pub const LIVE_VOICE_BASE: u32 = 0xFFFF_FF00;
+pub const LIVE_VOICE_BASE: u32 = 0x4000_0000;
 
 /// Engine sizing. Every capacity is allocated before activation.
 #[derive(Clone, Debug)]

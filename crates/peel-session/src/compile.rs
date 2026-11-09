@@ -11,7 +11,10 @@ use std::sync::Arc;
 use peel_document::{Clip, ClipContent, Id, Pattern, Project, Time};
 use peel_dsp::SampleBuffer;
 use peel_dsp::util::db_to_gain;
-use peel_engine::{AudioRegion, ChannelRoute, RenderPlan, SeqEvent, SeqKind, Slot, TrackRoute};
+use peel_engine::{
+    AudioRegion, ChannelRoute, ExpressionNote, ExpressionState, RenderPlan, SeqEvent, SeqKind,
+    Slot, TrackRoute,
+};
 use peel_time::TempoMap;
 
 /// What the transport plays.
@@ -143,6 +146,7 @@ pub fn compile(p: &Project, ctx: &CompileContext) -> (RenderPlan, PlanIndex) {
 
     // ---- sequence ----
     let mut seq = Vec::new();
+    let mut expression_notes = Vec::new();
     let mut audio = Vec::new();
     let mut automation = Vec::new();
     let mut voice: u32 = 1;
@@ -160,6 +164,7 @@ pub fn compile(p: &Project, ctx: &CompileContext) -> (RenderPlan, PlanIndex) {
                     0,
                     &mut voice,
                     &mut seq,
+                    &mut expression_notes,
                 );
             }
             (len.as_f64(), Some((0.0, len.as_f64())))
@@ -190,6 +195,7 @@ pub fn compile(p: &Project, ctx: &CompileContext) -> (RenderPlan, PlanIndex) {
                                 salt,
                                 &mut voice,
                                 &mut seq,
+                                &mut expression_notes,
                             );
                         }
                     }
@@ -222,6 +228,7 @@ pub fn compile(p: &Project, ctx: &CompileContext) -> (RenderPlan, PlanIndex) {
         revision: p.revision,
         tempo,
         sequence: seq,
+        expression_notes,
         length_beats: length,
         loop_range,
         channels,
@@ -357,12 +364,14 @@ fn realize(
     salt: u64,
     voice: &mut u32,
     out: &mut Vec<SeqEvent>,
+    expressed: &mut Vec<ExpressionNote>,
 ) {
     let l = pt.length;
     if !l.is_positive() || !length.is_positive() {
         return;
     }
     let end = start + length;
+    let expression: HashMap<_, _> = pt.expression.iter().map(|e| (e.note, e)).collect();
     // First iteration whose content can reach the visible window.
     let first_k = offset.checked_div(l).map(|q| q.floor_int()).unwrap_or(0) - 1;
     let mut k = first_k.max(0);
@@ -406,8 +415,12 @@ fn realize(
             } else {
                 swing_offset(n.start, p.swing)
             };
+            // The upper namespace belongs to live/MPE notes.
+            if *voice >= 0x4000_0000 {
+                return;
+            }
             let v = *voice;
-            *voice = voice.wrapping_add(1).max(1);
+            *voice += 1;
             out.push(SeqEvent {
                 beat: on.as_f64() + sw,
                 channel: ch,
@@ -418,8 +431,58 @@ fn realize(
                     voice: v,
                 },
             });
+            let off_beat = off.as_f64() + sw.min((off - on).as_f64() * 0.5);
+            if let Some(expression) = expression.get(&n.id) {
+                let from = on - (iter_origin + n.start);
+                let mut offsets = vec![from];
+                offsets.extend(
+                    expression
+                        .pitch
+                        .iter()
+                        .chain(&expression.pressure)
+                        .chain(&expression.timbre)
+                        .map(|p| p.offset)
+                        .filter(|&offset| offset > from && offset < n.length),
+                );
+                offsets.sort();
+                offsets.dedup();
+                let mut points = Vec::new();
+                for offset in offsets {
+                    let beat = (iter_origin + n.start + offset).as_f64() + sw;
+                    if beat >= off_beat {
+                        break;
+                    }
+                    let state = expression.at(offset);
+                    out.push(SeqEvent {
+                        beat,
+                        channel: ch,
+                        order: 2,
+                        kind: SeqKind::Expression {
+                            voice: v,
+                            pitch: state.pitch,
+                            pressure: state.pressure,
+                            timbre: state.timbre,
+                        },
+                    });
+                    points.push(ExpressionState {
+                        beat,
+                        pitch: state.pitch,
+                        pressure: state.pressure,
+                        timbre: state.timbre,
+                    });
+                }
+                expressed.push(ExpressionNote {
+                    start_beat: on.as_f64() + sw,
+                    end_beat: off_beat,
+                    channel: ch,
+                    key: n.key,
+                    velocity: n.velocity,
+                    voice: v,
+                    points,
+                });
+            }
             out.push(SeqEvent {
-                beat: off.as_f64() + sw.min((off - on).as_f64() * 0.5),
+                beat: off_beat,
                 channel: ch,
                 order: 0,
                 kind: SeqKind::NoteOff {
@@ -440,6 +503,7 @@ fn realize(
 /// commands can update the running plan without a swap.
 pub fn same_structure(a: &RenderPlan, b: &RenderPlan) -> bool {
     a.sequence == b.sequence
+        && a.expression_notes == b.expression_notes
         && a.audio == b.audio
         && a.automation == b.automation
         && a.tempo == b.tempo
@@ -1167,5 +1231,166 @@ mod tests {
         let m = muted(&p);
         assert!(!m["A"] && !m["B"] && !m["Verb"]);
         assert!(m["C"]);
+    }
+    fn expression_fixture() -> (Project, Id, Id) {
+        use peel_document::{ExpressionPoint, NoteExpression};
+        let (mut p, channel, pid) = project();
+        let pt = p.pattern_mut(pid).unwrap();
+        pt.notes = vec![peel_document::Note::new(
+            channel,
+            Time::ZERO,
+            Time::beats(4),
+            60,
+            0.8,
+        )];
+        pt.expression = vec![NoteExpression {
+            note: pt.notes[0].id,
+            pitch: vec![
+                ExpressionPoint {
+                    offset: Time::ZERO,
+                    value: 1.0,
+                },
+                ExpressionPoint {
+                    offset: Time::beats(1),
+                    value: 2.0,
+                },
+                ExpressionPoint {
+                    offset: Time::new(3, 2),
+                    value: 3.0,
+                },
+            ],
+            pressure: vec![ExpressionPoint {
+                offset: Time::new(1, 3),
+                value: 0.7,
+            }],
+            timbre: vec![ExpressionPoint {
+                offset: Time::ZERO,
+                value: 0.5,
+            }],
+        }];
+        (p, channel, pid)
+    }
+
+    #[test]
+    fn expression_points_compile_as_held_full_snapshots_after_their_note_on() {
+        let (p, _, pid) = expression_fixture();
+        let (slots, meters) = ctx_for(&p);
+        let (plan, _) = compile(
+            &p,
+            &CompileContext {
+                mode: PlayMode::Pattern(pid),
+                slots: &slots,
+                meters: &meters,
+                samples: &HashMap::new(),
+            },
+        );
+        assert_eq!(plan.expression_notes.len(), 1);
+        assert!(matches!(plan.sequence[0].kind, SeqKind::NoteOn { .. }));
+        assert!(matches!(
+            plan.sequence[1].kind,
+            SeqKind::Expression {
+                pitch: 1.0,
+                pressure: 0.0,
+                timbre: 0.5,
+                ..
+            }
+        ));
+        assert!(matches!(
+            plan.sequence[2].kind,
+            SeqKind::Expression {
+                pitch: 1.0,
+                pressure: 0.7,
+                ..
+            }
+        ));
+        assert_eq!(plan.sequence[2].beat, 1.0 / 3.0);
+        assert_eq!(plan.expression_notes[0].points.len(), 4);
+        assert!(plan.sequence.windows(2).all(|w| w[0].beat <= w[1].beat));
+    }
+
+    #[test]
+    fn trimmed_clips_chase_the_expression_at_the_visible_note_start() {
+        let (mut p, _, pid) = expression_fixture();
+        let lane = p.arrangement().tracks[0].id;
+        p.arrangement_mut().clips = vec![Clip {
+            id: Id::new(),
+            track: lane,
+            start: Time::beats(4),
+            length: Time::beats(2),
+            offset: Time::beats(1),
+            muted: false,
+            content: ClipContent::Pattern { pattern: pid },
+        }];
+        let (slots, meters) = ctx_for(&p);
+        let (plan, _) = compile(
+            &p,
+            &CompileContext {
+                mode: PlayMode::Song,
+                slots: &slots,
+                meters: &meters,
+                samples: &HashMap::new(),
+            },
+        );
+        let states: Vec<_> = plan
+            .sequence
+            .iter()
+            .filter_map(|e| {
+                if let SeqKind::Expression {
+                    pitch, pressure, ..
+                } = e.kind
+                {
+                    Some((e.beat, pitch, pressure))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(states, vec![(4.0, 2.0, 0.7), (4.5, 3.0, 0.7)]);
+        assert_eq!(plan.expression_notes[0].start_beat, 4.0);
+        assert_eq!(plan.expression_notes[0].end_beat, 6.0);
+    }
+
+    #[test]
+    fn overlapping_clips_and_same_pitch_notes_have_distinct_expression_voices() {
+        let (mut p, channel, pid) = expression_fixture();
+        let second = peel_document::Note::new(channel, Time::ZERO, Time::beats(4), 60, 0.8);
+        let pt = p.pattern_mut(pid).unwrap();
+        pt.expression.push(peel_document::NoteExpression {
+            note: second.id,
+            ..Default::default()
+        });
+        pt.notes.push(second);
+        let lane = p.arrangement().tracks[0].id;
+        p.arrangement_mut().clips = (0..2)
+            .map(|_| Clip {
+                id: Id::new(),
+                track: lane,
+                start: Time::ZERO,
+                length: Time::beats(4),
+                offset: Time::ZERO,
+                muted: false,
+                content: ClipContent::Pattern { pattern: pid },
+            })
+            .collect();
+        let (slots, meters) = ctx_for(&p);
+        let (plan, _) = compile(
+            &p,
+            &CompileContext {
+                mode: PlayMode::Song,
+                slots: &slots,
+                meters: &meters,
+                samples: &HashMap::new(),
+            },
+        );
+        assert_eq!(plan.expression_notes.len(), 4);
+        let voices: std::collections::HashSet<_> =
+            plan.expression_notes.iter().map(|n| n.voice).collect();
+        assert_eq!(voices.len(), 4);
+        assert!(
+            plan.expression_notes
+                .windows(2)
+                .all(|w| w[0].voice < w[1].voice)
+        );
+        assert!(voices.iter().all(|&v| v < peel_engine::LIVE_VOICE_BASE));
     }
 }

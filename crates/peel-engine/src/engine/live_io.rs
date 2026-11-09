@@ -4,7 +4,8 @@
 //! queue and before the sequence is scheduled. It follows `docs/REALTIME.md`:
 //! no allocation, no locks, bounded work per chunk.
 
-use super::Engine;
+use super::{Engine, clean_velocity, stage_off};
+use crate::events::ActiveNote;
 use crate::live::{LIVE_TARGET_NONE, LiveAction, LiveOp, MAX_EVENTS_PER_BLOCK};
 use peel_dsp::EventKind;
 
@@ -32,6 +33,15 @@ impl Engine {
     fn apply_live(&mut self, action: LiveAction) {
         let offset = action.offset;
         match action.op {
+            LiveOp::VoiceOn {
+                slot,
+                key,
+                velocity,
+                voice,
+            } => self.scoped_live_note(slot, key, velocity, voice, true, offset),
+            LiveOp::VoiceOff { slot, key, voice } => {
+                self.scoped_live_note(slot, key, 0.0, voice, false, offset)
+            }
             LiveOp::On {
                 slot,
                 key,
@@ -44,6 +54,64 @@ impl Engine {
                     self.stage.push_on(slot as usize, offset, kind);
                 }
             }
+        }
+    }
+
+    fn scoped_live_note(
+        &mut self,
+        slot: u32,
+        key: u8,
+        velocity: f32,
+        voice: u32,
+        on: bool,
+        offset: u32,
+    ) {
+        let s = slot as usize;
+        if on {
+            if !self.slots.get(s).is_some_and(Option::is_some) {
+                return;
+            }
+            if let Some(previous) = self.active.remove_live_voice(slot, voice) {
+                self.stage_note_off(previous, offset);
+            }
+            if self.active.is_full()
+                || !self.stage.has_on_room(s, 2)
+                || !self.stage.push_on(
+                    s,
+                    offset,
+                    EventKind::NoteOn {
+                        key,
+                        velocity: clean_velocity(velocity),
+                        voice,
+                    },
+                )
+            {
+                self.telemetry
+                    .dropped_notes
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                return;
+            }
+            self.active.push(ActiveNote {
+                slot,
+                key,
+                voice,
+                source_voice: 0,
+                live: true,
+                keep: true,
+            });
+        } else if self.active.remove_live_voice(slot, voice).is_some() {
+            stage_off(
+                &mut self.stage,
+                &mut self.active,
+                &self.telemetry,
+                s,
+                offset,
+                EventKind::NoteOff {
+                    key,
+                    velocity: 0.0,
+                    voice,
+                },
+            );
         }
     }
 

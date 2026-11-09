@@ -147,10 +147,11 @@ pub fn validate(p: &Project) -> Vec<Issue> {
                 )));
             }
         }
+        let notes: std::collections::HashMap<_, _> = pt.notes.iter().map(|n| (n.id, n)).collect();
         let mut expressed = HashSet::new();
         let mut pattern_points = 0usize;
         for expression in &pt.expression {
-            let Some(note) = pt.notes.iter().find(|n| n.id == expression.note) else {
+            let Some(note) = notes.get(&expression.note) else {
                 issues.push(Issue::error(format!(
                     "pattern {} has expression for a missing note",
                     pt.name
