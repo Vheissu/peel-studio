@@ -13,8 +13,9 @@
 use std::ffi::c_void;
 
 use clap_sys::events::{
-    CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_PARAM_VALUE, clap_event_header, clap_event_midi,
-    clap_event_note, clap_event_param_value, clap_input_events, clap_output_events,
+    CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_NOTE_EXPRESSION, CLAP_EVENT_PARAM_VALUE,
+    clap_event_header, clap_event_midi, clap_event_note, clap_event_note_expression,
+    clap_event_param_value, clap_input_events, clap_output_events,
 };
 
 use crate::instance::PluginShared;
@@ -24,6 +25,7 @@ use crate::instance::PluginShared;
 union EventSlot {
     header: clap_event_header,
     note: clap_event_note,
+    expression: clap_event_note_expression,
     param: clap_event_param_value,
     midi: clap_event_midi,
 }
@@ -81,6 +83,43 @@ impl EventList {
     #[cfg(test)]
     pub(crate) fn last_time(&self) -> u32 {
         self.last_time
+    }
+
+    /// Reserves a complete noncritical transaction before any messages are written.
+    pub(crate) fn has_room(&self, count: usize) -> bool {
+        count <= (self.slots.len() - self.reserve).saturating_sub(self.len)
+    }
+
+    pub(crate) fn push_expression(
+        &mut self,
+        time: u32,
+        expression_id: i32,
+        note_id: i32,
+        key: i16,
+        value: f64,
+    ) -> bool {
+        let Some((slot, time)) = self.slot(false, time) else {
+            return false;
+        };
+        slot.expression = clap_event_note_expression {
+            header: header(
+                size_of::<clap_event_note_expression>(),
+                time,
+                CLAP_EVENT_NOTE_EXPRESSION,
+            ),
+            expression_id,
+            note_id,
+            port_index: 0,
+            channel: 0,
+            key,
+            value,
+        };
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn expression_at(&self, index: usize) -> Option<clap_event_note_expression> {
+        (index < self.len).then(|| unsafe { self.slots[index].expression })
     }
 
     fn slot(&mut self, critical: bool, time: u32) -> Option<(&mut EventSlot, u32)> {

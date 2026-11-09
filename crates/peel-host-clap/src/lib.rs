@@ -79,6 +79,9 @@
 //! multi-output routing, presets, remote controls, and the thread pool and
 //! timer extensions.
 
+#[cfg(test)]
+extern crate self as peel_host_clap;
+
 mod audio;
 mod descriptor;
 mod device;

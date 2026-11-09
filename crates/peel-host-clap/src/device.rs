@@ -5,8 +5,9 @@ use std::sync::atomic::Ordering;
 
 use clap_sys::events::{
     CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_NOTE_CHOKE, CLAP_EVENT_NOTE_OFF, CLAP_EVENT_NOTE_ON,
-    CLAP_EVENT_TRANSPORT, CLAP_TRANSPORT_HAS_BEATS_TIMELINE, CLAP_TRANSPORT_HAS_TEMPO,
-    CLAP_TRANSPORT_IS_PLAYING, clap_event_header, clap_event_transport,
+    CLAP_EVENT_TRANSPORT, CLAP_NOTE_EXPRESSION_PRESSURE, CLAP_NOTE_EXPRESSION_TUNING,
+    CLAP_TRANSPORT_HAS_BEATS_TIMELINE, CLAP_TRANSPORT_HAS_TEMPO, CLAP_TRANSPORT_IS_PLAYING,
+    clap_event_header, clap_event_transport,
 };
 use clap_sys::ext::note_ports::{CLAP_NOTE_DIALECT_CLAP, CLAP_NOTE_DIALECT_MIDI};
 use clap_sys::fixedpoint::CLAP_BEATTIME_FACTOR;
@@ -111,6 +112,41 @@ fn midi_velocity(v: f32) -> u8 {
     (unit(v) * 127.0).round().clamp(1.0, 127.0) as u8
 }
 
+struct Expression {
+    bend: f32,
+    range: f32,
+    pressure: f32,
+    keys: [Option<f32>; 128],
+    midi_configured: bool,
+}
+impl Default for Expression {
+    fn default() -> Self {
+        Self {
+            bend: 0.0,
+            range: 2.0,
+            pressure: 0.0,
+            keys: [None; 128],
+            midi_configured: false,
+        }
+    }
+}
+impl Expression {
+    fn clear(&mut self) {
+        self.bend = 0.0;
+        self.pressure = 0.0;
+        self.keys.fill(None);
+    }
+}
+fn midi_bend(semitones: f32, range: f32) -> [u8; 3] {
+    let value = if range > 0.0 {
+        (semitones / range).clamp(-1.0, 1.0)
+    } else {
+        0.0
+    };
+    let raw = 8192 + (value * if value < 0.0 { 8192.0 } else { 8191.0 }).round() as i32;
+    [0xe0, (raw & 127) as u8, ((raw >> 7) & 127) as u8]
+}
+
 /// A CLAP plugin hosted as a [`Device`].
 ///
 /// # Threads
@@ -131,6 +167,7 @@ pub struct ClapDevice {
     events: EventList,
     pending: PendingParams,
     voices: ActiveNotes,
+    expression: Expression,
     transport: clap_event_transport,
     steady_time: i64,
     sample_rate: f32,
@@ -205,6 +242,7 @@ impl ClapDevice {
             events: EventList::with_capacity(BASE_EVENT_SLOTS + 2 * params, RELEASE_RESERVE),
             pending: PendingParams::new(params),
             voices: ActiveNotes::new(),
+            expression: Expression::default(),
             transport: new_transport(),
             steady_time: 0,
             info: info.clone(),
@@ -310,6 +348,42 @@ impl ClapDevice {
             } => {
                 let key = key.min(127);
                 let id = note_id(voice);
+                let inherited = usize::from(self.expression.bend != 0.0)
+                    + usize::from(self.expression.pressure != 0.0);
+                let midi_extra = if self.dialect == Dialect::Midi {
+                    usize::from(self.expression.keys[usize::from(key)].is_some())
+                        + if self.expression.midi_configured {
+                            0
+                        } else {
+                            7
+                        }
+                } else {
+                    0
+                };
+                if !self.events.has_room(
+                    1 + midi_extra
+                        + if self.dialect == Dialect::Clap {
+                            inherited
+                        } else {
+                            0
+                        },
+                ) {
+                    self.shared.dropped_events.fetch_add(1, Ordering::Relaxed);
+                    return;
+                }
+                if self.dialect == Dialect::Midi {
+                    if !self.expression.midi_configured {
+                        self.push_expression(
+                            time,
+                            EventKind::PitchBendRange {
+                                semitones: self.expression.range,
+                            },
+                        );
+                    }
+                    if self.expression.keys[usize::from(key)].is_some() {
+                        self.events.push_midi(time, 0, [0xa0, key, 0], false);
+                    }
+                }
                 let ok = match self.dialect {
                     Dialect::Clap => self.events.push_note(
                         CLAP_EVENT_NOTE_ON,
@@ -329,6 +403,27 @@ impl ClapDevice {
                 };
                 if ok {
                     self.voices.add(id, i16::from(key));
+                    self.expression.keys[usize::from(key)] = None;
+                    if self.dialect == Dialect::Clap {
+                        if self.expression.bend != 0.0 {
+                            self.events.push_expression(
+                                time,
+                                CLAP_NOTE_EXPRESSION_TUNING,
+                                id,
+                                i16::from(key),
+                                f64::from(self.expression.bend),
+                            );
+                        }
+                        if self.expression.pressure != 0.0 {
+                            self.events.push_expression(
+                                time,
+                                CLAP_NOTE_EXPRESSION_PRESSURE,
+                                id,
+                                i16::from(key),
+                                f64::from(self.expression.pressure),
+                            );
+                        }
+                    }
                 }
                 ok
             }
@@ -379,6 +474,11 @@ impl ClapDevice {
                 }
                 ok
             }
+            EventKind::PitchBend { .. }
+            | EventKind::PitchBendRange { .. }
+            | EventKind::ChannelPressure { .. }
+            | EventKind::PolyPressure { .. }
+            | EventKind::ResetExpression => self.push_expression(time, e.kind),
             EventKind::AllNotesOff => {
                 self.release_all(time, false);
                 true
@@ -392,6 +492,188 @@ impl ClapDevice {
         if !accepted {
             self.shared.dropped_events.fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    fn push_expression(&mut self, time: u32, kind: EventKind) -> bool {
+        // Non-finite input never reaches plugin code or cached expression state.
+        let kind = match kind {
+            EventKind::PitchBend { semitones } if semitones.is_finite() => EventKind::PitchBend {
+                semitones: semitones.clamp(-48.0, 48.0),
+            },
+            EventKind::PitchBendRange { semitones } if semitones.is_finite() => {
+                EventKind::PitchBendRange {
+                    semitones: semitones.clamp(0.0, 48.0),
+                }
+            }
+            EventKind::ChannelPressure { value } if value.is_finite() => {
+                EventKind::ChannelPressure {
+                    value: value.clamp(0.0, 1.0),
+                }
+            }
+            EventKind::PolyPressure { key, value } if key < 128 && value.is_finite() => {
+                EventKind::PolyPressure {
+                    key,
+                    value: value.clamp(0.0, 1.0),
+                }
+            }
+            EventKind::ResetExpression => kind,
+            _ => return false,
+        };
+        let count = match self.dialect {
+            Dialect::None => return true,
+            Dialect::Clap => match kind {
+                EventKind::PitchBendRange { .. } => 0,
+                EventKind::PolyPressure { key, .. } => self
+                    .voices
+                    .items
+                    .iter()
+                    .filter(|(_, k)| *k == i16::from(key))
+                    .count(),
+                EventKind::ResetExpression => self.voices.items.len() * 2,
+                _ => self.voices.items.len(),
+            },
+            Dialect::Midi => match kind {
+                EventKind::PitchBendRange { .. } => 7,
+                EventKind::ResetExpression => {
+                    2 + self.expression.keys.iter().filter(|k| k.is_some()).count()
+                }
+                _ => 1,
+            },
+        };
+        let configure = self.dialect == Dialect::Midi
+            && !self.expression.midi_configured
+            && !matches!(kind, EventKind::PitchBendRange { .. });
+        if !self.events.has_room(count + if configure { 7 } else { 0 }) {
+            return false;
+        }
+        if configure {
+            self.push_expression(
+                time,
+                EventKind::PitchBendRange {
+                    semitones: self.expression.range,
+                },
+            );
+        }
+        match self.dialect {
+            Dialect::Clap => {
+                for &(id, key) in &self.voices.items {
+                    match kind {
+                        EventKind::PitchBend { semitones } => {
+                            self.events.push_expression(
+                                time,
+                                CLAP_NOTE_EXPRESSION_TUNING,
+                                id,
+                                key,
+                                f64::from(semitones),
+                            );
+                        }
+                        EventKind::ChannelPressure { value } => {
+                            self.events.push_expression(
+                                time,
+                                CLAP_NOTE_EXPRESSION_PRESSURE,
+                                id,
+                                key,
+                                f64::from(self.expression.keys[key as usize].unwrap_or(value)),
+                            );
+                        }
+                        EventKind::PolyPressure { key: k, value } if i16::from(k) == key => {
+                            self.events.push_expression(
+                                time,
+                                CLAP_NOTE_EXPRESSION_PRESSURE,
+                                id,
+                                key,
+                                f64::from(value),
+                            );
+                        }
+                        EventKind::ResetExpression => {
+                            self.events.push_expression(
+                                time,
+                                CLAP_NOTE_EXPRESSION_TUNING,
+                                id,
+                                key,
+                                0.0,
+                            );
+                            self.events.push_expression(
+                                time,
+                                CLAP_NOTE_EXPRESSION_PRESSURE,
+                                id,
+                                key,
+                                0.0,
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Dialect::Midi => match kind {
+                EventKind::PitchBend { semitones } => {
+                    self.events.push_midi(
+                        time,
+                        0,
+                        midi_bend(semitones, self.expression.range),
+                        false,
+                    );
+                }
+                EventKind::PitchBendRange { semitones } => {
+                    // RPN 0, coarse/fine pitch sensitivity, then restore RPN null.
+                    // All seven events fit before the first controller is emitted.
+                    let cents = (semitones * 100.0).round() as u16;
+                    for (cc, value) in [
+                        (101, 0),
+                        (100, 0),
+                        (6, (cents / 100) as u8),
+                        (38, (cents % 100) as u8),
+                        (101, 127),
+                        (100, 127),
+                    ] {
+                        self.events.push_midi(time, 0, [0xb0, cc, value], false);
+                    }
+                    self.events.push_midi(
+                        time,
+                        0,
+                        midi_bend(self.expression.bend, semitones),
+                        false,
+                    );
+                }
+                EventKind::ChannelPressure { value } => {
+                    self.events
+                        .push_midi(time, 0, [0xd0, (value * 127.0).round() as u8, 0], false);
+                }
+                EventKind::PolyPressure { key, value } => {
+                    self.events.push_midi(
+                        time,
+                        0,
+                        [0xa0, key, (value * 127.0).round() as u8],
+                        false,
+                    );
+                }
+                EventKind::ResetExpression => {
+                    self.events.push_midi(time, 0, [0xe0, 0, 64], false);
+                    self.events.push_midi(time, 0, [0xd0, 0, 0], false);
+                    for (key, value) in self.expression.keys.iter().enumerate() {
+                        if value.is_some() {
+                            self.events.push_midi(time, 0, [0xa0, key as u8, 0], false);
+                        }
+                    }
+                }
+                _ => {}
+            },
+            Dialect::None => {}
+        }
+        match kind {
+            EventKind::PitchBend { semitones } => self.expression.bend = semitones,
+            EventKind::PitchBendRange { semitones } => {
+                self.expression.range = semitones;
+                self.expression.midi_configured = true;
+            }
+            EventKind::ChannelPressure { value } => self.expression.pressure = value,
+            EventKind::PolyPressure { key, value } => {
+                self.expression.keys[usize::from(key)] = Some(value)
+            }
+            EventKind::ResetExpression => self.expression.clear(),
+            _ => {}
+        }
+        true
     }
 
     /// Releases (or chokes) every held note. The wildcard form goes first: it
@@ -573,6 +855,8 @@ impl Device for ClapDevice {
 
     fn reset(&mut self) {
         self.voices.clear();
+        self.expression.clear();
+        self.expression.midi_configured = false;
         self.events.clear();
         self.sleeping = false;
         if self.ready && self.started {
@@ -723,3 +1007,7 @@ impl Drop for ClapDevice {
         self.halt();
     }
 }
+
+#[cfg(test)]
+#[path = "expression_tests.rs"]
+mod expression_tests;

@@ -88,6 +88,20 @@ fn busy_events(n: u32, frames: u32) -> Vec<DeviceEvent> {
                 value: (i % 10) as f32 / 10.0,
             },
         ));
+        for kind in [
+            EventKind::PitchBend {
+                semitones: (i % 24) as f32 - 12.0,
+            },
+            EventKind::ChannelPressure {
+                value: (i % 10) as f32 / 10.0,
+            },
+            EventKind::PolyPressure {
+                key: 40 + (i % 40) as u8,
+                value: 0.5,
+            },
+        ] {
+            events.push(at(offset, kind));
+        }
         events.push(at(
             offset + 1,
             EventKind::NoteOff {
