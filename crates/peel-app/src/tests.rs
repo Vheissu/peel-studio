@@ -1338,3 +1338,20 @@ fn note_tools_preview_cancel_and_apply() {
     h.studio.session.doc.undo();
     assert_eq!(shape(&h), original);
 }
+
+#[test]
+fn the_welcome_screen_starts_a_house_project() {
+    let mut h = Harness::new();
+    h.studio.welcome = true;
+    h.frame();
+    h.click(W::new(("welcome-template", 1usize)));
+    assert!(!h.studio.welcome);
+    assert_eq!(h.session().project().bpm(), 124.0);
+    assert!(
+        h.session()
+            .project()
+            .channels
+            .iter()
+            .any(|c| c.name == "Pad")
+    );
+}

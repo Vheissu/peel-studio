@@ -7,7 +7,8 @@ use peel_ui::{Align, CursorIcon, Id as W, LayerId, Rect, Ui, icons, vec2};
 
 /// What the user picked.
 pub enum WelcomeAction {
-    NewBeat,
+    /// Start from `peel_session::template::templates()[i]`.
+    Template(usize),
     Empty,
     Open,
     OpenPath(PathBuf),
@@ -107,10 +108,33 @@ pub fn draw(ui: &mut Ui, data: WelcomeData) -> Option<WelcomeAction> {
             left.cut_top(10.0);
             if big_button(ui, W::new(("welcome-btn", which)), r, icon, label, primary) {
                 action = Some(match which {
-                    0 => WelcomeAction::NewBeat,
+                    0 => WelcomeAction::Template(0),
                     1 => WelcomeAction::Empty,
                     _ => WelcomeAction::Open,
                 });
+            }
+        }
+        // More starting points.
+        left.cut_top(6.0);
+        ui.text(
+            left.cut_top(20.0),
+            "Start from",
+            t.caption,
+            t.text_dim,
+            Align::Start,
+        );
+        left.cut_top(4.0);
+        let mut row = left.cut_top(34.0);
+        for (i, (name, _)) in peel_session::template::templates()
+            .into_iter()
+            .enumerate()
+            .skip(1)
+        {
+            let w = ui.measure(name, t.label).x + 32.0;
+            let r = row.cut_left(w);
+            row.cut_left(8.0);
+            if ui.button(W::new(("welcome-template", i)), r, name).clicked {
+                action = Some(WelcomeAction::Template(i));
             }
         }
         // Startup toggle.

@@ -1224,6 +1224,36 @@ mod tests {
     }
 
     #[test]
+    fn every_template_renders_at_a_sensible_level() {
+        let dir = std::env::temp_dir().join(format!("peel-tpl-test-{}", Id::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for (name, make) in template::templates() {
+            let out = dir.join("t.wav");
+            let settings = ExportSettings {
+                path: out.clone(),
+                sample_rate: 48_000,
+                bits: 32,
+                tail_seconds: 0.0,
+            };
+            let progress = std::sync::atomic::AtomicU32::new(0);
+            let cancel = std::sync::atomic::AtomicBool::new(false);
+            render_to_wav(&make(), &HashMap::new(), &settings, &progress, &cancel).expect("render");
+            let buf = peel_media::decode_file(&out).expect("decode");
+            let x = buf.left();
+            let peak = x.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+            let rms = (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt();
+            eprintln!(
+                "{name}: peak {peak:.3} rms {rms:.3} ({:.1} s)",
+                x.len() as f32 / 48_000.0
+            );
+            assert!(x.iter().all(|v| v.is_finite()), "{name}");
+            assert!(peak > 0.3 && peak <= 1.0, "{name}: peak {peak}");
+            assert!(rms > 0.04, "{name}: rms {rms}");
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn a_sidechain_that_closes_a_loop_is_rejected() {
         let mut project = template::beat_and_melody();
         let master = project.mixer.tracks[0].id;

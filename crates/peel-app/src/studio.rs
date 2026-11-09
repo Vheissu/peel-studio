@@ -108,9 +108,13 @@ impl Studio {
         let Some(action) = action else { return };
         self.welcome = false;
         match action {
-            WelcomeAction::NewBeat => {
-                self.session
-                    .replace_project(peel_session::template::beat_and_melody());
+            WelcomeAction::Template(i) => {
+                let make = peel_session::template::templates()
+                    .get(i)
+                    .map_or(peel_session::template::beat_and_melody as fn() -> _, |t| {
+                        t.1
+                    });
+                self.session.replace_project(make());
                 self.reset_workspace();
             }
             WelcomeAction::Empty => {
@@ -141,7 +145,11 @@ impl Studio {
     /// Periodically saves changed work to the autosave area off the UI
     /// thread so a crash never loses more than a minute.
     fn autosave(&mut self, force: bool) {
-        if cfg!(test) {
+        // Tests, screenshots and other debug runs leave the user's data alone.
+        if cfg!(test)
+            || std::env::var_os("PEEL_NO_PREFS").is_some()
+            || std::env::var_os("PEEL_SCREENSHOT").is_some()
+        {
             return;
         }
         let rev = self.session.doc.revision();
