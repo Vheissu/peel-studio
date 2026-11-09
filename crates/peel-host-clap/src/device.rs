@@ -137,6 +137,16 @@ impl Expression {
         self.keys.fill(None);
     }
 }
+/// Latest desired values survive event-list pressure and plugin-internal resets.
+/// Each dirty field is replayed once before ordinary events in the next chunk.
+#[derive(Default)]
+struct PendingExpression {
+    bend: bool,
+    range: bool,
+    pressure: bool,
+    keys: u128,
+}
+
 fn midi_bend(semitones: f32, range: f32) -> [u8; 3] {
     let value = if range > 0.0 {
         (semitones / range).clamp(-1.0, 1.0)
@@ -145,6 +155,12 @@ fn midi_bend(semitones: f32, range: f32) -> [u8; 3] {
     };
     let raw = 8192 + (value * if value < 0.0 { 8192.0 } else { 8191.0 }).round() as i32;
     [0xe0, (raw & 127) as u8, ((raw >> 7) & 127) as u8]
+}
+
+impl PendingExpression {
+    fn any(&self) -> bool {
+        self.bend || self.range || self.pressure || self.keys != 0
+    }
 }
 
 /// A CLAP plugin hosted as a [`Device`].
@@ -168,6 +184,7 @@ pub struct ClapDevice {
     pending: PendingParams,
     voices: ActiveNotes,
     expression: Expression,
+    pending_expression: PendingExpression,
     transport: clap_event_transport,
     steady_time: i64,
     sample_rate: f32,
@@ -243,6 +260,7 @@ impl ClapDevice {
             pending: PendingParams::new(params),
             voices: ActiveNotes::new(),
             expression: Expression::default(),
+            pending_expression: PendingExpression::default(),
             transport: new_transport(),
             steady_time: 0,
             info: info.clone(),
@@ -326,6 +344,8 @@ impl ClapDevice {
                 self.sample_rate = sample_rate;
                 self.max_block = max_block;
                 self.audio = build_audio(&self.shared, self.kind, max_block);
+                self.voices.clear();
+                self.replay_expression_after_reset();
                 self.sleeping = false;
             }
             Err(e) => {
@@ -351,12 +371,14 @@ impl ClapDevice {
                 let inherited = usize::from(self.expression.bend != 0.0)
                     + usize::from(self.expression.pressure != 0.0);
                 let midi_extra = if self.dialect == Dialect::Midi {
-                    usize::from(self.expression.keys[usize::from(key)].is_some())
-                        + if self.expression.midi_configured {
-                            0
-                        } else {
-                            7
-                        }
+                    usize::from(
+                        self.expression.keys[usize::from(key)].is_some()
+                            || self.pending_expression.keys & (1u128 << key) != 0,
+                    ) + if self.expression.midi_configured && !self.pending_expression.range {
+                        0
+                    } else {
+                        7
+                    }
                 } else {
                     0
                 };
@@ -372,7 +394,7 @@ impl ClapDevice {
                     return;
                 }
                 if self.dialect == Dialect::Midi {
-                    if !self.expression.midi_configured {
+                    if !self.expression.midi_configured || self.pending_expression.range {
                         self.push_expression(
                             time,
                             EventKind::PitchBendRange {
@@ -380,8 +402,11 @@ impl ClapDevice {
                             },
                         );
                     }
-                    if self.expression.keys[usize::from(key)].is_some() {
+                    if self.expression.keys[usize::from(key)].is_some()
+                        || self.pending_expression.keys & (1u128 << key) != 0
+                    {
                         self.events.push_midi(time, 0, [0xa0, key, 0], false);
+                        self.pending_expression.keys &= !(1u128 << key);
                     }
                 }
                 let ok = match self.dialect {
@@ -495,59 +520,154 @@ impl ClapDevice {
     }
 
     fn push_expression(&mut self, time: u32, kind: EventKind) -> bool {
-        // Non-finite input never reaches plugin code or cached expression state.
+        // Cache desired state even when the bounded plugin event list is full.
+        // Invalid values never become pending and never reach plugin code.
         let kind = match kind {
-            EventKind::PitchBend { semitones } if semitones.is_finite() => EventKind::PitchBend {
-                semitones: semitones.clamp(-48.0, 48.0),
-            },
+            EventKind::PitchBend { semitones } if semitones.is_finite() => {
+                let semitones = semitones.clamp(-48.0, 48.0);
+                self.expression.bend = semitones;
+                self.pending_expression.bend = true;
+                EventKind::PitchBend { semitones }
+            }
             EventKind::PitchBendRange { semitones } if semitones.is_finite() => {
-                EventKind::PitchBendRange {
-                    semitones: semitones.clamp(0.0, 48.0),
-                }
+                let semitones = semitones.clamp(0.0, 48.0);
+                self.expression.range = semitones;
+                self.pending_expression.range = true;
+                EventKind::PitchBendRange { semitones }
             }
             EventKind::ChannelPressure { value } if value.is_finite() => {
-                EventKind::ChannelPressure {
-                    value: value.clamp(0.0, 1.0),
-                }
+                let value = value.clamp(0.0, 1.0);
+                self.expression.pressure = value;
+                self.pending_expression.pressure = true;
+                EventKind::ChannelPressure { value }
             }
             EventKind::PolyPressure { key, value } if key < 128 && value.is_finite() => {
-                EventKind::PolyPressure {
-                    key,
-                    value: value.clamp(0.0, 1.0),
-                }
+                let value = value.clamp(0.0, 1.0);
+                self.expression.keys[usize::from(key)] = Some(value);
+                self.pending_expression.keys |= 1u128 << key;
+                EventKind::PolyPressure { key, value }
             }
-            EventKind::ResetExpression => kind,
+            EventKind::ResetExpression => {
+                self.pending_expression.keys |= self.expression_key_mask();
+                self.expression.clear();
+                self.pending_expression.bend = true;
+                self.pending_expression.pressure = true;
+                kind
+            }
             _ => return false,
         };
+        self.retry_expression(time, kind)
+    }
+
+    fn expression_key_mask(&self) -> u128 {
+        self.expression
+            .keys
+            .iter()
+            .enumerate()
+            .fold(0, |mask, (key, value)| {
+                mask | if value.is_some() { 1u128 << key } else { 0 }
+            })
+    }
+
+    fn retry_expression(&mut self, time: u32, kind: EventKind) -> bool {
+        if !self.emit_expression(time, kind) {
+            return false;
+        }
+        match kind {
+            EventKind::PitchBend { .. } => self.pending_expression.bend = false,
+            EventKind::PitchBendRange { .. } => self.pending_expression.range = false,
+            EventKind::ChannelPressure { .. } => {
+                self.pending_expression.pressure = false;
+                // Native channel pressure broadcasts then reapplies every key override.
+                if self.dialect == Dialect::Clap {
+                    self.pending_expression.keys = 0;
+                }
+            }
+            EventKind::PolyPressure { key, .. } => self.pending_expression.keys &= !(1u128 << key),
+            EventKind::ResetExpression => {
+                self.pending_expression.bend = false;
+                self.pending_expression.pressure = false;
+                self.pending_expression.keys = 0;
+            }
+            _ => {}
+        }
+        true
+    }
+
+    fn replay_expression_after_reset(&mut self) {
+        self.expression.midi_configured = false;
+        self.pending_expression.range = self.dialect == Dialect::Midi;
+        self.pending_expression.bend = true;
+        self.pending_expression.pressure = true;
+        self.pending_expression.keys |= self.expression_key_mask();
+    }
+
+    fn flush_expression(&mut self) {
+        if self.pending_expression.range {
+            self.retry_expression(
+                0,
+                EventKind::PitchBendRange {
+                    semitones: self.expression.range,
+                },
+            );
+        }
+        if self.pending_expression.bend {
+            self.retry_expression(
+                0,
+                EventKind::PitchBend {
+                    semitones: self.expression.bend,
+                },
+            );
+        }
+        if self.pending_expression.pressure {
+            self.retry_expression(
+                0,
+                EventKind::ChannelPressure {
+                    value: self.expression.pressure,
+                },
+            );
+        }
+        let mut keys = self.pending_expression.keys;
+        while keys != 0 {
+            let key = keys.trailing_zeros() as u8;
+            keys &= keys - 1;
+            self.retry_expression(
+                0,
+                EventKind::PolyPressure {
+                    key,
+                    value: self.expression.keys[usize::from(key)].unwrap_or(0.0),
+                },
+            );
+        }
+    }
+
+    fn emit_expression(&mut self, time: u32, kind: EventKind) -> bool {
         let count = match self.dialect {
             Dialect::None => return true,
             Dialect::Clap => match kind {
                 EventKind::PitchBendRange { .. } => 0,
-                EventKind::PolyPressure { key, .. } => self
-                    .voices
-                    .items
-                    .iter()
-                    .filter(|(_, k)| *k == i16::from(key))
-                    .count(),
-                EventKind::ResetExpression => self.voices.items.len() * 2,
-                _ => self.voices.items.len(),
+                EventKind::ChannelPressure { .. } => {
+                    1 + self.expression.keys.iter().filter(|k| k.is_some()).count()
+                }
+                EventKind::ResetExpression => 2,
+                _ => 1,
             },
             Dialect::Midi => match kind {
                 EventKind::PitchBendRange { .. } => 7,
                 EventKind::ResetExpression => {
-                    2 + self.expression.keys.iter().filter(|k| k.is_some()).count()
+                    2 + self.pending_expression.keys.count_ones() as usize
                 }
                 _ => 1,
             },
         };
         let configure = self.dialect == Dialect::Midi
-            && !self.expression.midi_configured
+            && (!self.expression.midi_configured || self.pending_expression.range)
             && !matches!(kind, EventKind::PitchBendRange { .. });
         if !self.events.has_room(count + if configure { 7 } else { 0 }) {
             return false;
         }
         if configure {
-            self.push_expression(
+            self.retry_expression(
                 time,
                 EventKind::PitchBendRange {
                     semitones: self.expression.range,
@@ -556,53 +676,62 @@ impl ClapDevice {
         }
         match self.dialect {
             Dialect::Clap => {
-                for &(id, key) in &self.voices.items {
-                    match kind {
-                        EventKind::PitchBend { semitones } => {
-                            self.events.push_expression(
-                                time,
-                                CLAP_NOTE_EXPRESSION_TUNING,
-                                id,
-                                key,
-                                f64::from(semitones),
-                            );
-                        }
-                        EventKind::ChannelPressure { value } => {
-                            self.events.push_expression(
-                                time,
-                                CLAP_NOTE_EXPRESSION_PRESSURE,
-                                id,
-                                key,
-                                f64::from(self.expression.keys[key as usize].unwrap_or(value)),
-                            );
-                        }
-                        EventKind::PolyPressure { key: k, value } if i16::from(k) == key => {
-                            self.events.push_expression(
-                                time,
-                                CLAP_NOTE_EXPRESSION_PRESSURE,
-                                id,
-                                key,
-                                f64::from(value),
-                            );
-                        }
-                        EventKind::ResetExpression => {
-                            self.events.push_expression(
-                                time,
-                                CLAP_NOTE_EXPRESSION_TUNING,
-                                id,
-                                key,
-                                0.0,
-                            );
-                            self.events.push_expression(
-                                time,
-                                CLAP_NOTE_EXPRESSION_PRESSURE,
-                                id,
-                                key,
-                                0.0,
-                            );
-                        }
-                        _ => {}
+                // CLAP wildcard addressing includes released voices still ringing
+                // inside the plugin; NOTE_OFF is not the end of a voice's lifetime.
+                match kind {
+                    EventKind::PitchBend { semitones } => {
+                        self.events.push_expression(
+                            time,
+                            CLAP_NOTE_EXPRESSION_TUNING,
+                            -1,
+                            -1,
+                            f64::from(semitones),
+                        );
                     }
+                    EventKind::ChannelPressure { value } => {
+                        self.events.push_expression(
+                            time,
+                            CLAP_NOTE_EXPRESSION_PRESSURE,
+                            -1,
+                            -1,
+                            f64::from(value),
+                        );
+                        for (key, pressure) in self.expression.keys.iter().enumerate() {
+                            if let Some(pressure) = pressure {
+                                let combined = value + pressure - value * pressure;
+                                self.events.push_expression(
+                                    time,
+                                    CLAP_NOTE_EXPRESSION_PRESSURE,
+                                    -1,
+                                    key as i16,
+                                    f64::from(combined),
+                                );
+                            }
+                        }
+                    }
+                    EventKind::PolyPressure { key, value } => {
+                        let channel = self.expression.pressure;
+                        let combined = channel + value - channel * value;
+                        self.events.push_expression(
+                            time,
+                            CLAP_NOTE_EXPRESSION_PRESSURE,
+                            -1,
+                            i16::from(key),
+                            f64::from(combined),
+                        );
+                    }
+                    EventKind::ResetExpression => {
+                        self.events
+                            .push_expression(time, CLAP_NOTE_EXPRESSION_TUNING, -1, -1, 0.0);
+                        self.events.push_expression(
+                            time,
+                            CLAP_NOTE_EXPRESSION_PRESSURE,
+                            -1,
+                            -1,
+                            0.0,
+                        );
+                    }
+                    _ => {}
                 }
             }
             Dialect::Midi => match kind {
@@ -615,8 +744,7 @@ impl ClapDevice {
                     );
                 }
                 EventKind::PitchBendRange { semitones } => {
-                    // RPN 0, coarse/fine pitch sensitivity, then restore RPN null.
-                    // All seven events fit before the first controller is emitted.
+                    // Reserve the entire RPN transaction before selecting a controller.
                     let cents = (semitones * 100.0).round() as u16;
                     for (cc, value) in [
                         (101, 0),
@@ -634,6 +762,7 @@ impl ClapDevice {
                         midi_bend(self.expression.bend, semitones),
                         false,
                     );
+                    self.expression.midi_configured = true;
                 }
                 EventKind::ChannelPressure { value } => {
                     self.events
@@ -650,28 +779,16 @@ impl ClapDevice {
                 EventKind::ResetExpression => {
                     self.events.push_midi(time, 0, [0xe0, 0, 64], false);
                     self.events.push_midi(time, 0, [0xd0, 0, 0], false);
-                    for (key, value) in self.expression.keys.iter().enumerate() {
-                        if value.is_some() {
-                            self.events.push_midi(time, 0, [0xa0, key as u8, 0], false);
-                        }
+                    let mut keys = self.pending_expression.keys;
+                    while keys != 0 {
+                        let key = keys.trailing_zeros() as u8;
+                        keys &= keys - 1;
+                        self.events.push_midi(time, 0, [0xa0, key, 0], false);
                     }
                 }
                 _ => {}
             },
             Dialect::None => {}
-        }
-        match kind {
-            EventKind::PitchBend { semitones } => self.expression.bend = semitones,
-            EventKind::PitchBendRange { semitones } => {
-                self.expression.range = semitones;
-                self.expression.midi_configured = true;
-            }
-            EventKind::ChannelPressure { value } => self.expression.pressure = value,
-            EventKind::PolyPressure { key, value } => {
-                self.expression.keys[usize::from(key)] = Some(value)
-            }
-            EventKind::ResetExpression => self.expression.clear(),
-            _ => {}
         }
         true
     }
@@ -855,8 +972,7 @@ impl Device for ClapDevice {
 
     fn reset(&mut self) {
         self.voices.clear();
-        self.expression.clear();
-        self.expression.midi_configured = false;
+        self.replay_expression_after_reset();
         self.events.clear();
         self.sleeping = false;
         if self.ready && self.started {
@@ -931,6 +1047,7 @@ impl Device for ClapDevice {
         while pos < frames {
             let n = (frames - pos).min(self.max_block);
             self.events.clear();
+            self.flush_expression();
             if pos == 0 {
                 self.pending
                     .drain_into(&self.shared.table, &mut self.events);
@@ -964,6 +1081,7 @@ impl Device for ClapDevice {
         if self.reset_after_block {
             self.reset_after_block = false;
             self.shared.reset();
+            self.replay_expression_after_reset();
         }
         self.sleeping = match status {
             CLAP_PROCESS_SLEEP => true,
@@ -985,7 +1103,9 @@ impl Device for ClapDevice {
     /// True after the plugin returned `CLAP_PROCESS_SLEEP` (or went quiet
     /// after `CONTINUE_IF_NOT_QUIET`), until it asks to be processed again.
     fn is_silent(&self) -> bool {
-        self.sleeping && !self.shared.host.shared.is_raised(F_PROCESS | F_FLUSH)
+        self.sleeping
+            && !self.pending_expression.any()
+            && !self.shared.host.shared.is_raised(F_PROCESS | F_FLUSH)
     }
 }
 

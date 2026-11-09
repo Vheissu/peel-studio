@@ -244,3 +244,52 @@ fn loading_does_allocate_so_it_belongs_off_the_audio_thread() {
     });
     assert!(n > 0);
 }
+
+#[test]
+fn deferred_expression_resets_and_replay_do_not_allocate() {
+    for id in [SINE, MIDI_SINE] {
+        let mut dev = ClapDevice::load(&info(id), SR, 128).unwrap();
+        let ctx = ProcessContext::new(SR);
+        let (mut l, mut r) = ([0.0f32; 256], [0.0f32; 256]);
+        let initial = [
+            at(0, EventKind::PitchBend { semitones: 7.0 }),
+            at(0, EventKind::ChannelPressure { value: 0.8 }),
+            at(
+                0,
+                EventKind::PolyPressure {
+                    key: 60,
+                    value: 0.6,
+                },
+            ),
+            at(
+                1,
+                EventKind::NoteOn {
+                    key: 60,
+                    velocity: 1.0,
+                    voice: 1,
+                },
+            ),
+        ];
+        dev.process(&ctx, &initial, &mut l, &mut r);
+        let mut full = vec![
+            at(
+                0,
+                EventKind::Param {
+                    id: 100,
+                    value: 0.5
+                }
+            );
+            4000
+        ];
+        full.push(at(127, EventKind::ResetExpression));
+        let allocations = count_allocations(|| {
+            // The full first chunk defers reset; the next chunk replays it.
+            dev.process(&ctx, &full, &mut l, &mut r);
+            dev.reset();
+            dev.process(&ctx, &[], &mut l, &mut r);
+        });
+        assert_eq!(allocations, 0, "{id}: pending expression allocated");
+        assert!(dev.stats().dropped_events > 0);
+        assert_eq!(dev.stats().process_errors, 0);
+    }
+}
