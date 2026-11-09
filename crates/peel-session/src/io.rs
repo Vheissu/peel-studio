@@ -17,15 +17,22 @@
 //! it points the live target at the selected channel's instrument, rescans
 //! the ports every couple of seconds and drains the recorded notes.
 
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+mod routing;
+pub use routing::{OutputChannels, OutputRoute, OutputRouteStatus};
+
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use peel_document::Id;
 use peel_engine::{EngineCommand, EngineConfig, EngineHandle, LiveInput, RecordedNote};
-use peel_midi_io::{MidiEvent, MidiInput};
+use peel_midi_io::MidiInput;
 
 pub use peel_engine::{LiveTiming, OutputDeviceInfo, list_output_devices};
-pub use peel_midi_io::{MidiPortInfo, PortSelection};
+pub use peel_midi_io::{MidiEvent, MidiPortInfo, PortSelection};
+
+mod controls;
+pub use controls::{MidiControlTarget, MidiLearnStatus, MidiMapping};
 
 use crate::{SampleLoader, Session};
 
@@ -65,6 +72,9 @@ pub struct RecordedMidi {
 #[derive(Default)]
 pub(crate) struct MidiBridge {
     live: Mutex<Option<LiveInput>>,
+    controls: controls::ControlMailbox,
+    hardware_enabled: AtomicBool,
+    messages: AtomicU64,
 }
 
 impl MidiBridge {
@@ -72,13 +82,62 @@ impl MidiBridge {
         *self.live.lock().unwrap_or_else(PoisonError::into_inner) = live;
     }
 
+    fn release_all(&self) {
+        let guard = self.live.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(live) = guard.as_ref() {
+            live.sustain(false);
+            live.all_notes_off(peel_engine::live::LIVE_TARGET_NONE);
+        }
+    }
+
+    fn handle_hardware(&self, event: &MidiEvent) {
+        self.handle_inner(event, true);
+    }
+
     /// Runs on the MIDI callback thread: never blocks on the UI.
     pub(crate) fn handle(&self, event: &MidiEvent) {
+        self.handle_inner(event, false);
+    }
+
+    fn handle_inner(&self, event: &MidiEvent, hardware: bool) {
+        if hardware && !self.hardware_enabled.load(Ordering::Acquire) {
+            return;
+        }
+        self.messages.fetch_add(1, Ordering::Relaxed);
+        // Controller traffic never takes the live-input mutex. A flood can
+        // only replace one value per channel/CC in the fixed mailbox.
+        match *event {
+            MidiEvent::ControlChange {
+                channel,
+                controller,
+                value,
+            } if !matches!(controller, 64 | 120 | 123) => {
+                self.controls.push(channel, controller, value);
+                return;
+            }
+            MidiEvent::ModWheel { channel, value } => {
+                self.controls.push(channel, 1, value);
+                return;
+            }
+            _ => {}
+        }
         let guard = self.live.lock().unwrap_or_else(PoisonError::into_inner);
+        // Recheck while holding the live lock: changing the channel filter
+        // then releasing notes cannot race a late note from the old channel.
+        if !self.controls.accepts(event.channel())
+            || (hardware && !self.hardware_enabled.load(Ordering::Acquire))
+        {
+            return;
+        }
         let Some(live) = guard.as_ref() else {
             return;
         };
         match *event {
+            MidiEvent::NoteOn {
+                key, velocity: 0, ..
+            } => {
+                live.note_to_target(key, 0.0, false);
+            }
             MidiEvent::NoteOn { key, velocity, .. } => {
                 live.note_to_target(key, f32::from(velocity) / 127.0, true);
             }
@@ -88,11 +147,23 @@ impl MidiBridge {
             MidiEvent::Sustain { down, .. } => {
                 live.sustain(down);
             }
+            MidiEvent::ControlChange {
+                controller: 64,
+                value,
+                ..
+            } => {
+                live.sustain(value >= 64);
+            }
             MidiEvent::AllNotesOff { .. } | MidiEvent::AllSoundOff { .. } => {
                 live.all_notes_off_target();
             }
-            // Pitch bend, mod wheel and other controllers are parsed but not
-            // mapped to anything yet.
+            MidiEvent::ControlChange {
+                controller: 120 | 123,
+                ..
+            } => {
+                live.all_notes_off_target();
+            }
+            // Pitch bend is parsed but not mapped yet.
             _ => {}
         }
     }
@@ -104,10 +175,12 @@ pub(crate) struct IoState {
     pub(crate) silent: bool,
     /// What the running engine was started with.
     pub(crate) config: EngineConfig,
+    output_routes: routing::RoutingState,
     midi: Option<MidiInput>,
     midi_enabled: bool,
     selection: PortSelection,
     bridge: Arc<MidiBridge>,
+    controls: controls::MidiControls,
     timing: LiveTiming,
     live_channel: Option<Id>,
     last_scan: Option<Instant>,
@@ -120,10 +193,12 @@ impl IoState {
         IoState {
             silent,
             config,
+            output_routes: routing::RoutingState::default(),
             midi: None,
             midi_enabled: !silent,
             selection: PortSelection::All,
             bridge: Arc::new(MidiBridge::default()),
+            controls: controls::MidiControls::default(),
             timing: LiveTiming::default(),
             live_channel: None,
             last_scan: None,
@@ -258,6 +333,7 @@ impl Session {
         self.io.config = config;
         self.reinstall_engine(old_rate, position, metronome);
         self.reopen_input();
+        self.reopen_output_routes();
 
         if let Some(reason) = failure {
             let message = format!("Could not switch audio output: {reason}");
@@ -365,6 +441,9 @@ impl Session {
             .map(|d| d.slot);
         let target = self.engine.live_target();
         if target.get() != slot {
+            if target.get().is_some() {
+                self.io.bridge.release_all();
+            }
             target.set(slot);
         }
     }
@@ -401,6 +480,9 @@ impl Session {
 
     /// Opens every input (the default) or a single one.
     pub fn select_midi_input(&mut self, selection: PortSelection) {
+        if self.io.selection != selection {
+            self.io.bridge.release_all();
+        }
         self.io.selection = selection.clone();
         if let Some(midi) = &self.io.midi {
             midi.select(selection);
@@ -410,6 +492,10 @@ impl Session {
     /// Turns hardware MIDI input on or off. It is on for [`Session::new`]
     /// and off for [`Session::new_silent`].
     pub fn set_midi_enabled(&mut self, on: bool) {
+        self.io.bridge.hardware_enabled.store(on, Ordering::Release);
+        if !on {
+            self.io.bridge.release_all();
+        }
         self.io.midi_enabled = on;
         match (on, self.io.midi.is_some()) {
             (true, false) => self.start_midi(),
@@ -426,9 +512,13 @@ impl Session {
     }
 
     fn start_midi(&mut self) {
+        self.io
+            .bridge
+            .hardware_enabled
+            .store(true, Ordering::Release);
         let bridge = self.io.bridge.clone();
         self.io.midi = Some(MidiInput::with_selection(
-            move |event| bridge.handle(event),
+            move |event| bridge.handle_hardware(event),
             self.io.selection.clone(),
         ));
         self.io.last_scan = Some(Instant::now());
@@ -440,6 +530,7 @@ impl Session {
     /// (the work happens on the MIDI port thread, not here).
     pub fn poll_midi(&mut self) {
         self.refresh_live_target();
+        self.poll_midi_controls();
         self.engine.drain_recorded(&mut self.io.recorded);
         let excess = self.io.recorded.len().saturating_sub(MAX_PENDING_RECORDED);
         if excess > 0 {
@@ -472,6 +563,9 @@ impl Session {
                 .map(|p| p.name.clone())
                 .collect();
             self.io.known_inputs = now;
+            if !left.is_empty() {
+                self.io.bridge.release_all();
+            }
             if !joined.is_empty() {
                 self.notify(
                     format!("MIDI input connected: {}", joined.join(", ")),
@@ -526,10 +620,10 @@ impl Session {
         self.engine.live_stats().note_ons()
     }
 
-    /// All MIDI messages received on the open ports so far, including
-    /// controllers the application does not use.
+    /// All hardware and software MIDI messages received so far, including
+    /// controllers the application does not use and filtered messages.
     pub fn midi_message_count(&self) -> u64 {
-        self.io.midi.as_ref().map_or(0, |m| m.event_count())
+        self.io.bridge.messages.load(Ordering::Relaxed)
     }
 }
 

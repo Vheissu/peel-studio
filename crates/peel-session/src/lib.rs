@@ -36,7 +36,9 @@ pub use export::{
     stem_tracks,
 };
 pub use io::{
-    LiveTiming, MidiPortInfo, OutputDeviceInfo, PortSelection, RecordedMidi, list_output_devices,
+    LiveTiming, MidiControlTarget, MidiEvent, MidiLearnStatus, MidiMapping, MidiPortInfo,
+    OutputChannels, OutputDeviceInfo, OutputRoute, OutputRouteStatus, PortSelection, RecordedMidi,
+    list_output_devices,
 };
 pub use peel_engine::{
     InputChannels, InputDeviceInfo, InputInfo, InputInjector, LatencyReport, list_input_devices,
