@@ -722,19 +722,16 @@ pub static PRESETS: [Preset; 19] = [
             ("unison.type", 1.0),
             ("unison.detune", 70.0),
             ("unison.spread", 1.0),
-            ("filter.type", 1.0),
-            ("filter.cutoff", 260.0),
-            ("filter.resonance", 0.3),
-            ("filter.env_amount", 5.0),
+            ("filter.type", 2.0),
+            ("filter.cutoff", 600.0),
+            ("filter.resonance", 0.5),
+            ("filter.env_amount", 0.0),
             ("filter.key_track", 0.0),
             ("filter.velocity", 0.0),
-            ("filter.attack", 4.0),
-            ("filter.decay", 1.0),
-            ("filter.sustain", 1.0),
-            ("amp.attack", 3.5),
+            ("amp.attack", 3.0),
             ("amp.sustain", 1.0),
             ("amp.release", 1.2),
-            ("env.curve", 0.0),
+            ("env.curve", 0.2),
             ("pitch.env_amount", -12.0),
             ("pitch.env_decay", 2.0),
             ("out.gain", -6.0),
@@ -1390,6 +1387,8 @@ pub(crate) struct Poly {
     lfo_value: f32,
     last_key: Option<f32>,
     out_gain: f32,
+    trem_sm: f32,
+    trem_k: f32,
     dc: [DcBlock; 2],
     stack: [Held; MONO_STACK],
     stack_len: usize,
@@ -1477,6 +1476,8 @@ impl Poly {
             lfo_value: 0.0,
             last_key: None,
             out_gain: 1.0,
+            trem_sm: 1.0,
+            trem_k: 0.005,
             dc: [DcBlock::new(48_000.0); 2],
             stack: [Held { id: 0, key: 0 }; MONO_STACK],
             stack_len: 0,
@@ -1730,6 +1731,7 @@ impl Synth for Poly {
             PolyVoice::new(sample_rate)
         });
         self.dc = [DcBlock::new(sample_rate); 2];
+        self.trem_k = 1.0 - (-1.0 / (0.004 * sample_rate)).exp();
         self.ctrl = 0;
         self.stack_len = 0;
         self.m.sr = sample_rate;
@@ -1901,11 +1903,22 @@ impl Synth for Poly {
                 r += b;
             }
             let trem = if self.lfo_target == 2 {
-                1.0 - self.lfo_depth.get() * (0.5 - 0.5 * self.lfo_value)
+                // How far into the dip the LFO is (1 at its trough). A rising
+                // saw is squared so the level snaps back fast and then
+                // settles, the shape of a sidechain compressor releasing.
+                let x = 0.5 - 0.5 * self.lfo_value;
+                let x = if self.lfo_shape == LfoShape::Saw {
+                    x * x
+                } else {
+                    x
+                };
+                1.0 - self.lfo_depth.get() * x
             } else {
                 1.0
             };
-            let g = self.out_gain * trem;
+            // A few milliseconds of slew so a stepping LFO never clicks.
+            self.trem_sm += (trem - self.trem_sm) * self.trem_k;
+            let g = self.out_gain * self.trem_sm;
             left[n] = soft_ceiling(self.dc[0].tick(l * g));
             right[n] = soft_ceiling(self.dc[1].tick(r * g));
         }
