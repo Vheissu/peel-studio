@@ -245,17 +245,25 @@ fn devices(
         }
         match row_kind {
             Row::Heading(h) => {
-                ui.text(
-                    Rect {
-                        y: row.y + 6.0,
-                        h: row.h - 6.0,
-                        ..row.shrink2(6.0, 0.0)
-                    },
-                    h,
-                    t.caption,
-                    t.text_faint,
-                    Align::Start,
-                );
+                let mut hr = Rect {
+                    y: row.y + 6.0,
+                    h: row.h - 6.0,
+                    ..row.shrink2(6.0, 0.0)
+                };
+                if h == "Plugins" && !s.plugins_scanning() {
+                    let b = ui.icon_button(
+                        W::new("browser-rescan"),
+                        hr.cut_right(22.0),
+                        icons::REPEAT,
+                        false,
+                        None,
+                    );
+                    ui.tooltip(&b, "Look for newly installed plugins");
+                    if b.clicked {
+                        s.rescan_plugins();
+                    }
+                }
+                ui.text(hr, h, t.caption, t.text_faint, Align::Start);
             }
             Row::Device(d, open) => {
                 let id = W::new(("browser-dev", d.type_id));
