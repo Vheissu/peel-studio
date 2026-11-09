@@ -36,7 +36,7 @@ use peel_dsp::voice::StealPolicy;
 use peel_dsp::{Device, DeviceDescriptor, DeviceKind, ParamId, Preset, ProcessContext};
 
 use crate::common::{
-    CTRL, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, ramp_coef,
+    CTRL, Expression, safe_bend, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, ramp_coef,
 };
 
 const MODE: ParamId = 1;
@@ -508,6 +508,10 @@ struct SaxVoice {
     gate: bool,
     env: Adsr,
     fade: Fade,
+    /// Live expression, set by the synth each control interval.
+    bend: f32,
+    xgain: f32,
+    oct: f32,
     cur_key: f32,
     target_key: f32,
     glide_on: bool,
@@ -587,6 +591,9 @@ impl SaxVoice {
             gate: false,
             env: Adsr::new(sr),
             fade: Fade::new(),
+            bend: 0.0,
+            xgain: 1.0,
+            oct: 0.0,
             cur_key: 60.0,
             target_key: 60.0,
             glide_on: false,
@@ -767,6 +774,7 @@ impl SaxVoice {
         let key = self.cur_key + vib + drift + growl_fm
             - sh.scoop * 0.9 * self.scoop_env
             - 0.12 * sag * sag;
+        let key = key + safe_bend(key, self.bend, 0.12 * sh.sr);
         let f0 = key_to_hz(key).clamp(LOWEST_HZ, 0.12 * sh.sr);
 
         // Breath pressure: envelope, vibrato, slow flutter.
@@ -815,7 +823,7 @@ impl SaxVoice {
         } else {
             c1 + (c2 - c1) * ((pe - p1) / (p2 - p1))
         };
-        let fo = (lc.exp() * (2.0f32).powf(2.0 * (sh.bright - 0.55)))
+        let fo = (lc.exp() * (2.0f32).powf(2.0 * (sh.bright - 0.55) + self.oct))
             .max(1.15 * f0)
             .min(0.45 * sh.sr);
         self.tone.coeffs = Coeffs::design(FilterKind::LowPass, sh.sr, fo, 0.65, 0.0);
@@ -828,7 +836,7 @@ impl SaxVoice {
 
         // Output level follows pressure.
         let comp = (sh.lvl.magnitude(sh.sr, f0) as f32).max(0.2).powf(-0.8);
-        let gain_new = sh.out_gain * pe.powf(GAIN_EXP) * comp / (1.0 + 0.3 * low);
+        let gain_new = sh.out_gain * pe.powf(GAIN_EXP) * comp / (1.0 + 0.3 * low) * self.xgain;
         self.gain_step = (gain_new - self.gain) / CTRL as f32;
         // Air noise grows faster than linearly so the top of the range is
         // properly breathy while the default stays subtle.
@@ -965,6 +973,7 @@ struct Held {
 }
 
 pub(crate) struct Sax {
+    expr: Expression,
     sr: f32,
     ctrl: usize,
     pool: Pool<SaxVoice>,
@@ -999,6 +1008,7 @@ impl Sax {
     pub(crate) fn new() -> Sax {
         let sr = 48_000.0;
         Sax {
+            expr: Expression::new(),
             sr,
             ctrl: 0,
             pool: Self::make_pool(sr),
@@ -1107,9 +1117,15 @@ impl Sax {
         if self.formant_body.is_nan() || (self.body.get() - self.formant_body).abs() > 1.0e-4 {
             self.set_formants();
         }
+        self.expr.tick();
         let sh = self.sh;
+        let ex = &self.expr;
         for v in &mut self.pool.voices {
             if v.active {
+                let key = v.target_key.round().clamp(0.0, 127.0) as u8;
+                v.bend = ex.bend_st();
+                v.xgain = ex.gain(key);
+                v.oct = ex.octaves(key);
                 v.control(&sh);
             }
         }
@@ -1285,6 +1301,10 @@ impl Synth for Sax {
             left[n] = out;
             right[n] = out;
         }
+    }
+
+    fn expression(&mut self) -> &mut Expression {
+        &mut self.expr
     }
 
     fn is_silent(&self) -> bool {

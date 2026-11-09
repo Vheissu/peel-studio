@@ -75,6 +75,26 @@ fn audio_path_never_allocates() {
                 },
             });
         }
+        // Expression moves while notes sound must not allocate either.
+        for (i, kind) in [
+            EventKind::PitchBend { semitones: 3.0 },
+            EventKind::PitchBendRange { semitones: 12.0 },
+            EventKind::ChannelPressure { value: 0.8 },
+            EventKind::PolyPressure { key: 41, value: 1.0 },
+            EventKind::PitchBend { semitones: -48.0 },
+            EventKind::PitchBend { semitones: 0.0 },
+            EventKind::ResetExpression,
+            EventKind::PitchBend { semitones: 5.0 },
+            EventKind::PolyPressure { key: 56, value: 0.5 },
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            events.push(DeviceEvent {
+                offset: 150 + i as u32,
+                kind,
+            });
+        }
         events.push(DeviceEvent {
             offset: 200,
             kind: EventKind::NoteOff {

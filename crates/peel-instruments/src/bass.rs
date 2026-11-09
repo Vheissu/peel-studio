@@ -26,7 +26,7 @@ use crate::analog::{
     BlOsc, DcBlock, Down2, Drift, Env, LadderCoef, PitchEnv, SatLadder, Up2, advance, cents_ratio,
     ratio, shape_by, soft_ceiling,
 };
-use crate::common::{CTRL, Instrument, Ramp, Synth, ramp_coef, vel_gain};
+use crate::common::{CTRL, Expression, safe_bend, Instrument, Ramp, Synth, ramp_coef, vel_gain};
 
 const WAVE: ParamId = 1;
 const PW: ParamId = 2;
@@ -713,6 +713,7 @@ struct Held {
 }
 
 pub(crate) struct Bass {
+    expr: Expression,
     sr: f32,
     ramp_k: f32,
     ctrl: usize,
@@ -746,6 +747,8 @@ pub(crate) struct Bass {
     velocity: f32,
     accent_amt: f32,
     vel_level: f32,
+    /// Aftertouch gain, 1.0 when nothing is pressed.
+    xgain: f32,
     stack: [Held; STACK],
     stack_len: usize,
     last_key: Option<f32>,
@@ -789,6 +792,7 @@ pub(crate) struct Bass {
 impl Bass {
     pub(crate) fn new() -> Bass {
         Bass {
+            expr: Expression::new(),
             sr: 48_000.0,
             ramp_k: 0.1,
             ctrl: 0,
@@ -820,6 +824,7 @@ impl Bass {
             lfo_value: 0.0,
             velocity: 0.0,
             accent_amt: 0.0,
+            xgain: 1.0,
             vel_level: 1.0,
             stack: [Held { id: 0, key: 0 }; STACK],
             stack_len: 0,
@@ -901,6 +906,7 @@ impl Bass {
         self.drift.tick(k);
         self.gain.tick(k);
         self.derive();
+        self.expr.tick();
         let dt = self.move_rate / self.sr * CTRL as f32;
         self.lfo_value = self.lfo.tick(LfoShape::Sine, dt);
         if self.active {
@@ -919,6 +925,9 @@ impl Bass {
         let hold = (1.3 * self.sr / CTRL as f32) as u32;
         let pe = self.pitch_env.level() * self.pitch_env_amt.get();
         let base = self.cur_key + pe;
+        let base = base + safe_bend(base + 1.0, self.expr.bend_st(), 0.45 * self.sr);
+        let key = self.target_key.round().clamp(0.0, 127.0) as u8;
+        self.xgain = self.expr.gain(key);
         let inv_sr = 1.0 / self.sr;
         let hz = key_to_hz(base);
         self.dt1 = hz * cents_ratio(self.drift_o1.tick(slew, hold) * 3.0 * dr) * inv_sr;
@@ -937,7 +946,8 @@ impl Bass {
             + self.key_track.get() * (self.cur_key - 48.0) / 12.0
             + self.filter_vel.get() * (self.velocity - 0.6) * 3.0
             + self.move_filter.get() * self.lfo_value * 1.5
-            + self.drift_cut.tick(slew, hold) * 0.08 * dr;
+            + self.drift_cut.tick(slew, hold) * 0.08 * dr
+            + self.expr.octaves(key);
         let cutoff =
             (self.cutoff.get().exp() * oct.clamp(-12.0, 12.0).exp2()).clamp(20.0, 0.45 * self.sr);
         let drive = self.drive.get();
@@ -1214,13 +1224,17 @@ impl Synth for Bass {
             if self.sub_clean {
                 y += sub * 0.7;
             }
-            let out = soft_ceiling(self.dc.tick(y) * 0.75 * amp * self.vel_level * self.out_gain);
+            let out = soft_ceiling(self.dc.tick(y) * 0.75 * amp * self.vel_level * self.out_gain * self.xgain);
             left[n] = out;
             right[n] = out;
             if self.amp_env.is_idle() {
                 self.active = false;
             }
         }
+    }
+
+    fn expression(&mut self) -> &mut Expression {
+        &mut self.expr
     }
 
     fn is_silent(&self) -> bool {

@@ -51,6 +51,10 @@ pub(crate) trait Synth: Send + 'static {
 
     fn is_silent(&self) -> bool;
 
+    /// The synth's transient performance state. The synth ticks it from its
+    /// own control interval and applies it to its voices.
+    fn expression(&mut self) -> &mut Expression;
+
     fn set_sample(&mut self, sample: Option<Arc<SampleBuffer>>) -> Option<Arc<SampleBuffer>> {
         sample
     }
@@ -115,8 +119,19 @@ impl<S: Synth> Instrument<S> {
                 self.synth.note_off(key.min(127), vel, voice);
             }
             EventKind::Param { id, value } => self.apply(id, value),
+            EventKind::PitchBend { semitones } => self.synth.expression().set_bend(semitones),
+            // Bend events already carry actual semitones.
+            EventKind::PitchBendRange { .. } => {}
+            EventKind::ChannelPressure { value } => self.synth.expression().set_channel(value),
+            EventKind::PolyPressure { key, value } => {
+                self.synth.expression().set_poly(key, value);
+            }
+            EventKind::ResetExpression => self.synth.expression().reset(),
             EventKind::AllNotesOff => self.synth.all_notes_off(),
-            EventKind::AllSoundOff => self.synth.all_sound_off(),
+            EventKind::AllSoundOff => {
+                self.synth.expression().reset();
+                self.synth.all_sound_off();
+            }
         }
     }
 }
@@ -133,6 +148,7 @@ impl<S: Synth> Device for Instrument<S> {
             48_000.0
         };
         self.synth.prepare(sr, max_block.max(1));
+        self.synth.expression().prepare(sr);
         for (p, &v) in self.desc.params.iter().zip(self.values.iter()) {
             self.synth.param_changed(p.id, v, true);
         }
@@ -334,6 +350,15 @@ impl<V: PoolVoice> Pool<V> {
         }
     }
 
+    /// Calls `f` on each active voice with the key it was started for.
+    pub(crate) fn for_active(&mut self, mut f: impl FnMut(&mut V, u8)) {
+        for (i, v) in self.voices.iter_mut().enumerate() {
+            if v.is_active() {
+                f(v, self.alloc.slot(i).key);
+            }
+        }
+    }
+
     pub(crate) fn kill_all(&mut self) {
         for v in &mut self.voices {
             v.kill();
@@ -381,4 +406,185 @@ pub(crate) fn key_offset(key: u8) -> f32 {
 #[inline]
 pub(crate) fn st_ratio(st: f32) -> f32 {
     (st * (std::f32::consts::LN_2 / 12.0)).exp()
+}
+
+/// Largest pitch displacement honoured, in semitones.
+pub(crate) const BEND_MAX: f32 = 48.0;
+/// Gain added at full pressure: `1 + 0.6 * p` (about +4 dB).
+pub(crate) const PRESSURE_GAIN: f32 = 0.6;
+/// Filter cutoff opened at full pressure, in octaves.
+pub(crate) const PRESSURE_OCTAVES: f32 = 0.75;
+
+/// Transient pitch bend and aftertouch for one instrument.
+///
+/// Nothing here is saved and nothing retriggers a note. Values are smoothed
+/// by [`Expression::tick`], which each synth calls from its own control
+/// interval, so any block split gives the same output. At zero pressure and
+/// zero bend every accessor returns exactly the neutral value (1.0 gain, 0.0
+/// octaves, 0.0 semitones), so the baseline sound is unchanged.
+///
+/// Pressure mapping: channel pressure `c` and the pressure `k` of a voice's
+/// key combine as `p = 1 - (1 - c)(1 - k)`; gain is `1 + 0.6 p`, and filtered
+/// instruments also open the cutoff by `0.75 p` octaves.
+pub(crate) struct Expression {
+    bend_t: f32,
+    bend: f32,
+    ratio: f32,
+    chan_t: f32,
+    chan: f32,
+    key_t: [f32; 128],
+    key: [f32; 128],
+    /// Keys whose smoothed value has not reached its target.
+    moving: u128,
+    /// Keys with a nonzero target or value.
+    live: u128,
+    k: f32,
+}
+
+impl Expression {
+    pub(crate) const fn new() -> Expression {
+        Expression {
+            bend_t: 0.0,
+            bend: 0.0,
+            ratio: 1.0,
+            chan_t: 0.0,
+            chan: 0.0,
+            key_t: [0.0; 128],
+            key: [0.0; 128],
+            moving: 0,
+            live: 0,
+            k: 0.5,
+        }
+    }
+
+    /// Sets the smoothing for a sample rate (about 6 ms).
+    pub(crate) fn prepare(&mut self, sample_rate: f32) {
+        self.k = 1.0 - (-(CTRL as f32) / (0.006 * sample_rate)).exp();
+    }
+
+    pub(crate) fn set_bend(&mut self, semitones: f32) {
+        self.bend_t = if semitones.is_finite() {
+            semitones.clamp(-BEND_MAX, BEND_MAX)
+        } else {
+            0.0
+        };
+    }
+
+    pub(crate) fn set_channel(&mut self, v: f32) {
+        self.chan_t = unit(v);
+    }
+
+    pub(crate) fn set_poly(&mut self, key: u8, v: f32) {
+        let i = key.min(127) as usize;
+        self.key_t[i] = unit(v);
+        self.moving |= 1u128 << i;
+        self.live |= 1u128 << i;
+    }
+
+    /// Back to centre and zero pressure at once.
+    pub(crate) fn reset(&mut self) {
+        *self = Expression {
+            k: self.k,
+            ..Expression::new()
+        };
+    }
+
+    /// Moves every value towards its target; call once per control interval.
+    #[inline]
+    pub(crate) fn tick(&mut self) {
+        if self.bend != self.bend_t {
+            self.bend = approach(self.bend, self.bend_t, self.k);
+            self.ratio = if self.bend == 0.0 {
+                1.0
+            } else {
+                st_ratio(self.bend)
+            };
+        }
+        if self.chan != self.chan_t {
+            self.chan = approach(self.chan, self.chan_t, self.k);
+        }
+        let mut m = self.moving;
+        while m != 0 {
+            let i = m.trailing_zeros() as usize;
+            m &= m - 1;
+            self.key[i] = approach(self.key[i], self.key_t[i], self.k);
+            if self.key[i] == self.key_t[i] {
+                self.moving &= !(1u128 << i);
+                if self.key[i] == 0.0 {
+                    self.live &= !(1u128 << i);
+                }
+            }
+        }
+    }
+
+    /// Smoothed pitch displacement in semitones.
+    #[inline]
+    pub(crate) fn bend_st(&self) -> f32 {
+        self.bend
+    }
+
+    /// `2^(bend/12)`; exactly 1.0 when centred.
+    #[inline]
+    pub(crate) fn bend_ratio(&self) -> f32 {
+        self.ratio
+    }
+
+    /// Combined pressure 0..1 for a voice sounding `key`.
+    #[inline]
+    pub(crate) fn pressure(&self, key: u8) -> f32 {
+        let k = if self.live == 0 {
+            0.0
+        } else {
+            self.key[key.min(127) as usize]
+        };
+        self.chan + k - self.chan * k
+    }
+
+    /// Gain multiplier for a voice sounding `key`.
+    #[inline]
+    pub(crate) fn gain(&self, key: u8) -> f32 {
+        1.0 + PRESSURE_GAIN * self.pressure(key)
+    }
+
+    /// Cutoff offset in octaves for a voice sounding `key`.
+    #[inline]
+    pub(crate) fn octaves(&self, key: u8) -> f32 {
+        PRESSURE_OCTAVES * self.pressure(key)
+    }
+
+    /// True when nothing is bent or pressed.
+    #[cfg(test)]
+    pub(crate) fn is_neutral(&self) -> bool {
+        self.bend == 0.0
+            && self.bend_t == 0.0
+            && self.chan == 0.0
+            && self.chan_t == 0.0
+            && self.live == 0
+    }
+}
+
+#[inline]
+fn unit(v: f32) -> f32 {
+    if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 }
+}
+
+#[inline]
+fn approach(cur: f32, tgt: f32, k: f32) -> f32 {
+    let next = cur + (tgt - cur) * k;
+    if (tgt - next).abs() < 1.0e-6 * (1.0 + tgt.abs()) {
+        tgt
+    } else {
+        next
+    }
+}
+
+/// Limits an upward bend so `key + bend` stays below `max_hz`. Downward and
+/// zero bends pass through, so the centred sound is never altered.
+#[inline]
+pub(crate) fn safe_bend(key: f32, bend: f32, max_hz: f32) -> f32 {
+    if bend <= 0.0 {
+        return bend;
+    }
+    let top = 69.0 + 12.0 * (max_hz / 440.0).log2();
+    bend.min((top - key).max(0.0))
 }

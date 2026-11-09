@@ -14,7 +14,7 @@ use peel_dsp::voice::StealPolicy;
 use peel_dsp::{Device, DeviceDescriptor, DeviceKind, ParamId, Preset, ProcessContext};
 
 use crate::common::{
-    CTRL, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, drive_curve, key_offset,
+    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, drive_curve, key_offset,
     lerp, ramp_coef, shape, st_ratio, vel_gain,
 };
 
@@ -277,6 +277,10 @@ struct TomVoice {
     bright: f32,
     gain: f32,
     fade: Fade,
+    /// Aftertouch gain, 1.0 when nothing is pressed.
+    xgain: f32,
+    /// Pitch bend ratio, 1.0 when centred.
+    bend: f32,
 }
 
 impl TomVoice {
@@ -305,6 +309,8 @@ impl TomVoice {
             bright: 1.0,
             gain: 1.0,
             fade: Fade::new(),
+            xgain: 1.0,
+            bend: 1.0,
         }
     }
 
@@ -322,7 +328,7 @@ impl TomVoice {
             self.amp[2].tick(),
         ];
         for i in 0..4 {
-            self.phase[i] += (self.freq[i] * m * sr_inv).min(0.45);
+            self.phase[i] += (self.freq[i] * m * self.bend * sr_inv).min(0.45);
             if self.phase[i] >= 1.0 {
                 self.phase[i] -= 1.0;
             }
@@ -339,7 +345,7 @@ impl TomVoice {
         let y = self
             .lp
             .low(lerp(x, shape(x, drive_g, drive_norm), drive_mix));
-        let out = y * self.gain * self.fade.tick();
+        let out = y * self.gain * self.fade.tick() * self.xgain;
         if self.fade.is_done() || self.amp[0].is_below(1.0e-4) {
             self.active = false;
         }
@@ -363,6 +369,7 @@ impl PoolVoice for TomVoice {
 }
 
 pub(crate) struct Tom {
+    expr: Expression,
     sr: f32,
     pool: Pool<TomVoice>,
     ramp_k: f32,
@@ -388,6 +395,7 @@ pub(crate) struct Tom {
 impl Tom {
     pub(crate) fn new() -> Tom {
         Tom {
+            expr: Expression::new(),
             sr: 48_000.0,
             pool: Pool::new(5, 2, StealPolicy::Oldest, 48_000.0, TomVoice::new),
             ramp_k: 0.1,
@@ -428,6 +436,13 @@ impl Tom {
         self.drive.tick(k);
         self.level.tick(k);
         self.derive();
+        self.expr.tick();
+        let ex = &self.expr;
+        let ratio = ex.bend_ratio();
+        self.pool.for_active(|v, key| {
+            v.xgain = ex.gain(key);
+            v.bend = ratio;
+        });
     }
 }
 
@@ -471,8 +486,12 @@ impl Synth for Tom {
         let f0 = (self.pitch * ratio).clamp(20.0, 0.2 * sr);
         let drop = st_ratio(self.sweep * lerp(0.8, 1.0, velocity)) - 1.0;
         let tone = self.tone_hz;
+        let xgain0 = self.expr.gain(key);
+        let bend0 = self.expr.bend_ratio();
         let v = &mut self.pool.voices[slot];
         v.active = true;
+        v.xgain = xgain0;
+        v.bend = bend0;
         for i in 0..3 {
             v.amp[i].set_t60(self.decay * [1.0, 0.55, 0.4][i], sr);
             v.amp[i].trigger(1.0, 0.000_4, sr);
@@ -530,6 +549,10 @@ impl Synth for Tom {
             left[n] = out * self.level_gain;
             right[n] = out * self.level_gain;
         }
+    }
+
+    fn expression(&mut self) -> &mut Expression {
+        &mut self.expr
     }
 
     fn is_silent(&self) -> bool {

@@ -26,7 +26,7 @@ use crate::analog::{
     advance, cents_ratio, ratio, soft_ceiling,
 };
 use crate::common::{
-    CTRL, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, ramp_coef, vel_gain,
+    CTRL, Expression, safe_bend, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, ramp_coef, vel_gain,
 };
 
 const OSC1_WAVE: ParamId = 1;
@@ -1139,6 +1139,8 @@ struct PolyVoice {
     pitch_env: PitchEnv,
     velocity: f32,
     vel_gain: f32,
+    /// Aftertouch gain, 1.0 when nothing is pressed.
+    xgain: f32,
     fade: Fade,
 }
 
@@ -1177,18 +1179,21 @@ impl PolyVoice {
             pitch_env,
             velocity: 0.0,
             vel_gain: 1.0,
+            xgain: 1.0,
             fade: Fade::new(),
         }
     }
 
     /// Recomputes pitches and filter coefficients from the shared state.
-    fn control(&mut self, m: &Mod) {
+    fn control(&mut self, m: &Mod, bend: f32, press_oct: f32) {
         self.cur_key += (self.target_key - self.cur_key) * m.glide_k;
         let dr = m.drift;
         let dp = self.drift_pitch.tick(m.drift_slew, m.drift_hold) * 4.0 * dr;
         let dc = self.drift_cut.tick(m.drift_slew, m.drift_hold) * 0.09 * dr;
         let pe = self.pitch_env.level() * m.pe_amt;
         let base = self.cur_key + m.lfo_pitch + pe + dp * 0.01;
+        let top = base + m.semi.max(0.0) + m.detune2 * 0.01 + 1.0;
+        let base = base + safe_bend(top, bend, 0.45 * m.sr);
         let hz1 = key_to_hz(base);
         let hz2 = key_to_hz(base + m.semi + m.detune2 * 0.01);
         let inv_sr = 1.0 / m.sr;
@@ -1216,7 +1221,8 @@ impl PolyVoice {
             + m.key_track * (self.cur_key - 60.0) / 12.0
             + m.vel_filter * (self.velocity - 0.6) * 4.0
             + m.lfo_filter
-            + dc;
+            + dc
+            + press_oct;
         let cutoff = (m.cutoff * oct.clamp(-12.0, 12.0).exp2()).clamp(20.0, 0.45 * sr_f);
         if m.ftype == 1 {
             let c = LadderCoef::new(cutoff, m.res, m.drive, sr_f);
@@ -1303,7 +1309,7 @@ impl PolyVoice {
         } else {
             (self.filter(0, l, m.ftype), self.filter(1, r, m.ftype))
         };
-        let g = amp * self.vel_gain * self.fade.tick();
+        let g = amp * self.vel_gain * self.fade.tick() * self.xgain;
         // A note decayed to nothing at zero sustain is finished even though
         // the key is still down.
         let dead = self.amp_env.stage() == Stage::Sustain && self.amp_env.level() < 1.0e-4;
@@ -1339,6 +1345,7 @@ struct Held {
 }
 
 pub(crate) struct Poly {
+    expr: Expression,
     sr: f32,
     ramp_k: f32,
     ctrl: usize,
@@ -1397,6 +1404,7 @@ pub(crate) struct Poly {
 impl Poly {
     pub(crate) fn new() -> Poly {
         Poly {
+            expr: Expression::new(),
             sr: 48_000.0,
             ramp_k: 0.1,
             ctrl: 0,
@@ -1590,8 +1598,13 @@ impl Poly {
         self.gain.tick(k);
         self.derive();
         let m = self.m;
+        self.expr.tick();
+        let ex = &self.expr;
+        let bend = ex.bend_st();
         for v in self.pool.voices.iter_mut().filter(|v| v.active) {
-            v.control(&m);
+            let key = v.target_key.round().clamp(0.0, 127.0) as u8;
+            v.xgain = ex.gain(key);
+            v.control(&m, bend, ex.octaves(key));
         }
         self.pool.sync();
     }
@@ -1695,7 +1708,9 @@ impl Poly {
             v.flt_env.note_on();
             v.pitch_env.trigger();
         }
-        v.control(&m);
+        let key = target.round().clamp(0.0, 127.0) as u8;
+        v.xgain = self.expr.gain(key);
+        v.control(&m, self.expr.bend_st(), self.expr.octaves(key));
         if fresh {
             // Start the filters at their first coefficients rather than
             // gliding in from stale ones.
@@ -1922,6 +1937,10 @@ impl Synth for Poly {
             left[n] = soft_ceiling(self.dc[0].tick(l * g));
             right[n] = soft_ceiling(self.dc[1].tick(r * g));
         }
+    }
+
+    fn expression(&mut self) -> &mut Expression {
+        &mut self.expr
     }
 
     fn is_silent(&self) -> bool {

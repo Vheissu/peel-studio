@@ -43,7 +43,7 @@ use peel_dsp::voice::StealPolicy;
 use peel_dsp::{Device, DeviceDescriptor, DeviceKind, ParamId, Preset, ProcessContext};
 
 use crate::common::{
-    CTRL, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, lerp, ramp_coef, vel_gain,
+    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, lerp, ramp_coef, vel_gain,
 };
 
 const BELL: ParamId = 3;
@@ -487,6 +487,12 @@ struct TineVoice {
     pan_l: f32,
     pan_r: f32,
     fade: Fade,
+    key: u8,
+    /// Aftertouch gain, 1.0 when nothing is pressed.
+    xgain: f32,
+    /// Played mode angles and the pitch ratio currently applied to them.
+    w0: [f64; MODES],
+    ratio: f32,
 }
 
 impl TineVoice {
@@ -519,6 +525,26 @@ impl TineVoice {
             pan_l: 1.0,
             pan_r: 1.0,
             fade: Fade::new(),
+            key: 60,
+            xgain: 1.0,
+            w0: [0.0; MODES],
+            ratio: 1.0,
+        }
+    }
+
+    /// Rotates each mode at `ratio` times its played rate. Phase and
+    /// amplitude state are untouched, so the ring carries on smoothly.
+    fn retune(&mut self, ratio: f32) {
+        if ratio == self.ratio {
+            return;
+        }
+        self.ratio = ratio;
+        let top = 0.9 * std::f64::consts::PI;
+        for k in 0..MODES {
+            let w0 = self.w0[k];
+            let w = (w0 * ratio as f64).min(top.max(w0));
+            self.cw[k] = w.cos();
+            self.sw[k] = w.sin();
         }
     }
 
@@ -535,7 +561,7 @@ impl TineVoice {
             self.cs[k] = self.r[k] * (c * self.cw[k] - s * self.sw[k]);
         }
         // Pickup: voltage is the time derivative of the flux.
-        let mut y = (pickup_slope(u, self.offset) * w) as f32 * self.gain;
+        let mut y = (pickup_slope(u, self.offset) * w) as f32 * self.gain * self.xgain;
 
         // Smooth hammer onset.
         if self.att_pos < 1.0 {
@@ -642,6 +668,7 @@ impl Chorus {
 }
 
 pub(crate) struct Tine {
+    expr: Expression,
     sr: f32,
     ramp_k: f32,
     ctrl: usize,
@@ -687,6 +714,7 @@ pub(crate) struct Tine {
 impl Tine {
     pub(crate) fn new() -> Tine {
         Tine {
+            expr: Expression::new(),
             sr: 48_000.0,
             ramp_k: 0.1,
             ctrl: 0,
@@ -756,6 +784,13 @@ impl Tine {
         self.tone.tick(k);
         self.chorus.tick(k);
         self.derive();
+        self.expr.tick();
+        let ex = &self.expr;
+        let ratio = ex.bend_ratio();
+        for v in self.pool.voices.iter_mut().filter(|v| v.active) {
+            v.xgain = ex.gain(v.key);
+            v.retune(ratio);
+        }
         self.pool.sync();
         // With nothing sounding, let the output stage settle to exact zero.
         if self.pool.is_silent() {
@@ -893,6 +928,7 @@ impl Synth for Tine {
         let t60s = [t60, t60 * 0.8, ping_t60, ping_t60 * 0.25];
 
         let sr64 = sr as f64;
+        let (bend_ratio, xgain) = (self.expr.bend_ratio(), self.expr.gain(key));
         let v = &mut self.pool.voices[slot];
         v.active = true;
         for k in 0..MODES {
@@ -901,11 +937,15 @@ impl Synth for Tine {
             v.cs[k] = 1.0;
             v.cw[k] = w.cos();
             v.sw[k] = w.sin();
+            v.w0[k] = w;
             v.r[k] = (-LN_1000 / (t60s[k] as f64 * sr64)).exp();
             v.au[k] = amp as f64 * rho[k] as f64 / ratios[k] as f64;
             v.aw[k] = amp as f64 * rho[k] as f64;
         }
         v.offset = offset as f64;
+        v.key = key;
+        v.ratio = 1.0;
+        v.xgain = xgain;
 
         // Normalize the fundamental's pickup output to a fixed RMS so the
         // loudness follows velocity while the bark only changes color.
@@ -947,6 +987,7 @@ impl Synth for Tine {
         v.pan_l = pl;
         v.pan_r = pr;
         v.fade.reset();
+        v.retune(bend_ratio);
     }
 
     fn note_off(&mut self, _key: u8, _velocity: f32, id: u32) {
@@ -1025,6 +1066,10 @@ impl Synth for Tine {
             left[n] = l * self.out_gain;
             right[n] = r * self.out_gain;
         }
+    }
+
+    fn expression(&mut self) -> &mut Expression {
+        &mut self.expr
     }
 
     fn is_silent(&self) -> bool {

@@ -13,7 +13,7 @@ use peel_dsp::voice::StealPolicy;
 use peel_dsp::{Device, DeviceDescriptor, DeviceKind, ParamId, Preset, ProcessContext};
 
 use crate::common::{
-    CTRL, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, drive_curve, key_offset,
+    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, drive_curve, key_offset,
     lerp, ramp_coef, shape, st_ratio, vel_gain,
 };
 
@@ -294,6 +294,8 @@ struct ClapVoice {
     room_gain: f32,
     gain: f32,
     fade: Fade,
+    /// Aftertouch gain, 1.0 when nothing is pressed.
+    xgain: f32,
     jitter: Noise,
     sr: f32,
 }
@@ -328,6 +330,7 @@ impl ClapVoice {
             room_gain: 1.0,
             gain: 1.0,
             fade: Fade::new(),
+            xgain: 1.0,
             jitter: Noise::new(3),
             sr: 48_000.0,
         }
@@ -366,7 +369,7 @@ impl ClapVoice {
         let r = self.burst_r.tick(nr).band_unity * burst
             + ar * (burst + 0.25 * tail)
             + self.tail_r.tick(nr).band_unity * tail;
-        let f = self.gain * self.fade.tick();
+        let f = self.gain * self.fade.tick() * self.xgain;
         let l = shape(l, drive_g, drive_norm) * f;
         let r = shape(r, drive_g, drive_norm) * f;
         let finished =
@@ -394,6 +397,7 @@ impl PoolVoice for ClapVoice {
 }
 
 pub(crate) struct Clap {
+    expr: Expression,
     sr: f32,
     pool: Pool<ClapVoice>,
     ramp_k: f32,
@@ -419,6 +423,7 @@ pub(crate) struct Clap {
 impl Clap {
     pub(crate) fn new() -> Clap {
         Clap {
+            expr: Expression::new(),
             sr: 48_000.0,
             pool: Pool::new(5, 2, StealPolicy::Oldest, 48_000.0, ClapVoice::new),
             ramp_k: 0.1,
@@ -452,6 +457,9 @@ impl Clap {
         self.drive.tick(k);
         self.level.tick(k);
         self.derive();
+        self.expr.tick();
+        let ex = &self.expr;
+        self.pool.for_active(|v, key| v.xgain = ex.gain(key));
     }
 }
 
@@ -497,8 +505,10 @@ impl Synth for Clap {
         let center = (self.tone * ratio * lerp(0.85, 1.0, velocity)).min(0.4 * sr);
         let q = 0.6 + 3.2 * self.focus;
         let hits = self.hits;
+        let xgain0 = self.expr.gain(key);
         let v = &mut self.pool.voices[slot];
         v.active = true;
+        v.xgain = xgain0;
         v.sr = sr;
         v.common.reseed(hits.wrapping_mul(3));
         v.noise_l.reseed(hits.wrapping_mul(3).wrapping_add(1));
@@ -560,6 +570,10 @@ impl Synth for Clap {
             left[n] = l * self.level_gain;
             right[n] = r * self.level_gain;
         }
+    }
+
+    fn expression(&mut self) -> &mut Expression {
+        &mut self.expr
     }
 
     fn is_silent(&self) -> bool {

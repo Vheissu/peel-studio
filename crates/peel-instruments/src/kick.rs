@@ -15,7 +15,7 @@ use peel_dsp::voice::StealPolicy;
 use peel_dsp::{Device, DeviceDescriptor, DeviceKind, ParamId, Preset, ProcessContext};
 
 use crate::common::{
-    CTRL, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, drive_curve, key_offset,
+    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, drive_curve, key_offset,
     lerp, ramp_coef, shape, st_ratio, vel_gain,
 };
 
@@ -362,6 +362,10 @@ struct KickVoice {
     push: f32,
     gain: f32,
     fade: Fade,
+    /// Aftertouch gain, 1.0 when nothing is pressed.
+    xgain: f32,
+    /// Pitch bend ratio, 1.0 when centred.
+    bend: f32,
 }
 
 impl KickVoice {
@@ -394,12 +398,14 @@ impl KickVoice {
             push: 1.0,
             gain: 1.0,
             fade: Fade::new(),
+            xgain: 1.0,
+            bend: 1.0,
         }
     }
 
     #[inline]
     fn tick(&mut self, sr_inv: f32, p: &Stage) -> f32 {
-        let freq = self.f0 + self.f_span * self.pitch_env + self.f_snap * self.snap_env;
+        let freq = (self.f0 + self.f_span * self.pitch_env + self.f_snap * self.snap_env) * self.bend;
         self.pitch_env *= self.pitch_coef;
         self.snap_env *= self.snap_coef;
         // Read the phase before advancing it so the first sample is exactly 0.
@@ -434,7 +440,7 @@ impl KickVoice {
         // Final soft clip pushes the level up without exceeding full scale.
         let y = lerp(y, soft_clip(y, p.clip_g, p.clip_norm), p.clip_mix);
         let y = self.dc.high(y);
-        let out = y * self.gain * self.fade.tick();
+        let out = y * self.gain * self.fade.tick() * self.xgain;
         if self.fade.is_done() || (self.amp.is_below(1.0e-4) && self.click_env < 1.0e-3) {
             self.active = false;
         }
@@ -469,6 +475,7 @@ struct Stage {
 }
 
 pub(crate) struct Kick {
+    expr: Expression,
     sr: f32,
     pool: Pool<KickVoice>,
     ramp_k: f32,
@@ -497,6 +504,7 @@ pub(crate) struct Kick {
 impl Kick {
     pub(crate) fn new() -> Kick {
         Kick {
+            expr: Expression::new(),
             sr: 48_000.0,
             pool: Pool::new(4, 1, StealPolicy::Oldest, 48_000.0, KickVoice::new),
             ramp_k: 0.1,
@@ -554,6 +562,13 @@ impl Kick {
         self.tone.tick(k);
         self.level.tick(k);
         self.derive();
+        self.expr.tick();
+        let ex = &self.expr;
+        let ratio = ex.bend_ratio();
+        self.pool.for_active(|v, key| {
+            v.xgain = ex.gain(key);
+            v.bend = ratio;
+        });
     }
 }
 
@@ -603,8 +618,12 @@ impl Synth for Kick {
         let f_snap = (f0 * sweep_ratio * (snap_ratio - 1.0))
             .min(0.4 * sr - f0 - f_span)
             .max(0.0);
+        let xgain0 = self.expr.gain(key);
+        let bend0 = self.expr.bend_ratio();
         let v = &mut self.pool.voices[slot];
         v.active = true;
+        v.xgain = xgain0;
+        v.bend = bend0;
         v.phase = 0.0;
         v.f0 = f0;
         v.f_span = f_span;
@@ -661,6 +680,10 @@ impl Synth for Kick {
             left[n] = out * self.level_gain;
             right[n] = out * self.level_gain;
         }
+    }
+
+    fn expression(&mut self) -> &mut Expression {
+        &mut self.expr
     }
 
     fn is_silent(&self) -> bool {

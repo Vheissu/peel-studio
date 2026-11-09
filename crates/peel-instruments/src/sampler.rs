@@ -19,7 +19,7 @@ use peel_dsp::{
 };
 
 use crate::common::{
-    CTRL, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, ramp_coef, st_ratio,
+    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, ramp_coef, st_ratio,
     vel_gain,
 };
 
@@ -300,6 +300,12 @@ struct SamplerVoice {
     gain: f32,
     tail_fade: f32,
     fade: Fade,
+    key: u8,
+    /// Aftertouch gain, 1.0 when nothing is pressed.
+    xgain: f32,
+    /// Unbent step magnitude and the pitch ratio applied to `step`.
+    base_step: f64,
+    applied: f32,
 }
 
 impl SamplerVoice {
@@ -318,7 +324,20 @@ impl SamplerVoice {
             gain: 1.0,
             tail_fade: 1.0,
             fade: Fade::new(),
+            key: 60,
+            xgain: 1.0,
+            base_step: 1.0,
+            applied: 1.0,
         }
+    }
+
+    /// Scales the playback rate by the live bend, keeping direction.
+    fn retune(&mut self, ratio: f32) {
+        if ratio == self.applied {
+            return;
+        }
+        self.applied = ratio;
+        self.step = self.step.signum() * self.base_step * ratio as f64;
     }
 
     #[inline]
@@ -392,7 +411,7 @@ impl SamplerVoice {
             r = self.filter_r.process(r, peel_dsp::filter::SvfMode::LowPass);
         }
         let env = self.env.tick();
-        let g = env * self.gain * tail * self.fade.tick();
+        let g = env * self.gain * tail * self.fade.tick() * self.xgain;
         if self.env.is_idle() || self.fade.is_done() {
             self.active = false;
         }
@@ -421,6 +440,7 @@ impl PoolVoice for SamplerVoice {
 }
 
 pub(crate) struct Sampler {
+    expr: Expression,
     sr: f32,
     ramp_k: f32,
     ctrl: usize,
@@ -453,6 +473,7 @@ pub(crate) struct Sampler {
 impl Sampler {
     pub(crate) fn new() -> Sampler {
         Sampler {
+            expr: Expression::new(),
             sr: 48_000.0,
             ramp_k: 0.1,
             ctrl: 0,
@@ -511,6 +532,13 @@ impl Sampler {
         self.gain.tick(k);
         self.pan.tick(k);
         self.derive();
+        self.expr.tick();
+        let ex = &self.expr;
+        let ratio = ex.bend_ratio();
+        for v in self.pool.voices.iter_mut().filter(|v| v.active) {
+            v.xgain = ex.gain(v.key);
+            v.retune(ratio);
+        }
         self.pool.sync();
     }
 }
@@ -607,9 +635,15 @@ impl Synth for Sampler {
         let reverse = self.reverse;
         let honors_off = self.gate_mode || loop_mode != LoopMode::Off;
         let (c, r, sr, adsr) = (self.cutoff_hz, self.resonance, self.sr, self.adsr);
+        let (bend_ratio, xgain) = (self.expr.bend_ratio(), self.expr.gain(key));
         let v = &mut self.pool.voices[slot];
         v.active = true;
+        v.key = key;
+        v.xgain = xgain;
+        v.base_step = ratio;
+        v.applied = 1.0;
         v.step = if reverse { -ratio } else { ratio };
+        v.retune(bend_ratio);
         v.pos = if reverse {
             frames as f64 - 1.0 - offset
         } else {
@@ -686,6 +720,10 @@ impl Synth for Sampler {
             right[n] = r * self.out_gain * self.pan_r;
         }
         self.sample = held;
+    }
+
+    fn expression(&mut self) -> &mut Expression {
+        &mut self.expr
     }
 
     fn is_silent(&self) -> bool {

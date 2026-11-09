@@ -31,7 +31,7 @@ use peel_dsp::voice::{StealPolicy, VoiceState};
 use peel_dsp::{Device, DeviceDescriptor, DeviceKind, ParamId, Preset, ProcessContext};
 
 use crate::common::{
-    CTRL, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, lerp, ramp_coef,
+    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, lerp, ramp_coef,
 };
 
 const TONE: ParamId = 1;
@@ -591,6 +591,15 @@ struct GrandVoice {
     rel_gain: f32,
     mech: f32,
     fade: Fade,
+    key: u8,
+    /// Aftertouch gain, 1.0 when nothing is pressed.
+    xgain: f32,
+    /// Pitch ratio the resonator coefficients currently express.
+    ratio: f32,
+    /// Mode angle and twice the pole radius, kept so a live bend can
+    /// recompute `a1` without touching the ringing state.
+    ang: [[f32; LANES]; CHUNKS],
+    two_r: [[f32; LANES]; CHUNKS],
 }
 
 impl GrandVoice {
@@ -641,6 +650,11 @@ impl GrandVoice {
             rel_gain: 0.0,
             mech: 0.0,
             fade: Fade::new(),
+            key: 60,
+            xgain: 1.0,
+            ratio: 1.0,
+            ang: [[0.0; LANES]; CHUNKS],
+            two_r: [[0.0; LANES]; CHUNKS],
         }
     }
 
@@ -657,6 +671,10 @@ impl GrandVoice {
         self.s1 = [[0.0; LANES]; CHUNKS];
         self.s2 = [[0.0; LANES]; CHUNKS];
         self.sg = [[0.0; LANES]; CHUNKS];
+        self.ang = [[0.0; LANES]; CHUNKS];
+        self.two_r = [[0.0; LANES]; CHUNKS];
+        self.ratio = 1.0;
+        self.key = key;
         self.chunk_end = [0; CHUNKS];
         self.chunks = 1;
         self.age = 0;
@@ -776,6 +794,8 @@ impl GrandVoice {
             let (c, l) = (*idx / LANES, *idx % LANES);
             let y = |n: f32| amp_m * r.powf(n) * (w * (n - n0) + ph).cos();
             me.a1[c][l] = 2.0 * r * w.cos();
+            me.ang[c][l] = w;
+            me.two_r[c][l] = 2.0 * r;
             me.a2[c][l] = -r * r;
             me.s1[c][l] = y(-1.0);
             me.s2[c][l] = y(-2.0);
@@ -944,6 +964,23 @@ impl GrandVoice {
         };
     }
 
+    /// Moves every mode to `ratio` times its played frequency without
+    /// disturbing the ringing state, so envelopes and decay carry on.
+    fn retune(&mut self, ratio: f32) {
+        if ratio == self.ratio {
+            return;
+        }
+        self.ratio = ratio;
+        let top = 0.9 * PI;
+        for c in 0..self.chunks.min(CHUNKS) {
+            for l in 0..LANES {
+                let w = self.ang[c][l];
+                let a = if ratio == 1.0 { w } else { (w * ratio).min(top.max(w)) };
+                self.a1[c][l] = self.two_r[c][l] * a.cos();
+            }
+        }
+    }
+
     /// Control-rate bookkeeping: drop inaudible partials, close the damper
     /// filter and flush denormals.
     fn control(&mut self, sr: f32) {
@@ -1026,7 +1063,7 @@ impl GrandVoice {
             l = self.lp_l.low(l);
             r = self.lp_r.low(r);
         }
-        let g = self.dmp * self.fade.tick();
+        let g = self.dmp * self.fade.tick() * self.xgain;
         l *= g;
         r *= g;
         if self.rel_env > 1.0e-3 {
@@ -1160,6 +1197,7 @@ const SYMP_KEYS: usize = 88;
 const SYMP_CHUNKS: usize = SYMP_KEYS / LANES;
 
 pub(crate) struct Grand {
+    expr: Expression,
     sr: f32,
     ramp_k: f32,
     ctrl: usize,
@@ -1183,6 +1221,7 @@ pub(crate) struct Grand {
 impl Grand {
     pub(crate) fn new() -> Grand {
         let mut g = Grand {
+            expr: Expression::new(),
             sr: 48_000.0,
             ramp_k: 0.1,
             ctrl: 0,
@@ -1262,7 +1301,12 @@ impl Grand {
         self.width_r.tick(self.ramp_k);
         self.derive();
         let sr = self.sr;
+        self.expr.tick();
+        let ex = &self.expr;
+        let ratio = ex.bend_ratio();
         for v in self.pool.voices.iter_mut().filter(|v| v.active) {
+            v.xgain = ex.gain(v.key);
+            v.retune(ratio);
             v.control(sr);
         }
         self.pool.sync();
@@ -1377,7 +1421,11 @@ impl Synth for Grand {
         self.notes = self.notes.wrapping_add(1);
         let set = self.set;
         let seed = self.notes;
-        self.pool.voices[slot].start(&set, key, velocity, seed);
+        let (ratio, xgain) = (self.expr.bend_ratio(), self.expr.gain(key));
+        let v = &mut self.pool.voices[slot];
+        v.start(&set, key, velocity, seed);
+        v.xgain = xgain;
+        v.retune(ratio);
         self.body_live = true;
         self.idle = 0;
         if self.pedal {
@@ -1451,6 +1499,10 @@ impl Synth for Grand {
             left[n] = l * self.out_gain;
             right[n] = r * self.out_gain;
         }
+    }
+
+    fn expression(&mut self) -> &mut Expression {
+        &mut self.expr
     }
 
     fn is_silent(&self) -> bool {

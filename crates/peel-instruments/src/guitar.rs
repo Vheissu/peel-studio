@@ -46,7 +46,7 @@ use peel_dsp::voice::StealPolicy;
 use peel_dsp::{Device, DeviceDescriptor, DeviceKind, ParamId, Preset, ProcessContext};
 
 use crate::common::{
-    CTRL, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, lerp, ramp_coef, vel_gain,
+    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, lerp, ramp_coef, vel_gain,
 };
 
 const DECAY: ParamId = 1;
@@ -820,6 +820,9 @@ struct GuitarVoice {
     lev: f32,
     rel: f32,
     level: f32,
+    key: u8,
+    /// Aftertouch gain, 1.0 when nothing is pressed.
+    xgain: f32,
     age: usize,
     start: u64,
     fade: Fade,
@@ -848,6 +851,8 @@ impl GuitarVoice {
             lev: 0.0,
             rel: 1.0,
             level: 1.0,
+            key: 60,
+            xgain: 1.0,
             age: 0,
             start: 0,
             fade: Fade::new(),
@@ -864,7 +869,9 @@ impl GuitarVoice {
     fn tune(&mut self, sr: f32, p: &StringParams, lfo: f32) {
         let age = self.age as f32;
         let onset = ((age - 0.2 * sr) / (0.5 * sr)).clamp(0.0, 1.0);
-        let cents = p.vib_depth * lfo * onset + self.bend * (-age / (0.18 * sr)).exp();
+        let cents = p.vib_depth * lfo * onset
+            + self.bend * (-age / (0.18 * sr)).exp()
+            + p.bend_cents;
         let f = (self.f_cur * (cents * (LN_2 / 1200.0)).exp()).max(MIN_HZ);
         let mute = p.palm.max(self.ghost);
 
@@ -914,6 +921,8 @@ struct StringParams {
     palm: f32,
     vib_depth: f32,
     humbucker: bool,
+    /// Live pitch bend in cents.
+    bend_cents: f32,
 }
 
 impl PoolVoice for GuitarVoice {
@@ -1245,6 +1254,7 @@ impl Amp {
 }
 
 pub(crate) struct Guitar {
+    expr: Expression,
     sr: f32,
     ramp_k: f32,
     ctrl: usize,
@@ -1306,6 +1316,7 @@ impl Guitar {
     pub(crate) fn new() -> Guitar {
         let md = max_delay(48_000.0);
         Guitar {
+            expr: Expression::new(),
             sr: 48_000.0,
             ramp_k: 0.1,
             ctrl: 0,
@@ -1362,6 +1373,7 @@ impl Guitar {
             palm: self.palm.get(),
             vib_depth: self.vib_depth.get(),
             humbucker: self.pickup_type == 1,
+            bend_cents: self.expr.bend_st() * 100.0,
         }
     }
 
@@ -1384,6 +1396,7 @@ impl Guitar {
         self.cab.tick(k);
         self.level.tick(k);
         self.out_gain = db_to_gain(self.level.get());
+        self.expr.tick();
 
         // Vibrato: a sine whose rate wanders a few percent, as a hand does.
         self.lfo_jit += 0.004 * (self.noise.white() - 6.0 * self.lfo_jit);
@@ -1419,7 +1432,9 @@ impl Guitar {
         let sr = self.sr;
         let lfo = self.lfo;
         let gk = self.glide_k;
+        let ex = &self.expr;
         for v in self.pool.voices.iter_mut().filter(|v| v.active) {
+            v.xgain = ex.gain(v.key);
             if v.pending > 0 {
                 continue;
             }
@@ -1638,12 +1653,15 @@ impl Synth for Guitar {
         let pick_noise = self.pick_noise;
         let palm = p.palm;
         let beta = self.pickup_beta();
+        let xgain = self.expr.gain(key);
 
         {
             let v = &mut self.pool.voices[slot];
             v.active = true;
             v.released = false;
             v.f0 = f0;
+            v.key = key;
+            v.xgain = xgain;
             if !legato {
                 v.f_cur = f0;
                 v.age = 0;
@@ -1782,7 +1800,7 @@ impl Synth for Guitar {
                 if v.released {
                     v.rel *= v.rel_k;
                 }
-                let g = v.level * v.rel * v.fade.tick();
+                let g = v.level * v.rel * v.fade.tick() * v.xgain;
                 mix += (pa + pb) * g;
                 clicks += v.click.tick(noise) * v.level * v.rel;
                 if v.fade.is_done() || v.rel < 1.0e-5 || v.lev < DEAD {
@@ -1819,6 +1837,10 @@ impl Synth for Guitar {
             left[n] = out;
             right[n] = out;
         }
+    }
+
+    fn expression(&mut self) -> &mut Expression {
+        &mut self.expr
     }
 
     fn is_silent(&self) -> bool {

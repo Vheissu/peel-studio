@@ -26,7 +26,7 @@ use peel_dsp::voice::StealPolicy;
 use peel_dsp::{Device, DeviceDescriptor, DeviceKind, ParamId, Preset, ProcessContext};
 
 use crate::common::{
-    CTRL, Fade, Instrument, Pool, PoolVoice, Ramp, Synth, key_offset, lerp, ramp_coef, st_ratio,
+    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, Synth, key_offset, lerp, ramp_coef, st_ratio,
     vel_gain,
 };
 
@@ -383,6 +383,8 @@ struct HatVoice {
     mix_side: f32,
     gain: f32,
     fade: Fade,
+    /// Aftertouch gain, 1.0 when nothing is pressed.
+    xgain: f32,
     choke_ms: f32,
 }
 
@@ -425,6 +427,7 @@ impl HatVoice {
             mix_side: 0.55,
             gain: 1.0,
             fade: Fade::new(),
+            xgain: 1.0,
             choke_ms: 6.0,
         }
     }
@@ -507,7 +510,7 @@ impl HatVoice {
             let t = self.air[2].low(r);
             self.air[3].low(t)
         };
-        let g = self.gain * self.fade.tick();
+        let g = self.gain * self.fade.tick() * self.xgain;
         let done = self.slow.is_below(1.0e-4)
             && (self.wash_gain == 0.0 || self.band_env[0].is_below(1.0e-4))
             && (self.ping_gain == 0.0 || self.ping_env.is_below(1.0e-4));
@@ -534,6 +537,7 @@ impl PoolVoice for HatVoice {
 }
 
 pub(crate) struct Hat {
+    expr: Expression,
     sr: f32,
     pool: Pool<HatVoice>,
     ramp_k: f32,
@@ -559,6 +563,7 @@ pub(crate) struct Hat {
 impl Hat {
     pub(crate) fn new() -> Hat {
         Hat {
+            expr: Expression::new(),
             sr: 48_000.0,
             pool: Pool::new(4, 1, StealPolicy::Oldest, 48_000.0, HatVoice::new),
             ramp_k: 0.1,
@@ -589,6 +594,9 @@ impl Hat {
     fn control(&mut self) {
         self.level.tick(self.ramp_k);
         self.derive();
+        self.expr.tick();
+        let ex = &self.expr;
+        self.pool.for_active(|v, key| v.xgain = ex.gain(key));
     }
 }
 
@@ -644,8 +652,10 @@ impl Synth for Hat {
         let bright = (self.bright * ratio.sqrt() * vb).min(0.42 * sr);
         let color = (self.color * ratio.sqrt()).min(0.42 * sr);
         let hits = self.hits;
+        let xgain0 = self.expr.gain(key);
         let v = &mut self.pool.voices[slot];
         v.active = true;
+        v.xgain = xgain0;
         for (i, &hz) in BANK.iter().enumerate() {
             v.dt[i] = (hz * ratio / sr).min(0.45);
             // Fixed, spread phases so every hit has the same metallic attack.
@@ -752,6 +762,10 @@ impl Synth for Hat {
             left[n] = l * self.level_gain;
             right[n] = r * self.level_gain;
         }
+    }
+
+    fn expression(&mut self) -> &mut Expression {
+        &mut self.expr
     }
 
     fn is_silent(&self) -> bool {

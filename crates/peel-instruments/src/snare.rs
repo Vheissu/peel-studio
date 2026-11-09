@@ -13,7 +13,7 @@ use peel_dsp::voice::StealPolicy;
 use peel_dsp::{Device, DeviceDescriptor, DeviceKind, ParamId, Preset, ProcessContext};
 
 use crate::common::{
-    CTRL, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, drive_curve, key_offset,
+    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, drive_curve, key_offset,
     lerp, ramp_coef, shape, st_ratio, vel_gain,
 };
 
@@ -355,6 +355,10 @@ struct SnareVoice {
     room_bp_l: Svf,
     room_bp_r: Svf,
     fade: Fade,
+    /// Aftertouch gain, 1.0 when nothing is pressed.
+    xgain: f32,
+    /// Pitch bend ratio, 1.0 when centred.
+    bend: f32,
 }
 
 impl SnareVoice {
@@ -401,6 +405,8 @@ impl SnareVoice {
             room_bp_l: Svf::new(),
             room_bp_r: Svf::new(),
             fade: Fade::new(),
+            xgain: 1.0,
+            bend: 1.0,
         }
     }
 
@@ -420,7 +426,7 @@ impl SnareVoice {
             (&mut self.ph2, self.f2),
             (&mut self.ph3, self.f3),
         ] {
-            *ph += (f * m * sr_inv).min(0.45);
+            *ph += (f * m * self.bend * sr_inv).min(0.45);
             if *ph >= 1.0 {
                 *ph -= 1.0;
             }
@@ -453,7 +459,7 @@ impl SnareVoice {
 
         let mix = body * self.body_gain * self.push + top * strike;
         let y = lerp(mix, shape(mix, drive_g, drive_norm), drive_mix);
-        let fade = self.gain * self.fade.tick();
+        let fade = self.gain * self.fade.tick() * self.xgain;
 
         let r = self.room_env.tick() * self.room_gain;
         let rl = self.room_bp_l.tick(self.room_l.white()).band_unity * r * fade;
@@ -486,6 +492,7 @@ impl PoolVoice for SnareVoice {
 }
 
 pub(crate) struct Snare {
+    expr: Expression,
     sr: f32,
     pool: Pool<SnareVoice>,
     ramp_k: f32,
@@ -512,6 +519,7 @@ pub(crate) struct Snare {
 impl Snare {
     pub(crate) fn new() -> Snare {
         Snare {
+            expr: Expression::new(),
             sr: 48_000.0,
             pool: Pool::new(5, 2, StealPolicy::Oldest, 48_000.0, SnareVoice::new),
             ramp_k: 0.1,
@@ -548,6 +556,13 @@ impl Snare {
         self.drive.tick(k);
         self.level.tick(k);
         self.derive();
+        self.expr.tick();
+        let ex = &self.expr;
+        let ratio = ex.bend_ratio();
+        self.pool.for_active(|v, key| {
+            v.xgain = ex.gain(key);
+            v.bend = ratio;
+        });
     }
 }
 
@@ -596,8 +611,12 @@ impl Synth for Snare {
         let f3 = (f2 * 1.27).min(0.4 * sr);
         let center = (self.noise_tone * ratio.sqrt() * lerp(0.7, 1.0, velocity)).min(0.4 * sr);
         let hits = self.hits;
+        let xgain0 = self.expr.gain(key);
+        let bend0 = self.expr.bend_ratio();
         let v = &mut self.pool.voices[slot];
         v.active = true;
+        v.xgain = xgain0;
+        v.bend = bend0;
         v.ph1 = 0.0;
         v.ph2 = 0.0;
         v.ph3 = 0.0;
@@ -678,6 +697,10 @@ impl Synth for Snare {
             left[n] = (out + rl) * self.level_gain;
             right[n] = (out + rr) * self.level_gain;
         }
+    }
+
+    fn expression(&mut self) -> &mut Expression {
+        &mut self.expr
     }
 
     fn is_silent(&self) -> bool {
