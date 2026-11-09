@@ -94,10 +94,8 @@ up to three quarters of an octave of brightness. Per-key pressure affects
 only that key; channel pressure affects all voices. CLAP instruments receive
 the expression supported by their note dialect. MIDI-only plugins need
 RPN 0 pitch sensitivity support, or a plugin bend range that matches Peel.
-Expression does not change saved instrument parameters or record automation
-into patterns. Input still
-uses one selected instrument and the channel filter; MPE voice assignment
-is not implemented.
+Expression changes performance state rather than saved instrument parameters.
+Pattern recording captures pitch, pressure and timbre for each note.
 
 A channel-specific controller binding overrides an omni binding on that
 channel while preserving the omni binding for other channels.
@@ -106,6 +104,27 @@ Bindings are machine preferences and reference project object IDs.
 Relearn or remove a binding if its target no longer exists. Controller
 moves are grouped into undo gestures rather than adding one undo step
 per MIDI message.
+
+## MPE
+
+Open an instrument and choose Lower or Upper in its MIDI controls. Lower
+uses channel 1 as the zone manager; Upper uses channel 16. Members chooses
+the adjacent note channels, up to 15. One zone feeds the selected instrument.
+Ordinary channel filtering applies again when MPE is Off.
+
+Note bend defaults to 48 semitones and Zone bend to 2. Member pitch bend,
+channel pressure and CC74 control that member's notes independently, even
+when another member plays the same pitch. Manager bend adds to note bend;
+manager pressure, slide and sustain apply across the zone. Enabled zones
+accept RPN 6 zone configuration and RPN 0 bend sensitivity. Configuration
+is a machine preference; saved note curves play without an MPE controller.
+
+Native instruments and CLAP note-expression plugins receive per-voice
+pitch, pressure and timbre. Monophonic instruments retain their usual
+voice behavior. MIDI-only CLAP instruments need MPE and RPN support; the
+host provides 15 note channels with a 96-semitone output bend range.
+Larger combined displacements are limited to that range for MIDI output;
+native and CLAP note-expression paths support up to 120 semitones.
 
 ## Routing
 
@@ -160,8 +179,23 @@ Stopping a take closes the WAV file, imports it into the project and
 places audio clips on the armed lanes with latency compensation. The
 audio file is written during recording, rather than kept only in memory.
 A manual recording offset can correct an interface's reported latency.
-Pattern mode records played MIDI/computer-keyboard notes into the
-selected pattern instead.
+In Pattern mode, Record captures accepted hardware, computer-keyboard,
+mouse-piano and scripted notes through the same performance feed. Pitch
+bend, channel/polyphonic aftertouch and MPE slide are saved with each note,
+including the state when the note starts. Sustain extends the recorded
+note until the pedal lifts. A note held across a pattern boundary becomes
+separate notes with the carried expression at the next loop's start.
+
+Stopping or disarming closes held notes. One undo removes the take and its
+curves. The Piano Roll's lower lane switches between Velocity, Pitch,
+Pressure and Timbre. Select a note to inspect or edit its control points;
+Clear removes the chosen curve. Values hold until the next point, with the
+instrument's usual smoothing. Curves end at the note's gate; its release
+tail keeps the final recorded state.
+
+Projects containing note expression require the updated project reader.
+Their manifest uses schema 2 so older Peel versions refuse to open or
+overwrite them instead of losing the curves.
 
 ## Scripts
 
@@ -183,6 +217,10 @@ peel.call("set_device", {
 
 `output_routes`, `configure_output_routes` and
 `configure_output_channels` expose hardware routing. `midi_controls`,
-`configure_midi_controls`, `midi_learn`, `midi_control` and `midi_expression` expose
+`configure_midi_controls`, `midi_learn`, `midi_control`, `midi_expression`,
+`mpe` and `midi_input` expose
 controller setup and internal events. See [MCP](MCP.md) for arguments;
 scripts use the same action names without the `peel_` prefix.
+
+Use `note_expression` to read or edit a note's saved curves. Desktop scripts
+can arm Pattern recording with `peel.call("ui.record", {armed: true})`.

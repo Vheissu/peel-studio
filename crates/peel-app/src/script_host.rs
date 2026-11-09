@@ -21,14 +21,18 @@ pub fn pump(studio: &mut Studio) {
             let before = studio.session.project().id;
             let recording = studio.session.is_recording();
             let target = studio.session.live_target();
-            let result = execute(
-                &mut studio.session,
-                &mut studio.ws,
-                &mut studio.prefs,
-                &mut control,
-                name,
-                args,
-            );
+            let result = if name == "ui.record" {
+                record_pattern(studio, args)
+            } else {
+                execute(
+                    &mut studio.session,
+                    &mut studio.ws,
+                    &mut studio.prefs,
+                    &mut control,
+                    name,
+                    args,
+                )
+            };
             if recording != studio.session.is_recording() {
                 studio.recorder.armed = studio.session.is_recording();
             }
@@ -60,11 +64,13 @@ pub fn execute(
         "tools" => {
             let mut tools = serde_json::to_value(peel_mcp::tools()).map_err(|e| e.to_string())?;
             let tools = tools.as_array_mut().expect("tool catalog is an array");
+            tools.push(json!({"name":"ui.record","description":"Read or arm note and expression recording in Pattern mode","inputSchema":{"type":"object","additionalProperties":false,"properties":{"armed":{"type":"boolean"}}}}));
             tools.push(json!({"name":"ui.get","description":"Read workspace selection, active editor and visible panels","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}));
             tools.push(json!({"name":"ui.set","description":"Set workspace selection, active editor and visible panels. Inspector and Scripts share a column.","inputSchema":{"type":"object","additionalProperties":false,"properties":{
                 "dock":{"enum":["rack","piano_roll","mixer","perform"]},
                 "browser_tab":{"enum":["instruments","effects","samples","patterns"]},
                 "pattern":{"type":"string"},"channel":{"type":"string"},
+                "note_lane":{"enum":["velocity","pitch","pressure","timbre"]},"expression_note":{"type":"string"},
                 "notes":{"type":"array","items":{"type":"string"}},"clips":{"type":"array","items":{"type":"string"}},
                 "focus":{"type":"object","properties":{"kind":{"enum":["channel","track","clip","none"]},"id":{"type":"string"}}},
                 "panels":{"type":"object","additionalProperties":false,"properties":{"browser":{"type":"boolean"},"inspector":{"type":"boolean"},"scripts":{"type":"boolean"},"editor":{"type":"boolean"},"help":{"type":"boolean"},"meter":{"type":"boolean"},"status_details":{"type":"boolean"}}},
@@ -104,7 +110,8 @@ fn view(session: &Session, ws: &Workspace, prefs: &Prefs) -> Value {
     json!({"dock":match ws.dock {DockTab::Rack=>"rack",DockTab::PianoRoll=>"piano_roll",DockTab::Mixer=>"mixer",DockTab::Perform=>"perform"},
         "browser_tab":match ws.browser_tab {BrowserTab::Instruments=>"instruments",BrowserTab::Effects=>"effects",BrowserTab::Samples=>"samples",BrowserTab::Patterns=>"patterns"},
         "pattern":session.selected_pattern(),"channel":ws.selected_channel,
-        "notes":ws.roll.selection,"clips":ws.playlist.selection,"focus":focus,
+        "notes":ws.roll.selection,"note_lane":ws.roll.lane.name().to_ascii_lowercase(),"expression_note":ws.roll.focus_note,
+        "clips":ws.playlist.selection,"focus":focus,
         "panels":{"browser":prefs.show_browser,"inspector":prefs.show_inspector,"scripts":prefs.show_scripts,"editor":prefs.show_editor,"help":prefs.show_help,"meter":prefs.show_meter,"status_details":prefs.show_status_details},
         "sizes":{"browser":ws.browser_w,"inspector":ws.inspector_w,"editor":ws.dock_h},
         "mixer_size":match ws.mixer_size {MixerSize::Compact=>"compact",MixerSize::Expanded=>"expanded",MixerSize::Full=>"full"},
@@ -162,6 +169,8 @@ struct Update {
     pattern: Option<Id>,
     channel: Option<Id>,
     notes: Option<Vec<Id>>,
+    note_lane: Option<String>,
+    expression_note: Option<Id>,
     clips: Option<Vec<Id>>,
     panels: Panels,
     sizes: Sizes,
@@ -214,6 +223,17 @@ fn update(
             _ => Err("Unknown browser tab"),
         })
         .transpose()?;
+    let note_lane = change
+        .note_lane
+        .as_deref()
+        .map(|name| match name {
+            "velocity" => Ok(crate::note_expr::Lane::Velocity),
+            "pitch" => Ok(crate::note_expr::Lane::Pitch),
+            "pressure" => Ok(crate::note_expr::Lane::Pressure),
+            "timbre" => Ok(crate::note_expr::Lane::Timbre),
+            _ => Err("Unknown note expression lane"),
+        })
+        .transpose()?;
     let pattern_id = change.pattern.unwrap_or(session.selected_pattern());
     let pattern = session.project().pattern(pattern_id);
     if change.pattern.is_some() && pattern.is_none() {
@@ -230,6 +250,15 @@ fn update(
             .any(|id| !pattern.is_some_and(|p| p.notes.iter().any(|n| n.id == *id)))
     }) {
         return Err("Selected notes must belong to the current pattern".into());
+    }
+    if change.expression_note.is_some_and(|id| {
+        !pattern.is_some_and(|p| {
+            p.notes
+                .iter()
+                .any(|n| n.id == id && Some(n.channel) == change.channel.or(ws.selected_channel))
+        })
+    }) {
+        return Err("Expression note must belong to the selected pattern and channel".into());
     }
     if change.clips.as_ref().is_some_and(|ids| {
         ids.iter().any(|id| {
@@ -318,14 +347,25 @@ fn update(
     if let Some(pattern) = change.pattern {
         session.select_pattern(pattern);
         ws.roll.selection.clear();
+        ws.roll.focus_note = None;
     }
     if let Some(channel) = change.channel {
+        if ws.selected_channel != Some(channel) {
+            ws.roll.focus_note = None;
+        }
         ws.selected_channel = Some(channel);
         ws.focus = Some(Focus::Channel(channel));
         session.set_live_target(Some(channel));
     }
     if let Some(notes) = change.notes {
         ws.roll.selection = notes.into_iter().collect();
+    }
+    if let Some(lane) = note_lane {
+        ws.roll.lane = lane;
+    }
+    if let Some(note) = change.expression_note {
+        ws.roll.focus_note = Some(note);
+        ws.roll.selection.insert(note);
     }
     if let Some(clips) = change.clips {
         ws.playlist.selection = clips.into_iter().collect();
@@ -601,5 +641,163 @@ mod tests {
         assert!(ws.io_open);
         assert!(!session.input_is_open());
         assert_eq!(session.doc.history_labels().count(), history);
+    }
+}
+
+/// Pattern recording needs the desktop recorder, which also owns its undo take.
+pub(crate) fn record_pattern(studio: &mut Studio, args: Value) -> Result<Value, String> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Change {
+        armed: Option<bool>,
+    }
+    let change: Change = serde_json::from_value(args).map_err(|e| e.to_string())?;
+    if let Some(armed) = change.armed {
+        if armed && !matches!(studio.session.mode(), peel_session::PlayMode::Pattern(_)) {
+            return Err("Switch to Pattern mode to record notes and expression".into());
+        }
+        studio.recorder.armed = armed;
+        studio.recorder.frame(&mut studio.session);
+    }
+    Ok(json!({"armed":studio.recorder.armed,
+        "recording":studio.recorder.armed && studio.session.is_playing()
+            && matches!(studio.session.mode(), peel_session::PlayMode::Pattern(_)),
+        "pattern":studio.session.selected_pattern()}))
+}
+
+#[cfg(test)]
+mod recording_tests {
+    use super::*;
+    use peel_session::{MidiEvent, MpeConfig, MpeMode, template};
+
+    #[test]
+    fn expression_view_calls_validate_targets_before_any_workspace_change() {
+        let mut session = Session::new_silent(template::beat_and_melody());
+        let pid = session.selected_pattern();
+        let ch = session.project().channels[0].id;
+        let note = peel_document::Note::new(
+            ch,
+            peel_document::Time::ZERO,
+            peel_document::Time::beats(1),
+            60,
+            0.8,
+        );
+        session
+            .doc
+            .edit("Note", |p| p.pattern_mut(pid).unwrap().notes.push(note));
+        let mut ws = Workspace::default();
+        let mut prefs = Prefs::default();
+        let mut control = peel_mcp::Control::default();
+        let before = session.project().clone();
+        execute(
+            &mut session,
+            &mut ws,
+            &mut prefs,
+            &mut control,
+            "ui.set",
+            json!({"pattern":pid,"channel":ch,"note_lane":"pitch","expression_note":note.id}),
+        )
+        .unwrap();
+        assert_eq!(ws.roll.lane, crate::note_expr::Lane::Pitch);
+        assert_eq!(ws.roll.focus_note, Some(note.id));
+        let dock = ws.dock;
+        assert!(
+            execute(
+                &mut session,
+                &mut ws,
+                &mut prefs,
+                &mut control,
+                "ui.set",
+                json!({"dock":"mixer","expression_note":Id::new()})
+            )
+            .is_err()
+        );
+        assert_eq!(ws.dock, dock);
+        assert_eq!(session.project(), &before);
+    }
+
+    #[test]
+    fn desktop_record_call_captures_mpe_input_and_closes_the_take() {
+        let mut studio = Studio::new(Session::new_silent(template::beat_and_melody()));
+        let pid = studio.session.selected_pattern();
+        let ch = studio
+            .session
+            .project()
+            .channels
+            .iter()
+            .find(|c| c.name == "Piano")
+            .unwrap()
+            .id;
+        studio.session.doc.edit("Clear piano", |p| {
+            let pt = p.pattern_mut(pid).unwrap();
+            pt.notes.retain(|n| n.channel != ch);
+            pt.retain_expression();
+        });
+        studio
+            .session
+            .set_mode(peel_session::PlayMode::Pattern(pid));
+        studio.session.set_live_target(Some(ch));
+        studio
+            .session
+            .configure_mpe(MpeConfig {
+                mode: MpeMode::Lower,
+                ..Default::default()
+            })
+            .unwrap();
+        record_pattern(&mut studio, json!({"armed":true})).unwrap();
+        studio.session.play();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while studio.session.position() < 0.01 {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        studio.recorder.frame(&mut studio.session);
+        studio.session.handle_midi_event(MidiEvent::NoteOn {
+            channel: 1,
+            key: 60,
+            velocity: 100,
+        });
+        studio.session.handle_midi_event(MidiEvent::PitchBend {
+            channel: 1,
+            value: 4096,
+        });
+        studio
+            .session
+            .handle_midi_event(MidiEvent::ChannelPressure {
+                channel: 1,
+                value: 80,
+            });
+        studio.recorder.frame(&mut studio.session);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        studio.session.handle_midi_event(MidiEvent::NoteOff {
+            channel: 1,
+            key: 60,
+            velocity: 0,
+        });
+        let result = record_pattern(&mut studio, json!({"armed":false})).unwrap();
+        assert_eq!(result["armed"], false);
+        let pattern = studio.session.project().pattern(pid).unwrap();
+        let notes: Vec<_> = pattern.notes_for(ch).collect();
+        assert_eq!(notes.len(), 1);
+        let curve = pattern.expression_for(notes[0].id).unwrap();
+        assert!(
+            curve
+                .pitch
+                .iter()
+                .any(|p| p.value > 24.0 && p.value < 24.01)
+        );
+        assert!(curve.pressure.iter().any(|p| p.value > 0.62));
+        assert_eq!(studio.session.doc.undo_label(), Some("Record notes"));
+        studio.session.doc.undo();
+        assert_eq!(
+            studio
+                .session
+                .project()
+                .pattern(pid)
+                .unwrap()
+                .notes_for(ch)
+                .count(),
+            0
+        );
     }
 }

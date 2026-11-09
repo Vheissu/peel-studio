@@ -30,6 +30,8 @@ peel.call("ui.set", {"dock": "rack", "panels": {"browser": True}})
 | `browser_tab` | `instruments`, `effects`, `samples`, `patterns`; selecting one reveals the browser |
 | `pattern` | ID of an existing pattern |
 | `channel` | ID of an existing instrument channel |
+| `note_lane` | `velocity`, `pitch`, `pressure` or `timbre` in the Piano Roll |
+| `expression_note` | ID of the note to focus; it must belong to the selected pattern and channel |
 | `notes` | IDs of notes in the selected pattern; an empty array clears the selection |
 | `clips` | IDs of clips in the active arrangement; an empty array clears the selection |
 | `focus` | Object with `kind` (`channel`, `track`, `clip`) and `id`, or `{"kind":"none"}` |
@@ -64,3 +66,16 @@ complete request before any other view setting changes.
 Opening an instrument sets the live keyboard target immediately. Effect,
 instrument and Audio routing editors share the workspace; one request can
 open at most one. All targets are checked before any view state changes.
+
+## Recording
+
+`peel.call("ui.record", {})` reads the desktop recorder's `armed`,
+`recording` and `pattern` state. Set `{armed: true}` in Pattern mode to
+capture notes and expression from the shared input path; `{armed: false}`
+closes held notes and ends the take. Start and stop playback with the
+ordinary `transport` call. This desktop call is available to an already
+running script; new scripts cannot start while recording is active.
+
+Use `mpe`, `midi_input` and `note_expression` for input configuration,
+internal MIDI and saved curves. These host calls work from JavaScript,
+Lua and the bundled Python runtime.

@@ -84,7 +84,7 @@ pub(crate) fn midi_controls(s: &Session) -> Value {
         MidiLearnStatus::Learned { mapping } => json!({"state":"learned", "mapping":mapping}),
         MidiLearnStatus::Error { message } => json!({"state":"error", "message":message}),
     };
-    json!({"channel_filter":s.midi_channel_filter(), "mappings":s.midi_control_mappings(), "learn":learn, "error":s.midi_control_error(),"expression":expression(s)})
+    json!({"channel_filter":s.midi_channel_filter(), "mappings":s.midi_control_mappings(), "learn":learn, "error":s.midi_control_error(),"expression":expression(s),"mpe":s.mpe_config()})
 }
 
 pub(crate) fn send_control(

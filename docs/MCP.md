@@ -73,7 +73,7 @@ for live state, and `peel_read_project` for the document and its revision.
 | --- | --- |
 | Inspect | `peel_status`, `peel_read_project`, `peel_devices`, `peel_browse_files`, `peel_help` |
 | Files | `peel_new_project`, `peel_open_project`, `peel_save_project` |
-| Compose | `peel_add_channel`, `peel_add_pattern`, `peel_set_notes`, `peel_transform_notes`, `peel_place_pattern` |
+| Compose | `peel_add_channel`, `peel_add_pattern`, `peel_set_notes`, `peel_note_expression`, `peel_transform_notes`, `peel_place_pattern` |
 | Edit | `peel_edit_project`, `peel_new_ids`, `peel_history` |
 | Mix | `peel_add_effect`, `peel_set_device`; document edits for routing, sends, sidechains, automation, mute, solo and faders |
 | Play | `peel_transport`, `peel_live_note`, `peel_preview_audio` |
@@ -81,7 +81,7 @@ for live state, and `peel_read_project` for the document and its revision.
 | Export | `peel_export_audio`, `peel_export_job`, `peel_export_midi`, `peel_bounce_clip` |
 | Hardware | `peel_audio_devices`, `peel_configure_audio`, `peel_configure_midi`, `peel_rescan_plugins` |
 | Routing | `peel_output_routes`, `peel_configure_output_routes`, `peel_configure_output_channels` |
-| Controllers | `peel_midi_controls`, `peel_configure_midi_controls`, `peel_midi_learn`, `peel_midi_control`, `peel_midi_expression` |
+| Controllers | `peel_midi_controls`, `peel_configure_midi_controls`, `peel_midi_learn`, `peel_midi_control`, `peel_midi_expression`, `peel_mpe`, `peel_midi_input` |
 | Record | `peel_configure_recording`, `peel_arm_lane`, `peel_recording`, `peel_close_input` |
 | Perform | `peel_performance_slots`, `peel_performance` |
 
@@ -236,7 +236,54 @@ peel.call("midi_expression", {bend_range: 12, bend: 0.5, pressure: 0.3});
 peel.call("midi_expression", {reset: true});
 ```
 
-These controls are transient performance events, not saved device values or
-pattern automation. `peel_midi_controls` includes the same expression
+These controls send performance events. Pattern recording saves them as
+per-note expression, while instrument parameters stay unchanged. `peel_midi_controls` includes the same expression
 readback. `peel_status` reports `compensation_latency_samples` and
 `compensation_latency_ms` for the active audio graph.
+
+## MPE
+
+`peel_mpe` reads the current input configuration. Supply `mode` (`off`,
+`lower`, `upper`), `members` (1..15), `member_bend_range` and
+`manager_bend_range` (0..96 semitones) to change it. Omitted values stay
+unchanged. Defaults are Off, 15 members, 48 semitones per note and 2 for
+the zone. Input configuration does not edit the music document.
+
+`peel_midi_input` sends internal events through the hardware input path.
+`channel` is zero-based. Its `event` is one of `note_on`, `note_off`,
+`pitch_bend`, `channel_pressure`, `poly_pressure`, `control_change`.
+Notes use `key` and `velocity`; pressure uses `value` (plus `key` for poly
+pressure); controllers use `controller` and `value`. Data bytes are
+0..127; pitch bend is -8192..8191. For example:
+
+```js
+peel.call("configure_midi", {channel});
+peel.call("mpe", {mode: "lower", members: 15});
+peel.call("midi_input", {channel: 1, event: {kind: "note_on", key: 60, velocity: 100}});
+peel.call("midi_input", {channel: 1, event: {kind: "pitch_bend", value: 4096}});
+peel.call("midi_input", {channel: 1, event: {kind: "note_off", key: 60, velocity: 0}});
+```
+
+## Note expression
+
+`peel_note_expression` reads a saved note's curves using `pattern` and
+`note` IDs. Supply any of `pitch`, `pressure`, `timbre` to replace those
+curves; omit a curve to keep it, or pass `[]` to clear it. Points have
+`offset` (a note-relative quarter-note string) and `value`. Offsets must be
+increasing, distinct and within the note. Pitch is in semitones (-120..120);
+pressure and timbre are 0..1, with neutral timbre at 0.5.
+
+```js
+peel.call("note_expression", {
+  pattern, note,
+  pitch: [{offset: "0", value: 0}, {offset: "1/2", value: 7}],
+  pressure: [{offset: "0", value: 0.2}, {offset: "1", value: 0.8}]
+});
+```
+
+Each edit is one undo step. Values hold until the next point. Notes that
+share a pitch keep independent curves. Note tools carry or slice curves
+with their source notes; `set_notes` replaces the channel's notes and
+removes curves belonging to those replaced notes. The document stores
+curves in `patterns[].expression`, addressed by note ID. Full project
+patches go through the same range and reference validation.

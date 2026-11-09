@@ -23,7 +23,7 @@ processing, persistence and tests all exist.
 | Harmony | Scales, chord stamping, quantize, clipboard | Done |
 | Workflow | Welcome screen, recent projects, crash recovery, shortcuts overlay, export panel | Done |
 | Packaging | macOS app bundle and DMG, release workflow for macOS, Windows and Linux | Done |
-| Hardware MIDI input | Live playing, sustain, pitch bend, channel and polyphonic aftertouch, device hotplug, note recording | Done |
+| Hardware MIDI input | Live playing, sustain, pitch bend, channel and polyphonic aftertouch, MPE, device hotplug, note recording | Done |
 | Markers and arrangements | Arrangement markers, alternate arrangements, slice tool | Done |
 | Tempo and curves | Tempo changes and ramps in the Playlist, curved automation segments | Done |
 | Audio clips | Gain, reverse, normalize, routing, render to audio, tempo following with time-stretch | Done |
@@ -32,7 +32,7 @@ processing, persistence and tests all exist.
 | Sidechain and stems | Sidechain keys as graph dependencies, gain reduction meters, solo through buses and returns, stem export | Done |
 | Audio device selection | Choose output and buffer size | Done |
 | Accessibility | AccessKit tree, keyboard focus traversal, named controls | Done |
-| Automation | Clips for device parameters, track volume and pan | Done |
+| Automation | Clips for device parameters, track volume and pan; recorded per-note pitch, pressure and timbre | Done |
 | Mixer routing | Bus outputs, post-fader sends, loop-free validation | Done |
 | Audio recording | Input devices and channels, input meter, monitoring, armed lanes, durable takes placed with latency compensation | Done |
 | Delay compensation | Instruments, audio, buses, sends, insert sidechains, metronome and export timing | Done |
