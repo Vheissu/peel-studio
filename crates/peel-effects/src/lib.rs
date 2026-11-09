@@ -19,6 +19,7 @@
 //! | `peel.fx.phaser`     | Phaser  | Modulation |
 //! | `peel.fx.glitch`     | Glitch  | Creative   |
 //! | `peel.fx.multiband`  | Multiband | Dynamics |
+//! | `peel.fx.mastering`  | Mastering | Mastering |
 //!
 //! Every effect processes the left and right buffers in place, ignores note
 //! events, splits blocks at parameter events so changes land on the exact
@@ -42,6 +43,7 @@ pub mod filter;
 pub mod flanger;
 pub mod glitch;
 pub mod limiter;
+pub mod mastering;
 pub mod multiband;
 pub mod phaser;
 pub mod reverb;
@@ -50,7 +52,7 @@ pub mod vintage_chorus;
 
 /// Every effect descriptor, in browser order.
 pub fn descriptors() -> &'static [&'static DeviceDescriptor] {
-    static ALL: [&DeviceDescriptor; 15] = [
+    static ALL: [&DeviceDescriptor; 16] = [
         &eq::DESCRIPTOR,
         &compressor::DESCRIPTOR,
         &limiter::DESCRIPTOR,
@@ -66,6 +68,7 @@ pub fn descriptors() -> &'static [&'static DeviceDescriptor] {
         &phaser::DESCRIPTOR,
         &glitch::DESCRIPTOR,
         &multiband::DESCRIPTOR,
+        &mastering::DESCRIPTOR,
     ];
     &ALL
 }
@@ -91,6 +94,7 @@ pub fn create(type_id: &str) -> Option<Box<dyn Device>> {
         "peel.fx.phaser" => Box::new(phaser::Phaser::new()),
         "peel.fx.glitch" => Box::new(glitch::Glitch::new()),
         "peel.fx.multiband" => Box::new(multiband::Multiband::new()),
+        "peel.fx.mastering" => Box::new(mastering::Mastering::new()),
         _ => return None,
     })
 }
@@ -114,6 +118,7 @@ pub fn presets(type_id: &str) -> &'static [Preset] {
         "peel.fx.phaser" => &phaser::PRESETS,
         "peel.fx.glitch" => &glitch::PRESETS,
         "peel.fx.multiband" => &multiband::PRESETS,
+        "peel.fx.mastering" => &mastering::PRESETS,
         _ => &[],
     }
 }
