@@ -594,3 +594,20 @@ fn mpe_tools_route_equal_pitches_to_distinct_voices_without_editing_the_project(
     );
     assert_eq!(h.s.project(), &before);
 }
+
+#[test]
+fn explicit_mpe_off_disables_rpn_reactivation_even_if_runtime_already_reports_off() {
+    let mut h = Host::new();
+    h.channel();
+    h.call("mpe", json!({"mode":"lower"})).unwrap();
+    fn rpn(h: &mut Host, count: u8) {
+        for (cc, value) in [(101, 0), (100, 6), (6, count)] {
+            h.call("midi_input",json!({"channel":0,"event":{"kind":"control_change","controller":cc,"value":value}})).unwrap();
+        }
+    }
+    rpn(&mut h, 0);
+    assert_eq!(h.call("mpe", json!({})).unwrap()["config"]["mode"], "off");
+    h.call("mpe", json!({"mode":"off"})).unwrap();
+    rpn(&mut h, 15);
+    assert_eq!(h.call("mpe", json!({})).unwrap()["config"]["mode"], "off");
+}

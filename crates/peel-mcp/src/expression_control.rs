@@ -70,6 +70,7 @@ pub(crate) fn mpe(
     member: Option<f32>,
     manager: Option<f32>,
 ) -> Result<Value, String> {
+    let change = mode.is_some() || members.is_some() || member.is_some() || manager.is_some();
     let mut config = s.mpe_config();
     if let Some(mode) = mode {
         config.mode = match mode {
@@ -87,7 +88,7 @@ pub(crate) fn mpe(
     if let Some(v) = manager {
         config.manager_bend_range = v;
     }
-    if config != s.mpe_config() {
+    if change {
         s.configure_mpe(config)?;
     }
     Ok(json!({"config":s.mpe_config()}))
