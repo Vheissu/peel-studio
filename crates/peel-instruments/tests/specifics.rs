@@ -1419,3 +1419,192 @@ fn violin_phrase_analysis() {
     );
     assert!(all_finite(&l) && w(28, 30) > 0.5 * w(1, 2) && w(28, 30) < 2.0 * w(1, 2));
 }
+
+// ------------------------------------------------- grand piano realism pass
+
+fn grand_note(key: u8, vel: f32, params: &[(&str, f32)], frames: usize) -> (Vec<f32>, Vec<f32>) {
+    let mut d = fresh("peel.keys.grand");
+    for (k, v) in params {
+        set(d.as_mut(), k, *v);
+    }
+    render(d.as_mut(), &[note_on(0, key, vel, 1)], frames, 256)
+}
+
+fn grand_pedal_id() -> peel_dsp::ParamId {
+    peel_instruments::descriptors()
+        .iter()
+        .find(|d| d.type_id == "peel.keys.grand")
+        .unwrap()
+        .param_by_key("pedal.sustain")
+        .unwrap()
+        .id
+}
+
+/// Energy above 2 kHz relative to energy below, in dB.
+fn high_ratio_db(buf: &[f32]) -> f32 {
+    let lo: f32 = (1..20)
+        .map(|i| tone_level(buf, 100.0 * i as f32).powi(2))
+        .sum();
+    let hi: f32 = (20..60)
+        .map(|i| tone_level(buf, 100.0 * i as f32).powi(2))
+        .sum();
+    10.0 * (hi / lo.max(1e-20)).max(1e-20).log10()
+}
+
+#[test]
+fn grand_loud_notes_are_far_brighter_not_just_louder() {
+    let soft = grand_note(60, 0.3, &[], 24_000).0;
+    let loud = grand_note(60, 1.0, &[], 24_000).0;
+    let diff = high_ratio_db(&loud[2_000..14_000]) - high_ratio_db(&soft[2_000..14_000]);
+    assert!(diff > 12.0, "ff only {diff} dB brighter than pp");
+}
+
+#[test]
+fn grand_inharmonicity_grows_toward_the_treble() {
+    // C5: the 6th partial sits about 1.9 % above the harmonic.
+    let (l, _) = grand_note(72, 0.9, &[("string.detune", 0.0)], 24_000);
+    let f0 = 523.251f32;
+    let seg = &l[1_000..20_000];
+    let mut best = (0.0f32, 0.0f32);
+    let mut f = f0 * 6.0 * 1.002;
+    while f < f0 * 6.0 * 1.04 {
+        let level = tone_level(seg, f);
+        if level > best.0 {
+            best = (level, f);
+        }
+        f += 0.5;
+    }
+    let stretch = best.1 / (f0 * 6.0);
+    assert!(stretch > 1.012 && stretch < 1.03, "stretch {stretch}");
+}
+
+#[test]
+fn grand_stereo_image_runs_bass_left_to_treble_right() {
+    let side = |key: u8, width: f32| {
+        let (l, r) = grand_note(key, 0.8, &[("out.width", width)], 24_000);
+        rms(&r[2_000..20_000]) / rms(&l[2_000..20_000])
+    };
+    assert!(side(30, 0.6) < 0.9, "bass should lean left");
+    assert!(side(88, 0.6) > 1.1, "treble should lean right");
+    // Width 0 collapses to mono.
+    let (l, r) = grand_note(30, 0.8, &[("out.width", 0.0)], 24_000);
+    assert!(
+        max_diff(&l, &r) < 1e-4 * peak(&l).max(1e-3),
+        "width 0 not mono"
+    );
+}
+
+#[test]
+fn grand_bass_has_a_longitudinal_ping() {
+    // The ping sits off the harmonic series; it only exists with Phantom up.
+    let level = |phantom: f32| {
+        let (l, _) = grand_note(
+            36,
+            1.0,
+            &[("string.phantom", phantom), ("tone.hammer", 0.0)],
+            12_000,
+        );
+        tone_level(&l[0..7_200], 65.406 * 14.2)
+    };
+    let (off, on) = (level(0.0), level(1.0));
+    assert!(on > off * 1.5, "no ping: {on} vs {off}");
+    // Treble notes have none.
+    let hi = |phantom: f32| grand_note(84, 1.0, &[("string.phantom", phantom)], 12_000).0;
+    assert!(max_diff(&hi(0.0), &hi(1.0)) < 1e-6);
+}
+
+#[test]
+fn grand_pedal_wakes_sympathetic_strings() {
+    let pedal = grand_pedal_id();
+    let run = |sympathy: f32, down: bool| {
+        let mut d = fresh("peel.keys.grand");
+        set(d.as_mut(), "pedal.sympathy", sympathy);
+        let events = [
+            (
+                0,
+                EventKind::Param {
+                    id: pedal,
+                    value: down as u8 as f32,
+                },
+            ),
+            note_on(10, 48, 0.9, 1),
+            note_on(10, 55, 0.9, 2),
+            note_on(10, 64, 0.9, 3),
+        ];
+        render(d.as_mut(), &events, 48_000 * 3, 256).0
+    };
+    let quiet = run(0.0, true);
+    let rich = run(1.0, true);
+    let w = 48_000..48_000 * 3;
+    let extra: Vec<f32> = quiet[w.clone()]
+        .iter()
+        .zip(&rich[w.clone()])
+        .map(|(a, b)| b - a)
+        .collect();
+    let ring = rms(&extra);
+    let dry = rms(&quiet[w]);
+    assert!(ring > dry * 0.02, "no sympathetic ring: {ring} vs {dry}");
+    assert!(
+        ring < dry * 0.5,
+        "sympathetic ring too loud: {ring} vs {dry}"
+    );
+    // Without the pedal the strings stay damped, so Sympathy does nothing.
+    let a = run(0.0, false);
+    let b = run(1.0, false);
+    assert!(max_diff(&a, &b) < 1e-5);
+}
+
+#[test]
+fn grand_body_adds_a_short_soundboard_tail_and_goes_silent() {
+    let run = |body: f32| {
+        let mut d = fresh("peel.keys.grand");
+        set(d.as_mut(), "out.body", body);
+        let (l, r) = render(
+            d.as_mut(),
+            &[note_on(0, 70, 0.9, 1), note_off(4_800, 70, 1)],
+            48_000 * 4,
+            256,
+        );
+        (d, l, r)
+    };
+    let (_, dry, _) = run(0.0);
+    let (d, wet, wr) = run(1.0);
+    assert!(max_diff(&dry, &wet) > 1e-3, "body did nothing");
+    assert!(d.is_silent(), "not silent after the tail");
+    assert_eq!(peak(&wet[wet.len() - 2_000..]), 0.0);
+    // The two channels are decorrelated by the soundboard.
+    assert!(max_diff(&wet, &wr) > 1e-3);
+}
+
+#[test]
+fn grand_register_levels_are_even() {
+    // Peak of a forte note is comfortably below full scale in every register.
+    for key in [21u8, 36, 48, 60, 72, 84, 96, 108] {
+        let (l, r) = grand_note(key, 1.0, &[], 24_000);
+        let pk = peak(&l).max(peak(&r));
+        assert!((0.1..1.0).contains(&pk), "key {key}: peak {pk}");
+    }
+}
+
+#[test]
+fn grand_dense_pedal_chords_stay_cheap() {
+    let mut d = fresh("peel.keys.grand");
+    let mut events: Vec<Timed> = vec![(
+        0,
+        EventKind::Param {
+            id: grand_pedal_id(),
+            value: 1.0,
+        },
+    )];
+    for i in 0..48u32 {
+        let at = i as usize * 3_000;
+        let key = 36 + (i * 5 % 48) as u8;
+        events.push(note_on(at, key, 0.8, i));
+        events.push(note_off(at + 2_000, key, i));
+    }
+    let started = std::time::Instant::now();
+    let (l, r) = render(d.as_mut(), &events, 48_000 * 6, 256);
+    let elapsed = started.elapsed().as_secs_f64();
+    assert!(all_finite(&l) && all_finite(&r));
+    assert!(elapsed < 1.5, "took {elapsed} s for 6 s of audio");
+}
