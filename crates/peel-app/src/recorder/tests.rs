@@ -299,3 +299,62 @@ fn software_notes_and_controllers_record_once_through_the_shared_feed() {
             .all(|i| !i.is_error())
     );
 }
+
+#[test]
+fn disarming_after_a_ui_stall_closes_the_entire_held_performance() {
+    let (mut s, mut r, pid, ch) = setup();
+    s.doc.edit("Short loop", |p| {
+        p.pattern_mut(pid).unwrap().length = Time::new(1, 4)
+    });
+    r.begin(&s, pid);
+    s.set_live_target(Some(ch));
+    s.play();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while s.position() < 0.01 {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    r.frame(&mut s);
+    s.live_note(ch, 60, 0.8, true);
+    r.frame(&mut s);
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    r.armed = false;
+    r.frame(&mut s);
+    let notes: Vec<_> = s.project().pattern(pid).unwrap().notes_for(ch).collect();
+    assert!(
+        notes.len() >= 3,
+        "a stalled UI must not truncate whole loops: {}",
+        notes.len()
+    );
+    let duration: f64 = notes.iter().map(|n| n.length.as_f64()).sum();
+    assert!(duration > 0.6, "held duration {duration}");
+    assert!(r.take.is_none());
+    s.live_note(ch, 60, 0.0, false);
+    s.stop();
+}
+
+#[test]
+fn a_tempo_edit_finishes_the_take_instead_of_reusing_a_stale_clock() {
+    let (mut s, mut r, pid, ch) = setup();
+    s.set_live_target(Some(ch));
+    s.play();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while s.position() < 0.01 {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    r.frame(&mut s);
+    s.live_note(ch, 60, 0.8, true);
+    r.frame(&mut s);
+    s.doc.edit("Tempo", |p| p.tempo[0].bpm = 170.0);
+    r.frame(&mut s);
+    assert!(!r.armed);
+    assert!(r.take.is_none());
+    assert_eq!(s.project().pattern(pid).unwrap().notes_for(ch).count(), 1);
+    assert!(
+        peel_document::validate(s.project())
+            .iter()
+            .all(|i| !i.is_error())
+    );
+    s.stop();
+}

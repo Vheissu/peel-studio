@@ -186,7 +186,8 @@ including the state when the note starts. Sustain extends the recorded
 note until the pedal lifts. A note held across a pattern boundary becomes
 separate notes with the carried expression at the next loop's start.
 
-Stopping or disarming closes held notes. One undo removes the take and its
+Stopping or disarming closes held notes. Changing the tempo ends the take
+and disarms recording. One undo removes the take and its
 curves. The Piano Roll's lower lane switches between Velocity, Pitch,
 Pressure and Timbre. Select a note to inspect or edit its control points;
 Clear removes the chosen curve. Values hold until the next point, with the

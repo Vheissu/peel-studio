@@ -63,6 +63,7 @@ struct Take {
     timing: TakeTiming,
     clock: Clock,
     notes: usize,
+    tempo_segments: Vec<peel_document::TempoSegment>,
     awaiting_note: bool,
 }
 
@@ -128,6 +129,7 @@ impl Recorder {
             },
             clock: Clock::default(),
             notes: 0,
+            tempo_segments: s.project().tempo.clone(),
             awaiting_note: false,
         });
         self.overflow_warned = false;
@@ -421,11 +423,20 @@ impl Recorder {
         if !s.is_playing() {
             self.audio_tried = false;
         }
+        let tempo_changed = self
+            .take
+            .as_ref()
+            .is_some_and(|t| t.tempo_segments != s.project().tempo);
+        if tempo_changed {
+            self.armed = false;
+            s.notify("Recording ended because the tempo changed", false);
+        }
         let active = self.active(s);
         let mut events = s.take_recorded_performance();
         events.sort_by_key(|e| e.time_ns);
         if self.take.as_ref().is_some_and(|t| {
-            t.project != s.project().id
+            tempo_changed
+                || t.project != s.project().id
                 || active.is_some_and(|pid| pid != t.pattern)
                 || s.project()
                     .pattern(t.pattern)
@@ -434,6 +445,14 @@ impl Recorder {
             // Events already accepted before the switch belong to the old take.
             for event in events.drain(..) {
                 self.consume(s, event);
+            }
+            if tempo_changed
+                && s.is_playing()
+                && let Some(take) = &mut self.take
+                && !take.awaiting_note
+            {
+                take.clock
+                    .position(s.position(), s.performance_time_ns(), &take.timing);
             }
             self.finish(s);
         }
@@ -446,10 +465,12 @@ impl Recorder {
             self.consume(s, event);
         }
         if let Some(take) = &mut self.take
-            && active == Some(take.pattern)
+            && (active == Some(take.pattern)
+                || (!self.armed && s.is_playing() && s.mode() == PlayMode::Pattern(take.pattern)))
             && !take.awaiting_note
         {
-            take.clock.position(s.position(), None, &take.timing);
+            take.clock
+                .position(s.position(), s.performance_time_ns(), &take.timing);
         }
         let dropped = s.recorded_performance_dropped();
         if dropped > self.dropped && self.take.is_some() {
