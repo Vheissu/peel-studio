@@ -371,6 +371,7 @@ impl ClapDevice {
             .min(chunk_len.saturating_sub(1));
         let time = rel as u32;
         let accepted = match e.kind {
+            EventKind::ClearVoiceExpression { voice } => self.clear_scoped(time, voice),
             EventKind::VoiceExpression {
                 voice,
                 pitch,

@@ -633,3 +633,104 @@ fn midi_all_notes_off_releases_member_allocation_for_the_next_phrase() {
             .any(|e| e.data[0] & 0xf0 == 0x90)
     );
 }
+
+#[test]
+fn clearing_a_scoped_override_resumes_shared_expression_without_retriggering() {
+    let mut dev = device(fixture::SINE);
+    on(&mut dev, 60, 500);
+    assert!(dev.push_expression(0, EventKind::PitchBend { semitones: 2.0 }));
+    assert!(dev.push_expression(0, EventKind::ChannelPressure { value: 0.3 }));
+    assert!(dev.push_expression(
+        0,
+        EventKind::PolyPressure {
+            key: 60,
+            value: 0.5
+        }
+    ));
+    assert!(dev.push_scoped(0, 500, 12.0, 0.9, 0.8));
+    dev.events.clear();
+    push(&mut dev, 17, EventKind::ClearVoiceExpression { voice: 500 });
+    assert_eq!(dev.events.len(), 3);
+    assert_eq!(dev.voices.items.len(), 1);
+    assert_eq!(dev.events.expression_at(0).unwrap().value, 2.0);
+    assert_eq!(
+        dev.events.expression_at(1).unwrap().value,
+        f64::from(0.3f32 + 0.5 - 0.3 * 0.5)
+    );
+    assert_eq!(dev.events.expression_at(2).unwrap().value, 0.5);
+    assert!(
+        dev.scoped
+            .entries
+            .iter()
+            .all(|e| e.id != 500 || !e.explicit)
+    );
+    dev.events.clear();
+    assert!(dev.push_expression(20, EventKind::PitchBend { semitones: 5.0 }));
+    assert_eq!(
+        dev.events.len(),
+        1,
+        "shared updates no longer reapply the old scoped override"
+    );
+    assert_eq!(dev.events.expression_at(0).unwrap().value, 5.0);
+}
+#[test]
+fn a_deferred_clear_uses_the_latest_shared_values_and_keeps_release_capacity() {
+    let mut dev = device(fixture::SINE);
+    on(&mut dev, 60, 501);
+    assert!(dev.push_scoped(0, 501, 12.0, 1.0, 1.0));
+    dev.events = EventList::with_capacity(16, 8);
+    for _ in 0..8 {
+        dev.events.push_midi(0, 0, [0xb0, 1, 0], false);
+    }
+    assert!(!dev.clear_scoped(17, 501));
+    assert!(!dev.push_expression(18, EventKind::PitchBend { semitones: -3.0 }));
+    assert!(!dev.push_expression(19, EventKind::ChannelPressure { value: 0.25 }));
+    for _ in 0..8 {
+        assert!(dev.events.push_midi(20, 0, [0x80, 60, 0], true));
+    }
+    process_empty(&mut dev);
+    let tuning: Vec<_> = (0..dev.events.len())
+        .filter_map(|i| dev.events.expression_at(i))
+        .filter(|e| e.expression_id == CLAP_NOTE_EXPRESSION_TUNING)
+        .collect();
+    assert!(tuning.iter().any(|e| e.note_id == 501 && e.value == -3.0));
+    assert!(
+        dev.scoped
+            .entries
+            .iter()
+            .all(|e| e.id != 501 || (!e.explicit && !e.dirty))
+    );
+}
+#[test]
+fn clearing_midi_expression_keeps_the_member_and_follows_shared_controls() {
+    let mut dev = device(fixture::MIDI_SINE);
+    dev.scoped.midi_enabled = true;
+    on(&mut dev, 60, 502);
+    assert!(dev.push_scoped(0, 502, 24.0, 0.9, 0.1));
+    assert!(dev.push_expression(0, EventKind::PitchBend { semitones: 3.0 }));
+    assert!(dev.push_expression(0, EventKind::ChannelPressure { value: 0.25 }));
+    dev.events.clear();
+    push(&mut dev, 17, EventKind::ClearVoiceExpression { voice: 502 });
+    assert_eq!(dev.events.len(), 3);
+    let mut expected = midi_bend(3.0, 96.0);
+    expected[0] = 0xe1;
+    assert_eq!(dev.events.midi_at(0).unwrap().data, expected);
+    assert_eq!(dev.events.midi_at(1).unwrap().data, [0xd1, 32, 0]);
+    assert_eq!(dev.events.midi_at(2).unwrap().data, [0xb1, 74, 64]);
+    dev.events.clear();
+    assert!(dev.push_expression(19, EventKind::PitchBend { semitones: -6.0 }));
+    let mut expected = midi_bend(-6.0, 96.0);
+    expected[0] = 0xe1;
+    assert_eq!(dev.events.midi_at(0).unwrap().data, expected);
+    dev.events.clear();
+    push(
+        &mut dev,
+        20,
+        EventKind::NoteOff {
+            key: 60,
+            velocity: 0.0,
+            voice: 502,
+        },
+    );
+    assert_eq!(dev.events.midi_at(0).unwrap().data, [0x81, 60, 0]);
+}

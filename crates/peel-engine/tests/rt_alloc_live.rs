@@ -104,6 +104,9 @@ fn live_input_never_allocates_on_the_audio_thread() {
         if block % 7 == 0 {
             live.voice_on(0, voice, 60, 0.8, 1, 12.0, 0.5, 0.8);
             live.voice_expression(0, voice, 1, 0.0, 0.0, 0.5);
+            live.target().set(Some(0));
+            live.expression(EventKind::ClearVoiceExpression { voice });
+            live.target().set(Some(block % 3));
         } else if block % 7 == 1 {
             live.voice_off(0, voice - 1, 60, 1);
         }

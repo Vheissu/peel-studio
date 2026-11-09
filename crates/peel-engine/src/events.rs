@@ -305,13 +305,6 @@ impl ActiveNotes {
         self.notes.swap_remove(i)
     }
 
-    /// True if a sequence note with this voice id is sounding on the slot.
-    pub fn contains_voice(&self, slot: u32, voice: u32) -> bool {
-        self.notes
-            .iter()
-            .any(|n| !n.live && n.slot == slot && n.source_voice == voice)
-    }
-
     pub fn voice_for_source(&self, slot: u32, source: u32) -> Option<u32> {
         self.notes
             .iter()

@@ -340,9 +340,13 @@ fn scoped_mpe_expression_and_member_reuse_never_allocate() {
                 },
             ));
         }
+        let clears: Vec<_> = (1..=15)
+            .map(|voice| at(0, EventKind::ClearVoiceExpression { voice }))
+            .collect();
         let allocations = count_allocations(|| {
             for _ in 0..8 {
                 dev.process(&ctx, &events, &mut l, &mut r);
+                dev.process(&ctx, &clears, &mut l, &mut r);
                 dev.process(&ctx, &releases, &mut l, &mut r);
             }
             dev.reset();

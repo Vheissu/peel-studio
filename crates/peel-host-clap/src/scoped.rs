@@ -233,7 +233,26 @@ impl ClapDevice {
         entry.dirty = true;
         self.emit_scoped(time, index)
     }
+    pub(super) fn clear_scoped(&mut self, time: u32, voice: u32) -> bool {
+        let Some(index) = self.scoped.entry(note_id(voice)) else {
+            return true;
+        };
+        self.scoped.entries[index].explicit = false;
+        self.scoped.entries[index].dirty = true;
+        self.emit_scoped(time, index)
+    }
     fn emit_scoped(&mut self, time: u32, index: usize) -> bool {
+        // A deferred clear resumes the latest shared values, not the values
+        // that happened to be cached when the clear first encountered pressure.
+        if !self.scoped.entries[index].explicit {
+            let key = self.scoped.entries[index].key.clamp(0, 127) as usize;
+            let channel = self.expression.pressure;
+            let poly = self.expression.keys[key].unwrap_or(0.0);
+            let entry = &mut self.scoped.entries[index];
+            entry.pitch = self.expression.bend;
+            entry.pressure = channel + poly - channel * poly;
+            entry.timbre = 0.5;
+        }
         let e = self.scoped.entries[index];
         if !self.events.has_room(3) {
             return false;

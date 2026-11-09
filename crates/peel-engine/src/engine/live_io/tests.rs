@@ -362,3 +362,49 @@ fn the_last_live_operation_in_a_chunk_keeps_the_note_and_initial_expression_toge
         && matches!(kind,EventKind::NoteOn{voice:v,..}if *v==voice)));
     assert!(seen.iter().any(|(frame,offset,kind)|*frame==0 && *offset==0 && matches!(kind,EventKind::VoiceExpression{voice:v,pitch:12.0,pressure,..}if *v==voice && (*pressure-0.7).abs()<1e-6)));
 }
+
+#[test]
+fn deferred_clear_and_snapshot_share_a_key_and_live_reset_preserves_sequence_clear() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut e = engine(&seen);
+    let voice = 7;
+    let snapshot = EventKind::VoiceExpression {
+        voice,
+        pitch: 12.0,
+        pressure: 1.0,
+        timbre: 1.0,
+    };
+    e.live.defer_expression(0, snapshot);
+    e.live
+        .defer_expression(0, EventKind::ClearVoiceExpression { voice });
+    assert_eq!(e.live.deferred_expression.len(), 1);
+    assert!(matches!(
+        e.live.deferred_expression[0].1,
+        EventKind::ClearVoiceExpression { voice: 7 }
+    ));
+    e.live.defer_expression(0, EventKind::ResetExpression);
+    assert!(
+        e.live
+            .deferred_expression
+            .iter()
+            .any(|(_, kind)| matches!(kind, EventKind::ClearVoiceExpression { voice: 7 }))
+    );
+    let live = e.take_live_input().unwrap();
+    assert!(live.all_notes_off(0));
+    let (mut l, mut r) = ([0.0; 256], [0.0; 256]);
+    e.render(&mut l, &mut r);
+    assert!(
+        seen.lock()
+            .unwrap()
+            .iter()
+            .any(|(_, _, kind)| matches!(kind, EventKind::ClearVoiceExpression { voice: 7 }))
+    );
+    e.live
+        .defer_expression(0, EventKind::ClearVoiceExpression { voice });
+    e.live.defer_expression(0, snapshot);
+    assert_eq!(e.live.deferred_expression.len(), 1);
+    assert!(matches!(
+        e.live.deferred_expression[0].1,
+        EventKind::VoiceExpression { voice: 7, .. }
+    ));
+}

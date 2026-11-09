@@ -506,7 +506,7 @@ impl LiveInput {
                         timbre: timbre.clamp(0.0, 1.0),
                     }
                 }
-                EventKind::ResetExpression => kind,
+                EventKind::ClearVoiceExpression { .. } | EventKind::ResetExpression => kind,
                 _ => return false,
             };
         }
@@ -737,7 +737,9 @@ impl LiveState {
                 *owner != slot
                     || matches!(
                         old,
-                        EventKind::VoiceExpression { .. } | EventKind::PitchBendRange { .. }
+                        EventKind::VoiceExpression { .. }
+                            | EventKind::ClearVoiceExpression { .. }
+                            | EventKind::PitchBendRange { .. }
                     )
             });
         }
@@ -965,7 +967,7 @@ impl LiveState {
                 self.sustained.retain(|&(s, _)| !every && s != slot);
                 self.deferred_expression.retain(|(owner,kind)| {
                     if !every && *owner!=slot {return true;}
-                    matches!(kind,EventKind::VoiceExpression{voice,..} if *voice<crate::LIVE_VOICE_BASE)
+                    matches!(kind,EventKind::VoiceExpression{voice,..}|EventKind::ClearVoiceExpression{voice} if *voice<crate::LIVE_VOICE_BASE)
                 });
                 emit(out, offset, LiveOp::AllOff { slot });
             }
@@ -991,7 +993,9 @@ fn expression_key(kind: EventKind) -> (u8, u32) {
         EventKind::ChannelPressure { .. } => (2, 0),
         EventKind::PolyPressure { key, .. } => (3, u32::from(key)),
         EventKind::ResetExpression => (4, 0),
-        EventKind::VoiceExpression { voice, .. } => (5, voice),
+        EventKind::VoiceExpression { voice, .. } | EventKind::ClearVoiceExpression { voice } => {
+            (5, voice)
+        }
         _ => (255, 0),
     }
 }

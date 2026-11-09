@@ -94,6 +94,8 @@ pub enum EventKind {
         pressure: f32,
         timbre: f32,
     },
+    /// Relinquish one voice's override and resume shared expression without retriggering.
+    ClearVoiceExpression { voice: u32 },
     /// Clear transient pitch and pressure without ending sequence voices.
     ResetExpression,
     /// Release every sounding voice normally (tails continue).
