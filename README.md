@@ -72,6 +72,27 @@ song is a separate choice.
 File > Close project returns to the start screen. New, Open and Close ask
 before replacing unsaved work; cancelling Save As keeps the current project.
 
+File > Save as template… stores a copy of the open project under a name you
+choose: instruments and their settings, plugin state, mixer routing,
+patterns, recorded expression and the arrangement. Audio comes along too,
+including files the project only referenced, so the template still works if
+the original project or those files move. Saving a template leaves the open
+project as it was, with the same file, title and unsaved changes. Names must
+be unique; an existing template is never replaced.
+
+Your templates are listed under File > New from template > My templates and
+behind the My templates button on the start screen. Picking one starts a new
+Untitled project. The first save asks where to put it and copies its audio
+there, so the template itself is never changed. Templates live in a
+`Templates` folder next to the app's settings (on macOS,
+`~/Library/Application Support/Peel Studio/Templates`). There's no rename or
+delete in the app yet; remove a template's `.peelproj` file and `.peeldata`
+folder by hand.
+
+New drum channels use acoustic presets. The preset menus also include 808
+and 909 circuit models; Rock / Metal, Trap, Synthwave and EDM starters use
+the new kits. Existing projects and older presets retain their sound.
+
 In Channels, **Steps** sets the drum grid; the bar count sets the pattern's
 length. Choose 1/32 or 1/64 for fast repeated kicks. The Piano Roll has
 separate **Grid** and **Note length** controls, with quarter notes, eighths,

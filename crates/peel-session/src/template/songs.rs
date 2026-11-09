@@ -346,10 +346,10 @@ pub fn rap() -> Project {
 /// carries the low end under a bell melody and dark strings.
 pub fn trap() -> Project {
     let mut s = Song::new(140.0, 0.0, &["Drums", "808", "Bells", "Strings"]);
-    let kick = s.part("Kick", 0, "peel.drum.kick", "Tight", HIT, -9.0);
-    let snare = s.part("Snare", 9, "peel.drum.snare", "Trap", HIT, -9.0);
+    let kick = s.part("Kick", 0, "peel.drum.kick", "909 Kick", HIT, -9.0);
+    let snare = s.part("Snare", 9, "peel.drum.snare", "808 Snare", HIT, -9.0);
     let clap = s.part("Clap", 1, "peel.drum.clap", "Snappy", HIT, -13.0);
-    let hat = s.part("Hat", 2, "peel.drum.hat", "Trap Hat", HIT, -15.0);
+    let hat = s.part("Hat", 2, "peel.drum.hat", "808 Closed", HIT, -15.0);
     let open = s.part("Open hat", 3, "peel.drum.hat", "Open", HIT, -18.0);
     let bass = s.part("808", 6, "peel.synth.bass", "808", 36, -10.0);
     let bell = s.part("Bells", 5, "peel.synth.poly", "Glass Bell", 72, -8.0);
@@ -554,10 +554,10 @@ pub fn hip_hop() -> Project {
 /// chorused pad and a sync lead for the chorus.
 pub fn synthwave() -> Project {
     let mut s = Song::new(100.0, 0.0, &["Drums", "Bass", "Arp", "Pad", "Lead"]);
-    let kick = s.part("Kick", 0, "peel.drum.kick", "Punch", HIT, -7.0);
-    let snare = s.part("Snare", 9, "peel.drum.snare", "Big Room", HIT, -10.0);
-    let hat = s.part("Hat", 2, "peel.drum.hat", "Closed", HIT, -15.0);
-    let tom = s.part("Toms", 3, "peel.drum.tom", "Synth Tom", HIT, -12.0);
+    let kick = s.part("Kick", 0, "peel.drum.kick", "909 Kick", HIT, -7.0);
+    let snare = s.part("Snare", 9, "peel.drum.snare", "909 Snare", HIT, -10.0);
+    let hat = s.part("Hat", 2, "peel.drum.hat", "808 Closed", HIT, -15.0);
+    let tom = s.part("Toms", 3, "peel.drum.tom", "909 Tom", HIT, -12.0);
     let bass = s.part("Bass", 6, "peel.synth.bass", "Synthwave", 40, -9.0);
     let arp_ch = s.part("Arp", 7, "peel.synth.poly", "Arp", 64, -7.0);
     let pad = s.part("Pad", 5, "peel.synth.poly", "Warm Pad", 52, -7.0);
@@ -649,11 +649,11 @@ pub fn synthwave() -> Project {
 /// big-room lead.
 pub fn edm() -> Project {
     let mut s = Song::new(128.0, 0.0, &["Drums", "Bass", "Chords", "Lead", "Pluck"]);
-    let kick = s.part("Kick", 0, "peel.drum.kick", "Big Room", HIT, -7.0);
+    let kick = s.part("Kick", 0, "peel.drum.kick", "Hard Kick", HIT, -7.0);
     let clap = s.part("Clap", 1, "peel.drum.clap", "EDM", HIT, -11.0);
-    let hat = s.part("Hat", 2, "peel.drum.hat", "Tight", HIT, -17.0);
+    let hat = s.part("Hat", 2, "peel.drum.hat", "909 Closed", HIT, -17.0);
     let open = s.part("Open hat", 3, "peel.drum.hat", "Open", HIT, -16.0);
-    let snare = s.part("Snare roll", 9, "peel.drum.snare", "Big Room", HIT, -6.0);
+    let snare = s.part("Snare roll", 9, "peel.drum.snare", "909 Snare", HIT, -6.0);
     let riser = s.part("Riser", 8, "peel.synth.poly", "Noise Riser", 60, -9.0);
     let bass = s.part("Bass", 6, "peel.synth.bass", "Sub", 29, -8.0);
     let saw = s.part("Supersaw", 5, "peel.synth.poly", "Supersaw", 56, -7.0);
@@ -766,11 +766,11 @@ pub fn edm() -> Project {
 /// half-time chugs.
 pub fn rock_metal() -> Project {
     let mut s = Song::new(108.0, 0.0, &["Drums", "Bass", "Rhythm", "Chug"]);
-    let kick = s.part("Kick", 0, "peel.drum.kick", "Tight", HIT, -10.0);
-    let snare = s.part("Snare", 9, "peel.drum.snare", "Crack", HIT, -9.0);
-    let hat = s.part("Hat", 2, "peel.drum.hat", "Closed", HIT, -16.0);
-    let crash = s.part("Crash", 3, "peel.drum.hat", "Crash", HIT, -20.0);
-    let tom = s.part("Toms", 8, "peel.drum.tom", "Floor", HIT, -12.0);
+    let kick = s.part("Kick", 0, "peel.drum.kick", "Metal Kick", HIT, -10.0);
+    let snare = s.part("Snare", 9, "peel.drum.snare", "Rock Snare", HIT, -9.0);
+    let hat = s.part("Hat", 2, "peel.drum.hat", "Acoustic Closed", HIT, -16.0);
+    let crash = s.part("Crash", 3, "peel.drum.hat", "Acoustic Crash", HIT, -20.0);
+    let tom = s.part("Toms", 8, "peel.drum.tom", "Acoustic Floor", HIT, -12.0);
     let bass = s.part("Bass", 6, "peel.synth.bass", "Fingered", 28, -8.0);
     let gtr = s.part("Guitar", 4, "peel.guitar.electric", "High Gain", 40, -14.0);
     let chug = s.part("Chug", 5, "peel.guitar.electric", "Palm Mute", 40, -12.0);

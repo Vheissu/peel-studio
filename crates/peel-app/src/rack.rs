@@ -1168,7 +1168,16 @@ pub fn add_instrument_preset(s: &mut Session, type_id: &str, preset: Option<&str
         return None;
     }
     let desc = peel_devices::descriptor(type_id)?;
-    let dev = template::device(type_id, preset);
+    // New drum channels start with the acoustic kit. Explicit presets and
+    // existing project instances keep their own settings.
+    let default = match type_id {
+        "peel.drum.kick" => Some("Acoustic Kick"),
+        "peel.drum.snare" => Some("Acoustic Snare"),
+        "peel.drum.hat" => Some("Acoustic Closed"),
+        "peel.drum.tom" => Some("Acoustic Rack"),
+        _ => None,
+    };
+    let dev = template::device(type_id, preset.or(default));
     let name = preset
         .filter(|p| {
             !peel_devices::presets(type_id)
@@ -1363,6 +1372,28 @@ pub(crate) mod tests {
     use super::{STEP_MIN_W, step_menu};
     use crate::note_expr::{Lane, set_curve};
     use crate::studio::Studio;
+
+    #[test]
+    fn new_drum_channels_use_the_acoustic_kit_and_allow_electronic_presets() {
+        let mut session = Session::new_silent(template::empty());
+        for (kind, preset, control) in [
+            ("peel.drum.kick", "Acoustic Kick", "body.acoustic"),
+            ("peel.drum.snare", "Acoustic Snare", "body.acoustic"),
+            ("peel.drum.hat", "Acoustic Closed", "tone.acoustic"),
+            ("peel.drum.tom", "Acoustic Rack", "body.acoustic"),
+        ] {
+            let id = super::add_instrument(&mut session, kind).unwrap();
+            let ch = session.project().channel(id).unwrap();
+            assert_eq!(ch.device.preset.as_deref(), Some(preset));
+            assert_eq!(ch.device.params.get(control), Some(&1.0));
+            assert_eq!(ch.name, peel_devices::descriptor(kind).unwrap().name);
+        }
+        let id =
+            super::add_instrument_preset(&mut session, "peel.drum.kick", Some("Punch")).unwrap();
+        let kick = &session.project().channel(id).unwrap().device;
+        assert_eq!(kick.preset.as_deref(), Some("Punch"));
+        assert_eq!(kick.params.get("body.acoustic"), Some(&0.0));
+    }
 
     /// The real Studio against a silent engine, with scripted input.
     pub(crate) struct Harness {

@@ -73,6 +73,36 @@ Native instruments use Peel's controls. CLAP instruments expose their
 parameter controls and saved plugin state; embedded third-party plugin
 GUIs are not supported by this host yet.
 
+## Drums
+
+Kick, Snare, Hat and Tom each have three models. With both the
+**Acoustic** and **Circuit** switches off you get the original electronic
+drum, and projects saved before the switches existed sound exactly as
+they did. If both are on, Acoustic wins. Every factory preset sets both
+switches, so loading one never leaves the other model switched on.
+
+**Acoustic** strikes a set of resonant modes with a short beater or stick
+pulse: kick and tom heads with a resonant head and shell, a snare head
+whose wires buzz for as long as the heads move, and cymbal plates whose
+high partials die first. Harder hits are louder and brighter, and soft
+snare strokes come out wirier. Each hit lands at a slightly different
+spot, so repeats aren't identical, but the same notes always render the
+same audio and note timing never moves. Presets: Acoustic Kick, Metal
+Kick, Acoustic Snare, Rock Snare, Acoustic Closed, Acoustic Open, Acoustic
+Ride, Acoustic Crash, Acoustic Rack and Acoustic Floor.
+
+**Circuit** models drum-machine voices. The kick holds its peak before
+decaying, velocity acts as accent (more pitch sweep and drive), and its
+drive and clip stages are anti-aliased. Snare and tom bodies are pinged
+resonators, so a fast roll keeps ringing instead of restarting each
+hit. Hat oscillators run freely between hits, so each hit starts at a
+different point in the metallic tone. Presets: 909 Kick, 808 Kick, Hard
+Kick, 909 Snare, 808 Snare, 808 Closed, 808 Open, 909 Closed, 808 Tom and
+909 Tom.
+
+Retriggering a hat still chokes the previous hit, and Cut On Release
+still works in every model.
+
 ## MIDI
 
 Choose an input port and optional MIDI channel filter in Audio and MIDI.

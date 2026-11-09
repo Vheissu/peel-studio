@@ -4,11 +4,11 @@
 //!
 //! | type_id            | Name    | Category | Sound                                        |
 //! |--------------------|---------|----------|----------------------------------------------|
-//! | `peel.drum.kick`   | Kick    | Drums    | Synthesized kick: pitch sweep, click, drive  |
-//! | `peel.drum.snare`  | Snare   | Drums    | Tuned body plus filtered noise and snap      |
-//! | `peel.drum.hat`    | Hat     | Drums    | Metallic oscillator bank and noise, closed/open |
+//! | `peel.drum.kick`   | Kick    | Drums    | Pitch-swept kick; Circuit and Acoustic models |
+//! | `peel.drum.snare`  | Snare   | Drums    | Tuned body and noise; Circuit and Acoustic models |
+//! | `peel.drum.hat`    | Hat     | Drums    | Metallic bank and noise; Circuit and Acoustic models |
 //! | `peel.drum.clap`   | Clap    | Drums    | Multi-burst filtered noise with room tail    |
-//! | `peel.drum.tom`    | Tom     | Drums    | Pitched membrane with sweep                  |
+//! | `peel.drum.tom`    | Tom     | Drums    | Pitched membrane; Circuit and Acoustic models |
 //! | `peel.synth.poly`  | Poly    | Synth    | Polyphonic subtractive synth                 |
 //! | `peel.synth.bass`  | Bass    | Synth    | Monophonic bass with glide and drive         |
 //! | `peel.keys.tine`   | Tine    | Keys     | Electric piano: tine and pickup model        |
@@ -20,6 +20,16 @@
 //! | `peel.perc.mallet` | Mallet | Percussion | Pitched modal bars, membranes, plates and bells |
 //! | `peel.strings.zither` | Zither | Strings | Paired acoustic strings with coupling and body |
 //! | `peel.synth.cross` | Cross | Synth | Cross FM, oscillator sync and ring modulation |
+//!
+//! ## Drum models
+//!
+//! Kick, Snare, Hat and Tom each have two switches appended to their
+//! parameters, `Acoustic` (`body.acoustic`, `tone.acoustic` on Hat) and
+//! `Circuit` (`body.circuit`, `tone.circuit`). Both default to off, which
+//! renders the original electronic drum bit for bit, so projects saved
+//! before the switches existed are unchanged. Acoustic wins if both are on.
+//! Every factory preset lists both switches. The models run in their own
+//! preallocated voice pools; see `acoustic.rs` for the shared parts.
 //!
 //! ## Per-note expression
 //!
@@ -51,6 +61,7 @@
 //! the block at their sample offsets, and output is kept finite. Voices are
 //! preallocated in `prepare`; nothing allocates while rendering.
 
+mod acoustic;
 mod analog;
 mod common;
 mod minblep_table;

@@ -447,8 +447,10 @@ mod tests {
         // A device with several small groups gets shorter at sheet width.
         let d = desc("peel.drum.tom");
         let stacked = layout(d, 300.0).height;
-        let flowed = layout(d, 770.0);
-        assert!(flowed.height < stacked);
+        assert!(layout(d, 770.0).height < stacked);
+        // The acoustic switch adds a control; a wider sheet still fits
+        // all groups on one line, while narrower sheets can wrap.
+        let flowed = layout(d, 900.0);
         assert!(
             flowed.placed.iter().all(|p| p.first),
             "tom fits on one line"

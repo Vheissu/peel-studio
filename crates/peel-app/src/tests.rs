@@ -4284,4 +4284,437 @@ mod lifecycle {
         h.frame();
         assert!(count(&h) > before);
     }
+
+    mod my_templates {
+        use super::*;
+        use crate::user_templates::{FIELD, Library};
+
+        fn library(h: &mut Harness, tag: &str) -> std::path::PathBuf {
+            let dir = std::env::temp_dir()
+                .join(format!("peel-app-tpl-{tag}-{}", peel_document::Id::new()));
+            h.studio.templates = Library::open(dir.clone());
+            dir
+        }
+
+        fn files(dir: &std::path::Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
+            let mut out = Vec::new();
+            let mut stack = vec![dir.to_path_buf()];
+            while let Some(d) = stack.pop() {
+                for e in std::fs::read_dir(&d).unwrap().flatten() {
+                    let p = e.path();
+                    if p.is_dir() {
+                        stack.push(p);
+                    } else {
+                        out.push((p.clone(), std::fs::read(&p).unwrap()));
+                    }
+                }
+            }
+            out.sort();
+            out
+        }
+
+        fn type_text(h: &mut Harness, text: &str) {
+            h.ui.input.text = text.into();
+            h.frame();
+        }
+
+        fn slot(h: &Harness, name: &str) -> usize {
+            h.studio
+                .templates
+                .entries()
+                .find(|(_, e)| e.name == name)
+                .map(|(s, _)| s)
+                .unwrap_or_else(|| panic!("{name} not listed"))
+        }
+
+        #[test]
+        fn save_as_template_names_a_copy_and_keeps_the_project() {
+            let mut h = Harness::new();
+            let dir = library(&mut h, "save");
+            edit(&mut h);
+            let id = h.session().project().id;
+            let revision = h.session().doc.revision();
+            menu(&mut h, Command::SaveTemplate);
+            h.frame();
+            let d = h.studio.template_dialog.as_ref().expect("dialog open");
+            assert_eq!(d.name, "Edited", "named after the project");
+            assert!(h.ui.has_focus(FIELD), "the name field has the keyboard");
+            let field = h.rect(FIELD);
+            assert!(h.rect(W::new("template-dialog")).contains(field.center()));
+
+            // Typing replaces the selected name and plays no notes.
+            type_text(&mut h, "My kit");
+            assert_eq!(h.studio.template_dialog.as_ref().unwrap().name, "My kit");
+            assert!(h.studio.ws.held.is_empty());
+            named_key(&mut h, peel_ui::NamedKey::Enter, peel_ui::KeyCode::Enter);
+            assert!(h.studio.template_dialog.is_none());
+            assert!(dir.join("My kit.peelproj").is_file());
+
+            // The project is exactly as it was: same id, no file, still
+            // unsaved, same history.
+            assert_eq!(h.session().project().id, id);
+            assert!(h.session().path.is_none());
+            assert_eq!(h.session().project().meta.title, "Edited");
+            assert_eq!(h.session().doc.revision(), revision);
+            assert!(h.session().doc.is_dirty());
+            assert_eq!(h.session().doc.undo_label(), Some("Rename project"));
+
+            // It shows under My templates at once.
+            let bar = crate::menus::bar(&h.studio, true);
+            let file = &bar.menus[1];
+            let mine = file
+                .entries
+                .iter()
+                .find_map(|e| match e {
+                    peel_ui::MenuEntry::Submenu { menu, .. }
+                        if menu.title == "New from template" =>
+                    {
+                        menu.entries.iter().find_map(|e| match e {
+                            peel_ui::MenuEntry::Submenu { menu, enabled, .. }
+                                if menu.title == "My templates" =>
+                            {
+                                Some((menu.clone(), *enabled))
+                            }
+                            _ => None,
+                        })
+                    }
+                    _ => None,
+                })
+                .expect("My templates submenu");
+            assert!(mine.1);
+            assert_eq!(mine.0.commands().len(), 1);
+            assert_eq!(mine.0.commands()[0].label, "My kit");
+            // Factory styles keep their ids.
+            for (i, name) in crate::project::styles() {
+                assert!(
+                    bar.commands()
+                        .iter()
+                        .any(|c| c.id == Command::Template(i).id() && c.label == name)
+                );
+            }
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[test]
+        fn bad_or_taken_names_are_refused_in_the_dialog() {
+            let mut h = Harness::new();
+            let dir = library(&mut h, "names");
+            h.studio.save_template("Kit").unwrap();
+            let before = files(&dir);
+            for (name, error) in [
+                ("kit", "A template named kit already exists"),
+                ("   ", "Enter a name"),
+                ("../Kit", "Names can't use /"),
+            ] {
+                menu(&mut h, Command::SaveTemplate);
+                h.studio.template_dialog.as_mut().unwrap().name = name.into();
+                h.frame();
+                h.click(W::new("template-save"));
+                let d = h.studio.template_dialog.as_ref().expect("stays open");
+                assert_eq!(d.error.as_deref(), Some(error));
+                named_key(&mut h, peel_ui::NamedKey::Escape, peel_ui::KeyCode::Escape);
+                assert!(h.studio.template_dialog.is_none(), "Escape cancels");
+            }
+            assert_eq!(files(&dir), before, "nothing overwritten or added");
+            assert!(!dir.parent().unwrap().join("Kit.peelproj").exists());
+            // Cancel by button too.
+            menu(&mut h, Command::SaveTemplate);
+            h.frame();
+            type_text(&mut h, "Cancelled kit");
+            h.click(W::new("template-cancel"));
+            assert!(h.studio.template_dialog.is_none());
+            assert_eq!(files(&dir), before, "Cancel never saves a valid name");
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[test]
+        fn leaving_the_name_field_does_not_submit_the_dialog() {
+            let mut h = Harness::new();
+            let dir = library(&mut h, "blur");
+            menu(&mut h, Command::SaveTemplate);
+            type_text(&mut h, "Still editing");
+            named_key(&mut h, peel_ui::NamedKey::Tab, peel_ui::KeyCode::Tab);
+            assert!(h.studio.template_dialog.is_some(), "Tab only moves focus");
+            assert!(!dir.exists(), "Tab writes no template");
+            h.studio.template_dialog = None;
+            menu(&mut h, Command::SaveTemplate);
+            type_text(&mut h, "Still editing");
+            let panel = h.rect(W::new("template-dialog"));
+            h.click_at(vec2(panel.x + 10.0, panel.y + 10.0));
+            assert!(
+                h.studio.template_dialog.is_some(),
+                "a background click only blurs"
+            );
+            assert!(!dir.exists(), "focus loss writes no template");
+        }
+
+        #[test]
+        fn the_dialog_is_modal() {
+            let mut h = Harness::new();
+            let dir = library(&mut h, "modal");
+            let before = h.session().project().clone();
+            menu(&mut h, Command::SaveTemplate);
+            // Menu commands and editor keys wait while it is open.
+            menu(&mut h, Command::NewProject);
+            named_key(&mut h, peel_ui::NamedKey::Space, peel_ui::KeyCode::Space);
+            assert!(!h.session().is_playing());
+            assert_eq!(h.session().project(), &before);
+            assert!(h.studio.pending.is_none());
+            named_key(&mut h, peel_ui::NamedKey::Escape, peel_ui::KeyCode::Escape);
+            assert!(h.studio.template_dialog.is_none());
+            assert!(!dir.exists(), "cancel writes nothing");
+        }
+
+        #[test]
+        fn a_template_starts_an_independent_untitled_project() {
+            let mut h = Harness::new();
+            let dir = library(&mut h, "start");
+            let source = h.session().project().clone();
+            h.studio.save_template("Beat").unwrap();
+            let library_files = files(&dir);
+
+            // Unsaved work asks first; Cancel keeps it.
+            edit(&mut h);
+            let id = h.session().project().id;
+            {
+                let s = slot(&h, "Beat");
+                menu(&mut h, Command::UserTemplate(s));
+            }
+            assert!(matches!(h.studio.pending, Some(Change::UserTemplate(_))));
+            h.frame();
+            h.click(W::new("save-prompt-cancel"));
+            assert_eq!(h.session().project().id, id);
+            assert_eq!(h.session().project().meta.title, "Edited");
+
+            // Don't save: a new project from the template.
+            {
+                let s = slot(&h, "Beat");
+                menu(&mut h, Command::UserTemplate(s));
+            }
+            h.frame();
+            h.click(W::new("save-prompt-discard"));
+            let p = h.session().project();
+            assert_ne!(p.id, id);
+            assert_ne!(p.id, source.id);
+            assert_eq!(p.meta.title, "Untitled");
+            assert_eq!(p.channels, source.channels, "instruments and routing");
+            assert_eq!(p.patterns, source.patterns);
+            assert_eq!(p.mixer, source.mixer);
+            assert_eq!(p.arrangements, source.arrangements);
+            assert!(h.session().path.is_none());
+            assert!(!h.session().doc.is_dirty());
+            assert!(h.session().doc.undo_label().is_none());
+            assert!(!h.studio.welcome);
+
+            // Save asks for a new file (tests answer Cancel); the template
+            // is never written.
+            edit(&mut h);
+            assert!(!h.studio.save());
+            assert!(h.session().path.is_none());
+            assert_eq!(files(&dir), library_files);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[test]
+        fn the_catalog_survives_restarts_and_keeps_its_ids() {
+            let mut h = Harness::new();
+            let dir = library(&mut h, "restart");
+            h.studio.save_template("Zed").unwrap();
+            let zed = slot(&h, "Zed");
+            h.studio.save_template("Alpha").unwrap();
+            assert_eq!(slot(&h, "Zed"), zed, "a new template does not move ids");
+            let names: Vec<_> = h
+                .studio
+                .templates
+                .entries()
+                .map(|(_, e)| e.name.clone())
+                .collect();
+            assert_eq!(names, ["Alpha", "Zed"]);
+
+            // A later run finds both.
+            let mut again = Harness::new();
+            again.studio.templates = Library::open(dir.clone());
+            assert_eq!(again.studio.templates.len(), 2);
+
+            // A template removed behind the app's back keeps its id empty:
+            // its command reports it and changes nothing.
+            std::fs::remove_file(dir.join("Zed.peelproj")).unwrap();
+            let id = h.session().project().id;
+            menu(&mut h, Command::UserTemplate(zed));
+            assert_eq!(h.session().project().id, id);
+            assert!(h.session().notice().is_some_and(|n| n.error));
+            h.studio.templates.refresh();
+            assert!(h.studio.templates.get(zed).is_none());
+            h.studio.save_template("Beta").unwrap();
+            assert_ne!(slot(&h, "Beta"), zed, "an empty slot is not reused early");
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[test]
+        fn a_damaged_template_keeps_the_current_project() {
+            let mut h = Harness::new();
+            let dir = library(&mut h, "damaged");
+            h.studio.save_template("Broken").unwrap();
+            std::fs::remove_dir_all(dir.join("Broken.peeldata").join("objects")).unwrap();
+            edit(&mut h);
+            let before = h.session().project().clone();
+            {
+                let s = slot(&h, "Broken");
+                menu(&mut h, Command::UserTemplate(s));
+            }
+            h.frame();
+            h.click(W::new("save-prompt-discard"));
+            assert_eq!(h.session().project(), &before);
+            assert!(h.session().doc.is_dirty());
+            assert!(
+                h.session()
+                    .notice()
+                    .is_some_and(|n| n.error && n.text.starts_with("Could not open template"))
+            );
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[test]
+        fn a_template_missing_its_audio_keeps_the_current_project() {
+            let mut h = Harness::new();
+            let dir = library(&mut h, "no-audio");
+            // A saved project with a managed sample on its first channel.
+            let song = dir.with_extension("song").join("Song.peelproj");
+            std::fs::create_dir_all(song.parent().unwrap()).unwrap();
+            let wav = song.with_file_name("hit.wav");
+            std::fs::write(&wav, vec![3u8; 2048]).unwrap();
+            let asset = peel_project::import_asset(&song, &wav).unwrap();
+            h.studio.session.doc.edit("Add sample", |p| {
+                p.channels[0].device.sample = Some(asset.id);
+                p.assets.push(asset);
+            });
+            h.studio.session.save(Some(song.clone())).unwrap();
+            h.studio.save_template("Hits").unwrap();
+            // The template's own copy of the sample goes missing.
+            std::fs::remove_dir_all(dir.join("Hits.peeldata").join("media")).unwrap();
+
+            edit(&mut h);
+            let before = h.session().project().clone();
+            let undo = h.session().doc.undo_label().map(str::to_string);
+            {
+                let s = slot(&h, "Hits");
+                menu(&mut h, Command::UserTemplate(s));
+            }
+            h.frame();
+            h.click(W::new("save-prompt-discard"));
+            assert_eq!(h.session().project(), &before, "same project and id");
+            assert_eq!(h.session().path.as_deref(), Some(song.as_path()));
+            assert!(h.session().doc.is_dirty());
+            assert_eq!(h.session().doc.undo_label().map(str::to_string), undo);
+            let notice = h.session().notice().expect("a notice").clone();
+            assert!(notice.error);
+            assert!(
+                notice.text.starts_with(
+                    "Could not open template: This template is missing audio: hit.wav"
+                ),
+                "{}",
+                notice.text
+            );
+            let _ = std::fs::remove_dir_all(dir);
+            let _ = std::fs::remove_dir_all(song.parent().unwrap());
+        }
+
+        #[test]
+        fn a_buffered_take_joins_the_project_and_the_template() {
+            let mut h = Harness::new();
+            let dir = library(&mut h, "take");
+            let ch = h.session().project().channels[0].id;
+            h.studio.ws.selected_channel = Some(ch);
+            let pid = h.session().selected_pattern();
+            let count = |p: &peel_document::Project| p.pattern(pid).unwrap().notes_for(ch).count();
+            let before = count(h.session().project());
+            h.studio.session.set_mode(PlayMode::Pattern(pid));
+            h.studio.recorder.armed = true;
+            h.studio.session.play();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while h.session().position() <= 0.05 {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "transport never started"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(2));
+                h.frame();
+            }
+            h.studio.session.live_note(ch, 62, 0.8, true);
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            h.frame();
+            h.studio.session.live_note(ch, 62, 0.0, false);
+            h.frame();
+            let path = h.studio.save_template("Take").unwrap();
+            assert!(!h.studio.recorder.armed);
+            assert!(
+                count(h.session().project()) > before,
+                "the take is in the project"
+            );
+            let stored = peel_project::load_template(&path).unwrap().project;
+            assert_eq!(count(&stored), count(h.session().project()));
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[test]
+        fn the_start_screen_lists_many_templates_in_a_small_window() {
+            let mut h = Harness::new();
+            let dir = library(&mut h, "welcome");
+            h.size = vec2(1200.0, 720.0);
+            h.studio.welcome = true;
+            h.frame();
+            assert!(
+                h.ui.widget_rect(W::new("welcome-my-templates")).is_none(),
+                "nothing to show yet"
+            );
+            for i in 0..40 {
+                h.studio.save_template(&format!("Setup {i:02}")).unwrap();
+            }
+            h.frame();
+            let panel = h.rect(W::new("welcome-panel"));
+            for (i, _) in crate::project::styles() {
+                let r = h.rect(W::new(("welcome-template", i)));
+                assert!(r.bottom() <= panel.bottom(), "template {i} overflows");
+            }
+            let mine = h.rect(W::new("welcome-my-templates"));
+            let demo = h.rect(W::new("welcome-demo"));
+            let toggle = h.rect(W::new("welcome-startup"));
+            assert!(panel.contains(mine.center()) && mine.bottom() <= toggle.y);
+            assert!(
+                (mine.y - demo.y).abs() < 0.5 && demo.right() <= mine.x,
+                "one row"
+            );
+
+            h.click(W::new("welcome-my-templates"));
+            let list = h.ui.popup_rect().expect("list open");
+            let screen = h.ui.screen();
+            assert!(list.y >= screen.y && list.bottom() <= screen.bottom());
+            assert!(list.h <= 8.0 * 30.0 + 12.0, "scrolls instead of growing");
+            let first = slot(&h, "Setup 00");
+            let last = slot(&h, "Setup 39");
+            assert!(
+                h.ui.widget_rect(W::new(("welcome-user-template", last)))
+                    .is_none()
+            );
+            // Scrolling brings the last into view.
+            h.move_to(list.center());
+            for _ in 0..20 {
+                h.ui.input.scroll = vec2(0.0, -200.0);
+                h.frame();
+            }
+            let r = h.rect(W::new(("welcome-user-template", last)));
+            assert!(r.bottom() <= list.bottom() + 0.5);
+            // Escape closes the list, not the start screen.
+            named_key(&mut h, peel_ui::NamedKey::Escape, peel_ui::KeyCode::Escape);
+            assert!(!h.ui.any_popup());
+            assert!(h.studio.welcome);
+
+            h.click(W::new("welcome-my-templates"));
+            h.click(W::new(("welcome-user-template", first)));
+            assert!(!h.studio.welcome);
+            assert_eq!(h.session().project().meta.title, "Untitled");
+            assert!(h.session().path.is_none());
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
 }

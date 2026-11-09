@@ -11,6 +11,8 @@ pub enum WelcomeAction {
     New,
     /// Start from `peel_session::template::templates()[i]`.
     Template(usize),
+    /// Start from one of the user's own templates (its root file).
+    UserTemplate(PathBuf),
     Demo,
     Open,
     OpenPath(PathBuf),
@@ -21,6 +23,7 @@ pub enum WelcomeAction {
 pub struct WelcomeData<'a> {
     pub recent: &'a [PathBuf],
     pub recovered: &'a [peel_project::AutosaveEntry],
+    pub templates: &'a crate::user_templates::Library,
     pub show_at_startup: &'a mut bool,
 }
 
@@ -55,6 +58,9 @@ pub fn draw(ui: &mut Ui, data: WelcomeData) -> Option<WelcomeAction> {
         ui.scene.rect(screen, 0.0, t.bg.alpha(0.78));
         let styles = crate::project::styles();
         let has_demo = crate::project::demo_index().is_some();
+        // The demo and My templates share one row under the grid.
+        let has_mine = !data.templates.is_empty();
+        let has_extra = has_demo || has_mine;
         let cols = 2usize;
         let rows = styles.len().div_ceil(cols);
         // Brand, two actions, the template grid, the demo and the toggle.
@@ -133,7 +139,7 @@ pub fn draw(ui: &mut Ui, data: WelcomeData) -> Option<WelcomeAction> {
             Align::Start,
         );
         left.cut_top(4.0);
-        let foot = 26.0 + 8.0 + if has_demo { 40.0 } else { 0.0 };
+        let foot = 26.0 + 8.0 + if has_extra { 40.0 } else { 0.0 };
         let fit_rows = (((left.h - foot) / 38.0).floor().max(1.0)) as usize;
         let cell_w = (left.w - 6.0 * (cols - 1) as f32) / cols as f32;
         for (n, (i, name)) in styles.iter().enumerate().take(fit_rows * cols) {
@@ -152,11 +158,36 @@ pub fn draw(ui: &mut Ui, data: WelcomeData) -> Option<WelcomeAction> {
             }
         }
         left.cut_top(rows.min(fit_rows) as f32 * 38.0);
-        if has_demo {
+        let mut extra = Rect::ZERO;
+        if has_extra {
             left.cut_top(4.0);
+            extra = left.cut_top(30.0);
+        }
+        if has_mine {
+            let label = "My templates";
+            let mw = ui.quiet_button_width(true, label, true);
+            let r = extra.cut_right(mw);
+            let list = crate::user_templates::picker_id();
+            let open = ui.is_popup_open(list);
+            let resp = ui.quiet_button(
+                W::new("welcome-my-templates"),
+                r,
+                Some(icons::FOLDER_OPEN),
+                label,
+                true,
+                open,
+            );
+            if resp.clicked && !open {
+                crate::user_templates::open_picker(ui, r);
+            }
+            if let Some(path) = crate::user_templates::picker(ui, r, data.templates) {
+                action = Some(WelcomeAction::UserTemplate(path));
+            }
+        }
+        if has_demo {
             let label = "Open the demo song";
             let dw = ui.quiet_button_width(true, label, false);
-            let r = left.cut_top(30.0).with_w(dw);
+            let r = extra.with_w(dw.min(extra.w));
             if ui
                 .quiet_button(
                     W::new("welcome-demo"),
@@ -319,8 +350,13 @@ pub fn draw(ui: &mut Ui, data: WelcomeData) -> Option<WelcomeAction> {
         }
         ui.scene.pop_clip();
     });
+    // Escape closes the template list first, then the start screen.
     if ui.input.take_named(peel_ui::NamedKey::Escape) {
-        action = Some(WelcomeAction::Close);
+        if ui.is_popup_open(crate::user_templates::picker_id()) {
+            ui.close_popup();
+        } else {
+            action = Some(WelcomeAction::Close);
+        }
     }
     action
 }

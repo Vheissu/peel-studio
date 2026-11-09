@@ -24,6 +24,10 @@ pub struct Studio {
     pub(crate) recovered: Vec<peel_project::AutosaveEntry>,
     /// A project change waiting on the save prompt.
     pub pending: Option<crate::project::Change>,
+    /// The user's saved templates.
+    pub templates: crate::user_templates::Library,
+    /// The Save as template dialog, while open.
+    pub template_dialog: Option<crate::user_templates::SaveDialog>,
     /// Quit was confirmed; the window closes after this frame.
     pub quit: bool,
     /// Show the in-window menu strip even beside a platform menu bar
@@ -89,6 +93,8 @@ impl Studio {
             mcp: None,
             recovered,
             pending: None,
+            templates: crate::user_templates::Library::open(crate::user_templates::library_dir()),
+            template_dialog: None,
             quit: false,
             menu_strip: std::env::var_os("PEEL_FILE_MENU").is_some(),
             debug_plugin: std::env::var("PEEL_PLUGIN").ok(),
@@ -251,6 +257,7 @@ impl Studio {
             WelcomeData {
                 recent: &recent,
                 recovered: &self.recovered,
+                templates: &self.templates,
                 show_at_startup: &mut show,
             },
         );
@@ -270,6 +277,7 @@ impl Studio {
             WelcomeAction::New => self.request(Change::New),
             WelcomeAction::Template(i) => self.request(Change::Template(i)),
             WelcomeAction::Demo => self.request(Change::Demo),
+            WelcomeAction::UserTemplate(p) => self.request(Change::UserTemplate(p)),
             WelcomeAction::Open => self.open(),
             WelcomeAction::OpenPath(p) => self.request(Change::OpenPath(p)),
             WelcomeAction::Recover(p) => self.request(Change::Recover(p)),
@@ -298,7 +306,10 @@ impl Studio {
         self.autosaved_revision = rev;
         self.session.capture_plugin_states();
         let project = self.session.project().clone();
-        let source = self.session.path.clone();
+        let source = self
+            .session
+            .media_source()
+            .map(std::path::Path::to_path_buf);
         let root = crate::prefs::autosave_dir();
         let job = move || {
             let r = match &source {
@@ -1182,6 +1193,7 @@ impl App for Studio {
 
     fn close_requested(&mut self) -> bool {
         // Closing the window is Quit: unsaved work gets the save prompt.
+        self.template_dialog = None;
         self.request(crate::project::Change::Quit);
         std::mem::take(&mut self.quit)
     }
@@ -1301,7 +1313,7 @@ impl Studio {
         self.recorder.frame(&mut self.session);
         crate::scripts::frame(ui, self);
         crate::menus::frame(ui, self);
-        if !self.welcome && self.pending.is_none() {
+        if !self.welcome && self.pending.is_none() && self.template_dialog.is_none() {
             self.shortcuts(ui);
         }
         self.autosave(false);
@@ -1465,6 +1477,7 @@ impl Studio {
         } else if self.show_keys && crate::keys::overlay(ui) {
             self.show_keys = false;
         }
+        self.save_template_dialog(ui);
         self.save_prompt(ui);
         if self.quit {
             win.exit();

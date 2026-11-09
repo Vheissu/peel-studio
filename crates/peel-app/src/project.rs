@@ -24,6 +24,8 @@ pub enum Change {
     Template(usize),
     /// The demo song.
     Demo,
+    /// One of the user's own templates, by its root file.
+    UserTemplate(PathBuf),
     OpenPath(PathBuf),
     Recover(PathBuf),
     /// Back to the start screen over a blank project.
@@ -71,12 +73,18 @@ impl Studio {
     /// Asks to make `change`. Unsaved work holds it behind the save prompt;
     /// otherwise it happens now.
     pub fn request(&mut self, change: Change) {
-        if self.pending.is_some() {
+        if self.pending.is_some() || self.template_dialog.is_some() {
             return;
         }
         match &change {
             Change::Template(i) if template::templates().get(*i).is_none() => {
                 self.session.notify("That template is not available", true);
+                return;
+            }
+            Change::UserTemplate(p) if !p.is_file() => {
+                self.templates.refresh();
+                self.session
+                    .notify("That template is no longer there", true);
                 return;
             }
             Change::Demo if demo_index().is_none() => {
@@ -142,6 +150,7 @@ impl Studio {
                 }
                 None => return false,
             },
+            Change::UserTemplate(path) => return self.start_user_template(&path),
             Change::Demo => match demo_index() {
                 Some(i) => self.start((template::templates()[i].1)()),
                 None => return false,
@@ -153,9 +162,12 @@ impl Studio {
             Change::OpenPath(path) => return self.load_path(path),
             Change::Recover(path) => {
                 self.silence();
-                match self.session.open(&path) {
-                    Ok(()) => {
-                        self.session.path = None;
+                match peel_project::load(&path) {
+                    Ok(loaded) => {
+                        // No file of its own yet; its media stays with the
+                        // autosave until the first save brings it along.
+                        self.session
+                            .replace_project_with_media(loaded.project, Some(path.clone()));
                         self.reset_workspace();
                         self.welcome = false;
                         self.recovered.retain(|e| e.path != path);
@@ -175,6 +187,31 @@ impl Studio {
                 self.quit = true;
             }
         }
+        true
+    }
+
+    /// Starts a new project from one of the user's templates. The template
+    /// is only read: the new project has its own id, no file and no
+    /// history, and its media is read from the template until the first
+    /// save copies it along. False (and the current project kept) when the
+    /// template does not load.
+    fn start_user_template(&mut self, path: &Path) -> bool {
+        let loaded = match peel_project::load_template(path) {
+            Ok(l) => l,
+            Err(e) => {
+                self.session
+                    .notify(format!("Could not open template: {e}"), true);
+                return false;
+            }
+        };
+        for w in &loaded.warnings {
+            log::warn!("{w}");
+        }
+        self.silence();
+        self.session
+            .replace_project_with_media(loaded.project, Some(path.to_path_buf()));
+        self.reset_workspace();
+        self.welcome = false;
         true
     }
 

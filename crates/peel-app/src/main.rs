@@ -34,6 +34,7 @@ mod scripts;
 mod settings;
 mod studio;
 mod transport;
+mod user_templates;
 mod util;
 mod welcome;
 mod workspace;

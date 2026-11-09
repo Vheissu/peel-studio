@@ -97,6 +97,11 @@ pub struct Notice {
 pub struct Session {
     pub doc: Document,
     pub path: Option<PathBuf>,
+    /// The project file whose data folder holds this project's managed
+    /// media while it has no file of its own (a project started from a
+    /// saved template). Never written to; the first save brings the media
+    /// along and clears it.
+    media_base: Option<PathBuf>,
     engine: EngineHandle,
     devices: HashMap<Id, DeviceSlot>,
     free_slots: Vec<Slot>,
@@ -195,6 +200,7 @@ impl Session {
         let mut s = Session {
             doc: Document::new(project),
             path: None,
+            media_base: None,
             engine,
             devices: HashMap::new(),
             free_slots: Vec::new(),
@@ -425,6 +431,18 @@ impl Session {
         self.synced = None;
     }
 
+    /// The project as it would be saved now, with every live plugin's
+    /// state, leaving the document, its history and the instances alone.
+    pub fn snapshot(&self) -> Project {
+        let mut project = self.doc.project().clone();
+        for (id, state) in self.plugins.capture_states() {
+            if let Some(d) = find_device_mut(&mut project, id) {
+                d.state = Some(state);
+            }
+        }
+        project
+    }
+
     /// Stores every live plugin's state in the document (not an undo step).
     pub fn capture_plugin_states(&mut self) {
         let states = self.plugins.capture_states();
@@ -542,11 +560,17 @@ impl Session {
     /// Filesystem location of an asset.
     pub fn asset_path(&self, asset: &AudioAsset) -> PathBuf {
         if asset.managed
-            && let Some(p) = &self.path
+            && let Some(p) = self.media_source()
         {
             return peel_project::resolve_asset_path(p, asset);
         }
         PathBuf::from(&asset.path)
+    }
+
+    /// The project file whose data folder holds the managed media: the
+    /// project's own file, or the template it started from.
+    pub fn media_source(&self) -> Option<&Path> {
+        self.path.as_deref().or(self.media_base.as_deref())
     }
 
     /// Cached decoded sample for an asset (for waveform drawing).
@@ -1026,9 +1050,13 @@ impl Session {
             self.doc.edit("Rename project", |p| p.meta.title = title);
         }
         self.capture_plugin_states();
-        peel_project::save(self.doc.project(), &path).map_err(|e| e.to_string())?;
+        // A new file brings the managed media along from where it is now.
+        let from = self.media_source().map(Path::to_path_buf);
+        peel_project::save_as(self.doc.project(), from.as_deref(), &path)
+            .map_err(|e| e.to_string())?;
         self.doc.mark_saved();
         self.path = Some(path.clone());
+        self.media_base = None;
         self.notify(
             format!(
                 "Saved {}",
@@ -1052,13 +1080,31 @@ impl Session {
         Ok(())
     }
 
+    /// Saves a copy of the project, with live plugin state and all of its
+    /// media, as the template `name` in the library at `dir`. The project,
+    /// its file, title, history and saved state are not touched.
+    pub fn save_template(
+        &self,
+        dir: &Path,
+        name: &str,
+    ) -> Result<PathBuf, peel_project::TemplateError> {
+        peel_project::save_template(&self.snapshot(), self.media_source(), dir, name)
+    }
+
     /// Replaces the document (new project, template, open).
     pub fn replace_project(&mut self, project: Project) {
+        self.replace_project_with_media(project, None);
+    }
+
+    /// Replaces the document with a project that has no file yet but whose
+    /// managed media lives with `media_base` (a saved template's root).
+    pub fn replace_project_with_media(&mut self, project: Project, media_base: Option<PathBuf>) {
         self.pattern_recording_active = false;
         self.stop();
         self.forget_lanes();
         self.doc.replace(project);
         self.path = None;
+        self.media_base = media_base;
         self.mode = PlayMode::Pattern(
             self.doc
                 .project()

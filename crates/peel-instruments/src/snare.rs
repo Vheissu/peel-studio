@@ -12,6 +12,7 @@ use peel_dsp::util::db_to_gain;
 use peel_dsp::voice::StealPolicy;
 use peel_dsp::{Device, DeviceDescriptor, DeviceKind, ParamId, Preset, ProcessContext};
 
+use crate::acoustic::{Adaa, HitRng, Mode, Pulse, Room, analog_slot};
 use crate::common::{
     CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth,
     TIMBRE_OCTAVES, Vx, drive_curve, key_offset, lerp, ramp_coef, shape, st_ratio, vel_gain,
@@ -29,8 +30,10 @@ const VELOCITY: ParamId = 9;
 const LEVEL: ParamId = 10;
 const BURST: ParamId = 11;
 const ROOM: ParamId = 12;
+const ACOUSTIC: ParamId = 13;
+const CIRCUIT: ParamId = 14;
 
-static PARAMS: [ParamDescriptor; 12] = [
+static PARAMS: [ParamDescriptor; 14] = [
     ParamDescriptor::log(
         PITCH,
         "body.pitch",
@@ -151,22 +154,26 @@ static PARAMS: [ParamDescriptor; 12] = [
         0.0,
         Unit::Decibels,
     ),
+    ParamDescriptor::toggle(ACOUSTIC, "body.acoustic", "Acoustic", "Body", false),
+    ParamDescriptor::toggle(CIRCUIT, "body.circuit", "Circuit", "Body", false),
 ];
 
 pub static DESC: DeviceDescriptor = DeviceDescriptor {
     type_id: "peel.drum.snare",
     name: "Snare",
-    description: "Synthesized snare with tuned head modes, noise wires and snap",
+    description: "Snare drum: electronic, drum-machine circuit or acoustic model",
     category: "Drums",
     kind: DeviceKind::Instrument,
     version: 1,
     params: &PARAMS,
 };
 
-pub static PRESETS: [Preset; 10] = [
+pub static PRESETS: [Preset; 14] = [
     Preset {
         name: "Crack",
         params: &[
+            ("body.acoustic", 0.0),
+            ("body.circuit", 0.0),
             ("body.pitch", 190.0),
             ("body.decay", 0.16),
             ("body.overtone", 1.68),
@@ -184,6 +191,8 @@ pub static PRESETS: [Preset; 10] = [
     Preset {
         name: "Fat",
         params: &[
+            ("body.acoustic", 0.0),
+            ("body.circuit", 0.0),
             ("body.pitch", 150.0),
             ("body.decay", 0.28),
             ("body.mix", 0.65),
@@ -197,6 +206,8 @@ pub static PRESETS: [Preset; 10] = [
     Preset {
         name: "Tight",
         params: &[
+            ("body.acoustic", 0.0),
+            ("body.circuit", 0.0),
             ("body.pitch", 230.0),
             ("body.decay", 0.09),
             ("body.mix", 0.4),
@@ -210,6 +221,8 @@ pub static PRESETS: [Preset; 10] = [
     Preset {
         name: "Rimshot",
         params: &[
+            ("body.acoustic", 0.0),
+            ("body.circuit", 0.0),
             ("body.pitch", 300.0),
             ("body.decay", 0.07),
             ("body.overtone", 2.0),
@@ -224,6 +237,8 @@ pub static PRESETS: [Preset; 10] = [
     Preset {
         name: "Lo-Fi",
         params: &[
+            ("body.acoustic", 0.0),
+            ("body.circuit", 0.0),
             ("body.pitch", 170.0),
             ("body.decay", 0.2),
             ("body.mix", 0.35),
@@ -238,6 +253,8 @@ pub static PRESETS: [Preset; 10] = [
     Preset {
         name: "Brush",
         params: &[
+            ("body.acoustic", 0.0),
+            ("body.circuit", 0.0),
             ("body.pitch", 180.0),
             ("body.decay", 0.1),
             ("body.mix", 0.2),
@@ -252,6 +269,8 @@ pub static PRESETS: [Preset; 10] = [
     Preset {
         name: "Trap",
         params: &[
+            ("body.acoustic", 0.0),
+            ("body.circuit", 0.0),
             ("body.pitch", 245.0),
             ("body.decay", 0.1),
             ("body.overtone", 1.74),
@@ -266,6 +285,8 @@ pub static PRESETS: [Preset; 10] = [
     Preset {
         name: "Clap Snare",
         params: &[
+            ("body.acoustic", 0.0),
+            ("body.circuit", 0.0),
             ("body.pitch", 205.0),
             ("body.decay", 0.11),
             ("body.mix", 0.3),
@@ -280,6 +301,8 @@ pub static PRESETS: [Preset; 10] = [
     Preset {
         name: "Big Room",
         params: &[
+            ("body.acoustic", 0.0),
+            ("body.circuit", 0.0),
             ("body.pitch", 185.0),
             ("body.decay", 0.22),
             ("body.mix", 0.55),
@@ -293,6 +316,8 @@ pub static PRESETS: [Preset; 10] = [
     Preset {
         name: "Pop",
         params: &[
+            ("body.acoustic", 0.0),
+            ("body.circuit", 0.0),
             ("body.pitch", 215.0),
             ("body.decay", 0.13),
             ("body.mix", 0.45),
@@ -303,10 +328,370 @@ pub static PRESETS: [Preset; 10] = [
             ("out.room", 0.2),
         ],
     },
+    Preset {
+        name: "Acoustic Snare",
+        params: &[
+            ("body.acoustic", 1.0),
+            ("body.circuit", 0.0),
+            ("body.pitch", 205.0),
+            ("body.decay", 0.22),
+            ("body.overtone", 1.59),
+            ("body.mix", 0.5),
+            ("noise.decay", 0.26),
+            ("noise.tone", 5_000.0),
+            ("noise.snap", 0.5),
+            ("noise.burst", 0.0),
+            ("out.drive", 0.15),
+            ("out.room", 0.2),
+            ("out.velocity", 0.75),
+            ("out.level", 0.0),
+        ],
+    },
+    Preset {
+        name: "Rock Snare",
+        params: &[
+            ("body.acoustic", 1.0),
+            ("body.circuit", 0.0),
+            ("body.pitch", 185.0),
+            ("body.decay", 0.3),
+            ("body.overtone", 1.62),
+            ("body.mix", 0.6),
+            ("noise.decay", 0.32),
+            ("noise.tone", 4_200.0),
+            ("noise.snap", 0.75),
+            ("noise.burst", 0.0),
+            ("out.drive", 0.18),
+            ("out.room", 0.35),
+            ("out.velocity", 0.65),
+            ("out.level", 0.0),
+        ],
+    },
+    Preset {
+        name: "909 Snare",
+        params: &[
+            ("body.acoustic", 0.0),
+            ("body.circuit", 1.0),
+            ("body.pitch", 200.0),
+            ("body.decay", 0.14),
+            ("body.overtone", 1.62),
+            ("body.mix", 0.45),
+            ("noise.decay", 0.26),
+            ("noise.tone", 5_500.0),
+            ("noise.snap", 0.6),
+            ("noise.burst", 0.0),
+            ("out.drive", 0.3),
+            ("out.room", 0.1),
+            ("out.velocity", 0.7),
+            ("out.level", 0.0),
+        ],
+    },
+    Preset {
+        name: "808 Snare",
+        params: &[
+            ("body.acoustic", 0.0),
+            ("body.circuit", 1.0),
+            ("body.pitch", 238.0),
+            ("body.decay", 0.12),
+            ("body.overtone", 1.97),
+            ("body.mix", 0.55),
+            ("noise.decay", 0.17),
+            ("noise.tone", 6_500.0),
+            ("noise.snap", 0.35),
+            ("noise.burst", 0.0),
+            ("out.drive", 0.12),
+            ("out.room", 0.0),
+            ("out.velocity", 0.7),
+            ("out.level", 0.0),
+        ],
+    },
 ];
 
 pub(crate) fn create() -> Box<dyn Device> {
     Box::new(Instrument::new(&DESC, Snare::new()))
+}
+
+/// Ideal membrane mode ratios of the batter head, (0,1) first, with each
+/// mode's number of nodal diameters (0 for the axisymmetric modes).
+const AS_RATIO: [f32; 10] = [
+    1.0, 1.593, 2.136, 2.296, 2.653, 2.918, 3.156, 3.501, 3.600, 4.06,
+];
+const AS_DIAM: [u8; 10] = [0, 1, 2, 0, 3, 1, 4, 2, 0, 3];
+const AS_GAIN: [f32; 10] = [1.0, 0.8, 0.6, 0.45, 0.42, 0.36, 0.3, 0.26, 0.2, 0.2];
+/// Decay of each batter mode as a multiple of the body Decay.
+const AS_DECAY: [f32; 10] = [1.0, 0.75, 0.58, 0.6, 0.46, 0.44, 0.38, 0.34, 0.36, 0.3];
+/// The snare-side head, tuned above the batter: ratio, gain, decay.
+const AS_RESO: [(f32, f32, f32); 2] = [(1.48, 0.32, 0.8), (2.36, 0.18, 0.5)];
+/// Batter modes plus the two snare-side modes.
+const AS_MODES: usize = 12;
+
+/// The acoustic snare: a stick pulse driving batter and snare-side head
+/// modes; wires that rattle as long as the heads move, gated by the
+/// fundamental's own motion; a separate stick crack; and early reflections
+/// from a small room.
+#[derive(Clone, Copy)]
+struct AcSnareVoice {
+    active: bool,
+    modes: [Mode; AS_MODES],
+    base: [f32; AS_MODES],
+    weight: [f32; AS_MODES],
+    pulse: Pulse,
+    drop: f32,
+    pitch_env: f32,
+    pitch_coef: f32,
+    noise: Noise,
+    band: Svf,
+    band_lo: Svf,
+    top1: OnePole,
+    top2: OnePole,
+    drive_lp: OnePole,
+    wires: Decay,
+    wire_gain: f32,
+    crack_noise: Noise,
+    crack_band: Svf,
+    crack_hp: OnePole,
+    crack: Decay,
+    crack_gain: f32,
+    body_gain: f32,
+    gain: f32,
+    push: f32,
+    fade: Fade,
+    xgain: f32,
+    bend: f32,
+    tone: f32,
+    band_hz: f32,
+}
+
+impl AcSnareVoice {
+    fn new() -> AcSnareVoice {
+        AcSnareVoice {
+            active: false,
+            modes: [Mode::new(); AS_MODES],
+            base: [200.0; AS_MODES],
+            weight: [0.0; AS_MODES],
+            pulse: Pulse::new(),
+            drop: 0.0,
+            pitch_env: 0.0,
+            pitch_coef: 0.0,
+            noise: Noise::new(21),
+            band: Svf::new(),
+            band_lo: Svf::new(),
+            top1: OnePole::new(),
+            top2: OnePole::new(),
+            drive_lp: OnePole::new(),
+            wires: Decay::new(),
+            wire_gain: 0.0,
+            crack_noise: Noise::new(22),
+            crack_band: Svf::new(),
+            crack_hp: OnePole::new(),
+            crack: Decay::new(),
+            crack_gain: 0.0,
+            body_gain: 1.0,
+            gain: 1.0,
+            push: 1.0,
+            fade: Fade::new(),
+            xgain: 1.0,
+            bend: 1.0,
+            tone: 0.0,
+            band_hz: 5_000.0,
+        }
+    }
+
+    fn set_tone(&mut self, x: &Vx, sr: f32) {
+        if x.tone != self.tone {
+            self.tone = x.tone;
+            self.band.set_q(
+                (self.band_hz * x.tone_ratio(TIMBRE_OCTAVES)).min(0.4 * sr),
+                0.75,
+                sr,
+            );
+        }
+    }
+
+    /// Head tension falls back as the stroke's energy spreads; control rate.
+    fn retune(&mut self, sr_inv: f32) {
+        let m = (1.0 + self.drop * self.pitch_env) * self.bend;
+        for (md, &f) in self.modes.iter_mut().zip(self.base.iter()) {
+            md.tune(f * m, sr_inv);
+            md.flush();
+        }
+    }
+
+    #[inline]
+    fn tick(&mut self, drive_g: f32, drive_norm: f32, drive_mix: f32) -> f32 {
+        self.pitch_env *= self.pitch_coef;
+        let x = self.pulse.tick();
+        let mut body = 0.0;
+        for (m, &w) in self.modes.iter_mut().zip(self.weight.iter()) {
+            body += m.tick(x * w);
+        }
+        // Wires: they buzz while the heads move (the square root makes soft
+        // strokes relatively wirier, as on a real snare) and slap against
+        // the snare-side head once per cycle of its motion.
+        let motion = self.modes[0].amp() + 0.6 * self.modes[1].amp() + 0.8 * self.modes[10].amp();
+        let slap = 0.65 + 0.7 * self.modes[10].unit().max(0.0);
+        let n = self.noise.white();
+        let wire_src = self.band.tick(n).band_unity + 0.3 * self.band_lo.tick(n).band_unity;
+        let wires = wire_src * motion.sqrt() * slap * self.wires.tick() * self.wire_gain;
+        // Stick crack: a short bright burst at the moment of contact.
+        let c = self.crack_band.tick(self.crack_noise.white()).band_unity;
+        let crack = self.crack_hp.high(c) * self.crack.tick() * self.crack_gain;
+        let top = self.top2.low(self.top1.low(wires + crack));
+        let mix = body * self.body_gain * self.push + top;
+        let y = lerp(mix, shape(mix, drive_g, drive_norm), drive_mix);
+        let y = self.drive_lp.low(y);
+        let out = y * self.gain * self.fade.tick() * self.xgain;
+        if self.fade.is_done()
+            || (!self.pulse.busy() && motion < 2.0e-4 && self.crack.is_below(1.0e-4))
+        {
+            self.active = false;
+        }
+        out
+    }
+}
+
+/// The circuit snare: two bridged-T style resonators pinged by a trigger
+/// pulse (with a small accent-dependent pitch drop), a "snappy" noise
+/// layer through a high-pass and band-pass with a two-stage decay, a pulse
+/// tick, and anti-aliased drive. A retrigger on the same key re-pings the
+/// ringing resonators and restarts the envelopes from where they are, as
+/// the circuits do, so rolls stay continuous.
+#[derive(Clone, Copy)]
+struct CkSnareVoice {
+    active: bool,
+    modes: [Mode; 2],
+    base: [f32; 2],
+    weight: [f32; 2],
+    pulse: Pulse,
+    drop: f32,
+    pitch_env: f32,
+    pitch_coef: f32,
+    noise: Noise,
+    hp: Svf,
+    band: Svf,
+    fast: Decay,
+    slow: Decay,
+    nz_gain: f32,
+    tick_pulse: Pulse,
+    tick_hp: OnePole,
+    tick_gain: f32,
+    drive: Adaa,
+    top: OnePole,
+    body_gain: f32,
+    push: f32,
+    gain: f32,
+    fade: Fade,
+    xgain: f32,
+    bend: f32,
+    tone: f32,
+    band_hz: f32,
+}
+
+impl CkSnareVoice {
+    fn new() -> CkSnareVoice {
+        CkSnareVoice {
+            active: false,
+            modes: [Mode::new(); 2],
+            base: [200.0; 2],
+            weight: [0.0; 2],
+            pulse: Pulse::new(),
+            drop: 0.0,
+            pitch_env: 0.0,
+            pitch_coef: 0.0,
+            noise: Noise::new(61),
+            hp: Svf::new(),
+            band: Svf::new(),
+            fast: Decay::new(),
+            slow: Decay::new(),
+            nz_gain: 0.0,
+            tick_pulse: Pulse::new(),
+            tick_hp: OnePole::new(),
+            tick_gain: 0.0,
+            drive: Adaa::new(),
+            top: OnePole::new(),
+            body_gain: 1.0,
+            push: 1.0,
+            gain: 1.0,
+            fade: Fade::new(),
+            xgain: 1.0,
+            bend: 1.0,
+            tone: 0.0,
+            band_hz: 5_000.0,
+        }
+    }
+
+    fn set_tone(&mut self, x: &Vx, sr: f32) {
+        if x.tone != self.tone {
+            self.tone = x.tone;
+            self.band.set_q(
+                (self.band_hz * x.tone_ratio(TIMBRE_OCTAVES)).min(0.4 * sr),
+                0.6,
+                sr,
+            );
+        }
+    }
+
+    fn retune(&mut self, sr_inv: f32) {
+        let m = (1.0 + self.drop * self.pitch_env) * self.bend;
+        for (md, &f) in self.modes.iter_mut().zip(self.base.iter()) {
+            md.tune(f * m, sr_inv);
+            md.flush();
+        }
+    }
+
+    #[inline]
+    fn tick(&mut self, drive_g: f32, drive_norm: f32, drive_mix: f32) -> f32 {
+        self.pitch_env *= self.pitch_coef;
+        let x = self.pulse.tick();
+        let body = self.modes[0].tick(x * self.weight[0]) + self.modes[1].tick(x * self.weight[1]);
+        let n = self.noise.white();
+        let hp = self.hp.tick(n).high;
+        let nz = (0.45 * hp + self.band.tick(n).band_unity)
+            * (0.6 * self.fast.tick() + 0.4 * self.slow.tick())
+            * self.nz_gain;
+        let tick = self.tick_hp.high(self.tick_pulse.tick()) * self.tick_gain;
+        let mix = body * self.body_gain * self.push + self.top.low(nz + tick);
+        let y = lerp(mix, self.drive.tick(mix * drive_g) * drive_norm, drive_mix);
+        let out = y * self.gain * self.fade.tick() * self.xgain;
+        if self.fade.is_done()
+            || (!self.pulse.busy()
+                && self.modes[0].amp() < 1.0e-4
+                && self.modes[1].amp() < 1.0e-4
+                && self.slow.is_below(1.0e-4))
+        {
+            self.active = false;
+        }
+        out
+    }
+}
+
+impl PoolVoice for CkSnareVoice {
+    fn is_active(&self) -> bool {
+        self.active
+    }
+    fn level(&self) -> f32 {
+        self.modes[0].amp().max(self.slow.level())
+    }
+    fn fade_out(&mut self, sample_rate: f32) {
+        self.fade.start(sample_rate, STEAL_FADE_MS);
+    }
+    fn kill(&mut self) {
+        self.active = false;
+    }
+}
+
+impl PoolVoice for AcSnareVoice {
+    fn is_active(&self) -> bool {
+        self.active
+    }
+    fn level(&self) -> f32 {
+        self.modes[0].amp()
+    }
+    fn fade_out(&mut self, sample_rate: f32) {
+        self.fade.start(sample_rate, STEAL_FADE_MS);
+    }
+    fn kill(&mut self) {
+        self.active = false;
+    }
 }
 
 /// Burst spacing of the clap-style attack, in seconds.
@@ -512,6 +897,11 @@ pub(crate) struct Snare {
     expr: Expression,
     sr: f32,
     pool: Pool<SnareVoice>,
+    ac: Pool<AcSnareVoice>,
+    ck: Pool<CkSnareVoice>,
+    acoustic: bool,
+    circuit: bool,
+    room_er: Room,
     ramp_k: f32,
     ctrl: usize,
     hits: u32,
@@ -539,6 +929,11 @@ impl Snare {
             expr: Expression::new(),
             sr: 48_000.0,
             pool: Pool::new(5, 2, StealPolicy::Oldest, 48_000.0, SnareVoice::new),
+            ac: Pool::new(5, 2, StealPolicy::Oldest, 48_000.0, AcSnareVoice::new),
+            ck: Pool::new(5, 2, StealPolicy::Oldest, 48_000.0, CkSnareVoice::new),
+            acoustic: false,
+            circuit: false,
+            room_er: Room::new(),
             ramp_k: 0.1,
             ctrl: 0,
             hits: 0,
@@ -582,6 +977,162 @@ impl Snare {
             v.bend = x.ratio;
             v.set_tone(&x, sr);
         });
+        let sr_inv = 1.0 / sr;
+        self.ac.for_active_id(|v, key, id| {
+            let x = ex.voice(id, key);
+            v.xgain = x.gain();
+            v.bend = x.ratio;
+            v.set_tone(&x, sr);
+            v.retune(sr_inv);
+        });
+        self.ck.for_active_id(|v, key, id| {
+            let x = ex.voice(id, key);
+            v.xgain = x.gain();
+            v.bend = x.ratio;
+            v.set_tone(&x, sr);
+            v.retune(sr_inv);
+        });
+    }
+
+    /// Starts a circuit hit, re-pinging a voice already ringing on the key.
+    fn ck_note_on(&mut self, key: u8, velocity: f32, id: u32) {
+        let sr = self.sr;
+        let (slot, warm) = analog_slot(&mut self.ck, key, id, false, |v| v.fade.is_fading());
+        self.hits = self.hits.wrapping_add(1);
+        let ratio = st_ratio(key_offset(key));
+        let f1 = (self.pitch * ratio).clamp(30.0, 0.1 * sr);
+        let center = (self.noise_tone * ratio.sqrt() * lerp(0.8, 1.05, velocity)).min(0.4 * sr);
+        let hits = self.hits;
+        let x = self.expr.voice(id, key);
+        let v = &mut self.ck.voices[slot];
+        v.active = true;
+        v.xgain = x.gain();
+        v.bend = x.ratio;
+        v.base = [f1, (f1 * self.overtone).min(0.2 * sr)];
+        v.weight = [0.9, 0.5];
+        let decays = [self.body_decay, self.body_decay * 0.6];
+        for ((m, &f), &d) in v.modes.iter_mut().zip(v.base.iter()).zip(decays.iter()) {
+            if warm {
+                m.retarget(d, sr);
+            } else {
+                m.start(f, d, sr);
+            }
+        }
+        v.drop = (0.03 + 0.09 * self.snap) * velocity;
+        v.pitch_env = 1.0;
+        v.pitch_coef = (-1.0 / (0.01 * sr)).exp();
+        v.retune(1.0 / sr);
+        v.pulse.start(0.000_25, sr);
+        v.noise.reseed(hits.wrapping_mul(5).wrapping_add(900));
+        v.band_hz = center;
+        v.tone = 0.0;
+        v.band.set_q(center, 0.6, sr);
+        v.set_tone(&x, sr);
+        v.hp.set_q((center * 0.45).max(1_200.0).min(0.4 * sr), 0.7, sr);
+        v.top.set_cutoff(14_000.0, sr);
+        if !warm {
+            v.band.reset();
+            v.hp.reset();
+            v.top.reset();
+            v.drive.reset();
+            v.fast.reset();
+            v.slow.reset();
+        }
+        // Accent: louder, longer snappy noise.
+        let nd = self.noise_decay * lerp(0.75, 1.1, velocity);
+        v.fast.set_t60(nd * 0.25, sr);
+        v.fast.trigger(1.0, 0.000_3, sr);
+        v.slow.set_t60(nd, sr);
+        v.slow.trigger(1.0, 0.000_5, sr);
+        v.nz_gain = lerp(1.5, 0.45, self.mix) * velocity.powf(0.3);
+        v.tick_pulse.start(0.000_1, sr);
+        v.tick_hp.set_cutoff(2_000.0, sr);
+        if !warm {
+            v.tick_hp.reset();
+        }
+        v.tick_gain = self.snap * 0.8 * velocity;
+        v.body_gain = lerp(0.3, 1.1, self.mix);
+        v.push = lerp(0.75, 1.1, velocity);
+        v.gain = vel_gain(velocity, self.vel_sens);
+        v.fade.reset();
+    }
+
+    /// Starts an acoustic stroke.
+    fn ac_note_on(&mut self, key: u8, velocity: f32, id: u32) {
+        let slot = self.ac.begin(key, id);
+        self.hits = self.hits.wrapping_add(1);
+        let sr = self.sr;
+        let mut rng = HitRng::new(self.hits, 0x5a4e);
+        let ratio = st_ratio(key_offset(key));
+        let f1 = (self.pitch * ratio).clamp(30.0, 0.1 * sr);
+        // Overtone sets the second mode's ratio; the rest spread with it.
+        let spread = (self.overtone - 1.0) / 0.593;
+        // Strike radius as a fraction of the head: a third of the way out on
+        // average, and a different spot on every stroke.
+        let radius = 0.33 + 0.12 * rng.next();
+        let contact = lerp(0.000_8, 0.000_28, velocity) * (1.0 + 0.1 * rng.next());
+        let force = velocity.max(0.1);
+        let center = (self.noise_tone * ratio.sqrt() * lerp(0.75, 1.0, velocity)).min(0.4 * sr);
+        let hits = self.hits;
+        let x = self.expr.voice(id, key);
+        let v = &mut self.ac.voices[slot];
+        v.active = true;
+        v.xgain = x.gain();
+        v.bend = x.ratio;
+        for k in 0..10 {
+            v.base[k] = f1 * (1.0 + (AS_RATIO[k] - 1.0) * spread);
+            let pos = if AS_DIAM[k] == 0 {
+                1.2 - 0.9 * radius
+            } else {
+                (0.3 + 2.1 * radius).min(1.6)
+            };
+            v.weight[k] = 0.65 * AS_GAIN[k] * pos * (1.0 + 0.08 * rng.next());
+            v.modes[k].start(v.base[k], (self.body_decay * AS_DECAY[k]).max(0.01), sr);
+        }
+        for (k, &(r, g, d)) in AS_RESO.iter().enumerate() {
+            let i = 10 + k;
+            v.base[i] = f1 * r;
+            v.weight[i] = 0.65 * g * (1.0 + 0.1 * rng.next());
+            v.modes[i].start(v.base[i], (self.body_decay * d).max(0.01), sr);
+        }
+        // Tension modulation: a hard stroke starts a little sharp.
+        v.drop = (0.015 + 0.04 * self.snap) * velocity.powf(1.5);
+        v.pitch_env = 1.0;
+        v.pitch_coef = (-1.0 / (0.012 * sr)).exp();
+        v.retune(1.0 / sr);
+        v.pulse.start(contact, sr);
+        v.noise.reseed(hits.wrapping_mul(3).wrapping_add(17));
+        v.band_hz = center;
+        v.tone = 0.0;
+        v.band.set_q(center, 0.75, sr);
+        v.set_tone(&x, sr);
+        v.band.reset();
+        v.band_lo.set_q(1_600.0, 0.7, sr);
+        v.band_lo.reset();
+        for f in [&mut v.top1, &mut v.top2] {
+            f.set_cutoff(12_500.0, sr);
+            f.reset();
+        }
+        v.drive_lp.set_cutoff(16_000.0, sr);
+        v.drive_lp.reset();
+        v.wires
+            .set_t60(self.noise_decay * lerp(0.75, 1.15, velocity), sr);
+        v.wires.trigger(1.0, 0.000_6, sr);
+        // Softer strokes leave the wires relatively louder than the head.
+        v.wire_gain = lerp(1.6, 0.5, self.mix) * 0.9 / force.sqrt() * (1.0 + 0.06 * rng.next());
+        v.crack_noise.reseed(hits.wrapping_mul(3).wrapping_add(18));
+        v.crack_band
+            .set_q((3_400.0 * (1.0 + 0.12 * rng.next())).min(0.4 * sr), 0.9, sr);
+        v.crack_band.reset();
+        v.crack_hp.set_cutoff(1_200.0, sr);
+        v.crack_hp.reset();
+        v.crack.set_t60(lerp(0.01, 0.016, self.snap), sr);
+        v.crack.trigger(1.0, 0.000_15, sr);
+        v.crack_gain = self.snap * 0.9 * velocity.powf(1.3) * (1.0 + 0.15 * rng.next());
+        v.body_gain = lerp(0.25, 1.0, self.mix);
+        v.push = lerp(0.8, 1.0, velocity);
+        v.gain = vel_gain(velocity, self.vel_sens) * (1.0 + 0.03 * rng.next());
+        v.fade.reset();
     }
 }
 
@@ -590,11 +1141,17 @@ impl Synth for Snare {
         self.sr = sample_rate;
         self.ramp_k = ramp_coef(sample_rate);
         self.pool = Pool::new(5, 2, StealPolicy::Oldest, sample_rate, SnareVoice::new);
+        self.ac = Pool::new(5, 2, StealPolicy::Oldest, sample_rate, AcSnareVoice::new);
+        self.ck = Pool::new(5, 2, StealPolicy::Oldest, sample_rate, CkSnareVoice::new);
+        self.room_er.prepare(sample_rate);
         self.ctrl = 0;
     }
 
     fn reset(&mut self) {
         self.pool.kill_all();
+        self.ac.kill_all();
+        self.ck.kill_all();
+        self.room_er.clear();
         self.ctrl = 0;
     }
 
@@ -612,6 +1169,8 @@ impl Synth for Snare {
             DRIVE => self.drive.set(v, immediate),
             VELOCITY => self.vel_sens = v,
             LEVEL => self.level.set(v, immediate),
+            ACOUSTIC => self.acoustic = v >= 0.5,
+            CIRCUIT => self.circuit = v >= 0.5,
             _ => {}
         }
         if immediate {
@@ -620,6 +1179,14 @@ impl Synth for Snare {
     }
 
     fn note_on(&mut self, key: u8, velocity: f32, id: u32) {
+        if self.acoustic {
+            self.ac_note_on(key, velocity, id);
+            return;
+        }
+        if self.circuit {
+            self.ck_note_on(key, velocity, id);
+            return;
+        }
         let slot = self.pool.begin(key, id);
         self.hits = self.hits.wrapping_add(1);
         let sr = self.sr;
@@ -698,6 +1265,9 @@ impl Synth for Snare {
 
     fn all_sound_off(&mut self) {
         self.pool.kill_all();
+        self.ac.kill_all();
+        self.ck.kill_all();
+        self.room_er.clear();
     }
 
     fn render(&mut self, _ctx: &ProcessContext, left: &mut [f32], right: &mut [f32]) {
@@ -715,6 +1285,21 @@ impl Synth for Snare {
                 rl += l;
                 rr += r;
             }
+            // The acoustic model's room is fed from its dry hit; nothing here
+            // runs for the electronic voices.
+            if !self.ac.is_silent() || !self.ck.is_silent() || self.room_er.ringing() {
+                let mut dry = 0.0;
+                for v in self.ac.voices.iter_mut().filter(|v| v.active) {
+                    dry += v.tick(self.drive_g, self.drive_norm, self.drive_mix);
+                }
+                for v in self.ck.voices.iter_mut().filter(|v| v.active) {
+                    dry += v.tick(self.drive_g, self.drive_norm, self.drive_mix);
+                }
+                let (el, er) = self.room_er.tick(dry * self.room * 1.4);
+                out += dry;
+                rl += el;
+                rr += er;
+            }
             left[n] = (out + rl) * self.level_gain;
             right[n] = (out + rr) * self.level_gain;
         }
@@ -726,5 +1311,8 @@ impl Synth for Snare {
 
     fn is_silent(&self) -> bool {
         self.pool.is_silent()
+            && self.ac.is_silent()
+            && self.ck.is_silent()
+            && !self.room_er.ringing()
     }
 }

@@ -180,3 +180,54 @@ fn requested_clap_restart_preserves_the_instance_and_refreshes_compensation() {
         "restart must preserve the plugin's private parameter change"
     );
 }
+
+#[test]
+fn a_template_keeps_live_plugin_state_without_touching_the_project() {
+    let dir = fixture::temp_dir("session-template");
+    let (mut s, dev) = session_with_gain(1.0);
+    s.set_param(dev, "7", 2.0, 1);
+    s.doc.end_gesture();
+    s.tick();
+    let doc_state = |s: &Session| {
+        s.project().mixer.tracks[0]
+            .inserts
+            .iter()
+            .find(|d| d.id == dev)
+            .and_then(|d| d.state.clone())
+    };
+    assert_eq!(doc_state(&s), None, "live state is not in the document yet");
+    let revision = s.doc.revision();
+    let dirty = s.doc.is_dirty();
+    let undo = s.doc.undo_label().map(str::to_string);
+
+    let path = s
+        .save_template(&dir.join("Templates"), "Gain rig")
+        .expect("save template");
+    let stored = peel_project::load_template(&path).expect("load").project;
+    let inst = stored.mixer.tracks[0]
+        .inserts
+        .iter()
+        .find(|d| d.id == dev)
+        .expect("insert kept");
+    assert!(inst.state.as_deref().is_some_and(|b| !b.is_empty()));
+    assert_eq!(inst.params.get("7"), Some(&2.0));
+
+    // The open project is exactly as it was.
+    assert_eq!(doc_state(&s), None);
+    assert_eq!(s.doc.revision(), revision);
+    assert_eq!(s.doc.is_dirty(), dirty);
+    assert_eq!(s.doc.undo_label().map(str::to_string), undo);
+    assert!(s.path.is_none());
+
+    // The template starts with the plugin loaded and its state applied.
+    let mut fresh = Session::new_silent(template::empty());
+    fresh.set_plugins(fixture::infos().to_vec());
+    fresh.replace_project_with_media(stored, Some(path));
+    fresh.tick();
+    assert!(
+        fresh.missing_devices().is_empty(),
+        "{:?}",
+        fresh.missing_devices()
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}

@@ -19,6 +19,7 @@
 //!   history root that loads.
 //! * [`export_bundle`] / [`import_bundle`] move a project as one hardened ZIP.
 //! * [`autosave`] reuses the same save path under a private directory.
+//! * [`save_template`] stores a self-contained copy in a template library.
 //! * [`ProjectLock`] keeps two sessions from writing one project.
 //!
 //! Unknown fields from a newer minor version are reported as warnings on
@@ -34,6 +35,7 @@ mod manifest;
 mod media;
 mod save;
 mod shard;
+mod template;
 mod util;
 
 pub use autosave::{
@@ -48,4 +50,8 @@ pub use media::{AudioProbe, data_dir_for, import_asset, import_asset_with, resol
 pub use save::{
     DEFAULT_HISTORY_LIMIT, GcReport, SaveOptions, SaveReport, collect_garbage,
     required_capabilities, save, save_as, save_with,
+};
+pub use template::{
+    MAX_TEMPLATE_NAME_CHARS, TemplateEntry, TemplateError, list_templates, load_template,
+    save_template, template_name,
 };

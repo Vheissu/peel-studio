@@ -54,12 +54,18 @@ pub enum Command {
     LoopSong,
     Keys,
     Hints,
+    SaveTemplate,
+    /// A user template by its catalog slot (see `user_templates::Library`).
+    UserTemplate(usize),
 }
 
 const TEMPLATE_BASE: u32 = 1000;
 const RECENT_BASE: u32 = 2000;
+const USER_TEMPLATE_BASE: u32 = 3000;
+const USER_TEMPLATE_END: u32 = USER_TEMPLATE_BASE + crate::user_templates::MAX_TEMPLATES as u32;
 
-const SIMPLE: [Command; 29] = [
+// New commands go at the end so existing ids never move.
+const SIMPLE: [Command; 30] = [
     Command::NewProject,
     Command::Demo,
     Command::StartScreen,
@@ -89,6 +95,7 @@ const SIMPLE: [Command; 29] = [
     Command::SongMode,
     Command::LoopSong,
     Command::Keys,
+    Command::SaveTemplate,
 ];
 
 const DOCKS: [DockTab; 4] = [
@@ -103,6 +110,7 @@ impl Command {
         match self {
             Command::Template(i) => TEMPLATE_BASE + i as u32,
             Command::Recent(i) => RECENT_BASE + i as u32,
+            Command::UserTemplate(i) => USER_TEMPLATE_BASE + i as u32,
             Command::Dock(tab) => 900 + DOCKS.iter().position(|d| *d == tab).unwrap_or(0) as u32,
             Command::Hints => 950,
             c => 1 + SIMPLE.iter().position(|s| *s == c).unwrap_or(0) as u32,
@@ -114,8 +122,11 @@ impl Command {
             950 => Some(Command::Hints),
             900..=903 => Some(Command::Dock(DOCKS[(id - 900) as usize])),
             TEMPLATE_BASE..RECENT_BASE => Some(Command::Template((id - TEMPLATE_BASE) as usize)),
-            RECENT_BASE..3000 => Some(Command::Recent((id - RECENT_BASE) as usize)),
-            1..=29 => SIMPLE.get(id as usize - 1).copied(),
+            RECENT_BASE..USER_TEMPLATE_BASE => Some(Command::Recent((id - RECENT_BASE) as usize)),
+            USER_TEMPLATE_BASE..USER_TEMPLATE_END => {
+                Some(Command::UserTemplate((id - USER_TEMPLATE_BASE) as usize))
+            }
+            1..=30 => SIMPLE.get(id as usize - 1).copied(),
             _ => None,
         }
     }
@@ -126,6 +137,7 @@ impl Command {
             self,
             Command::NewProject
                 | Command::Template(_)
+                | Command::UserTemplate(_)
                 | Command::Demo
                 | Command::StartScreen
                 | Command::Open
@@ -179,6 +191,16 @@ pub fn bar(studio: &Studio, mac: bool) -> MenuBar {
     for (i, name) in crate::project::styles() {
         styles.push(cmd(Command::Template(i), name));
     }
+    let mut mine = Menu::new("My templates");
+    for (slot, entry) in studio.templates.entries() {
+        mine.push(cmd(Command::UserTemplate(slot), entry.name.clone()));
+    }
+    styles.separator();
+    styles.push(MenuEntry::Submenu {
+        enabled: !studio.templates.is_empty(),
+        menu: mine,
+        inline: None,
+    });
     if crate::project::demo_index().is_some() {
         styles.separator();
         styles.push(cmd(Command::Demo, "Demo song"));
@@ -212,6 +234,7 @@ pub fn bar(studio: &Studio, mac: bool) -> MenuBar {
     file.push(cmd(Command::Close, "Close project").shortcut(Shortcut::cmd('w')));
     file.push(cmd(Command::Save, "Save").shortcut(Shortcut::cmd('s')));
     file.push(cmd(Command::SaveAs, "Save as…").shortcut(Shortcut::cmd('s').shift()));
+    file.push(cmd(Command::SaveTemplate, "Save as template…"));
     file.separator();
     file.push(cmd(Command::ExportAudio, "Export audio…").shortcut(Shortcut::cmd('e')));
     file.push(cmd(Command::ExportMidi, "Export MIDI…"));
@@ -354,6 +377,12 @@ pub fn frame(ui: &mut Ui, studio: &mut Studio) {
         studio.prompt_keys(ui);
         return;
     }
+    // So is the Save as template dialog; it takes the keys when it draws.
+    if studio.template_dialog.is_some() {
+        ui.take_menu_commands();
+        studio.hold_dialog_keys(ui);
+        return;
+    }
     for id in ui.take_menu_commands() {
         let Some(c) = Command::from_id(id) else {
             continue;
@@ -369,6 +398,10 @@ pub fn frame(ui: &mut Ui, studio: &mut Studio) {
         run(ui, studio, c);
         if studio.pending.is_some() {
             studio.prompt_keys(ui);
+            return;
+        }
+        if studio.template_dialog.is_some() {
+            studio.hold_dialog_keys(ui);
             return;
         }
     }
@@ -391,13 +424,16 @@ pub fn frame(ui: &mut Ui, studio: &mut Studio) {
         fired.push(Command::Redo);
     }
     for c in fired {
-        if studio.pending.is_some() {
+        if studio.pending.is_some() || studio.template_dialog.is_some() {
             break;
         }
         run(ui, studio, c);
     }
     if studio.pending.is_some() {
         studio.prompt_keys(ui);
+    }
+    if studio.template_dialog.is_some() {
+        studio.hold_dialog_keys(ui);
     }
 }
 
@@ -406,7 +442,20 @@ pub fn run(ui: &mut Ui, studio: &mut Studio, c: Command) {
         Command::NewProject => studio.request(Change::New),
         Command::Template(i) => studio.request(Change::Template(i)),
         Command::Demo => studio.request(Change::Demo),
-        Command::StartScreen => studio.welcome = true,
+        Command::UserTemplate(slot) => match studio.templates.get(slot) {
+            Some(entry) => {
+                let path = entry.path.clone();
+                studio.request(Change::UserTemplate(path));
+            }
+            None => studio
+                .session
+                .notify("That template is no longer there", true),
+        },
+        Command::SaveTemplate => studio.open_save_template(),
+        Command::StartScreen => {
+            studio.templates.refresh();
+            studio.welcome = true;
+        }
         Command::Open => studio.open(),
         Command::Recent(i) => {
             if let Some(path) = studio.prefs.existing_recent().get(i).cloned() {
@@ -502,6 +551,8 @@ mod tests {
             Command::Template(9),
             Command::Recent(0),
             Command::Recent(9),
+            Command::UserTemplate(0),
+            Command::UserTemplate(crate::user_templates::MAX_TEMPLATES - 1),
         ]);
         let mut ids = std::collections::HashSet::new();
         for c in all {
@@ -509,5 +560,12 @@ mod tests {
             assert_eq!(Command::from_id(c.id()), Some(c));
         }
         assert_eq!(Command::from_id(0), None);
+        // Existing ids never move; user templates stay inside their range.
+        assert_eq!(Command::NewProject.id(), 1);
+        assert_eq!(Command::Keys.id(), 29);
+        assert_eq!(Command::Recent(999).id(), 2999);
+        assert_eq!(Command::UserTemplate(0).id(), 3000);
+        let past = Command::UserTemplate(crate::user_templates::MAX_TEMPLATES).id();
+        assert_eq!(Command::from_id(past), None);
     }
 }
