@@ -117,6 +117,7 @@ pub mod live;
 mod mixer;
 mod monitor;
 mod offline;
+pub mod output;
 pub mod plan;
 mod retire;
 pub mod rt;

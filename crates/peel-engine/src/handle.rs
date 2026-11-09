@@ -2,14 +2,13 @@
 //! stream, and exposes telemetry.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{
-    BufferSize, ErrorKind, FromSample, Sample, SampleFormat, SizedSample, StreamConfig,
-    SupportedBufferSize,
+    BufferSize, ErrorKind, FromSample, SampleFormat, SizedSample, StreamConfig, SupportedBufferSize,
 };
 use rtrb::{Consumer, Producer, PushError, RingBuffer};
 
@@ -51,6 +50,8 @@ pub struct EngineHandle {
     // the queue ends that the control thread keeps.
     backend: Backend,
     input: InputSide,
+    outputs: crate::output::OutputStreams,
+    output_channel_count: u16,
     commands: Producer<EngineCommand>,
     retired: Consumer<Retired>,
     telemetry: Arc<Telemetry>,
@@ -82,6 +83,7 @@ struct LiveSide {
     recorded: Option<RecordedReceiver>,
     /// Audio input state (meter, capture ring, monitoring) of the engine.
     audio_input: Arc<InputShared>,
+    output_mapping: Arc<AtomicU32>,
 }
 
 /// The audio input of one engine: the open stream, if any.
@@ -127,6 +129,8 @@ impl EngineHandle {
                 Ok(EngineHandle {
                     backend: Backend::Cpal(opened.stream),
                     input: InputSide::new(&opened.live),
+                    outputs: crate::output::OutputStreams::default(),
+                    output_channel_count: opened.channels,
                     commands: opened.commands,
                     retired: opened.retired,
                     telemetry,
@@ -180,6 +184,8 @@ impl EngineHandle {
         Ok(EngineHandle {
             backend: Backend::Null(null),
             input: InputSide::new(&live),
+            outputs: crate::output::OutputStreams::default(),
+            output_channel_count: 2,
             commands,
             retired,
             telemetry,
@@ -265,8 +271,51 @@ impl EngineHandle {
     /// nowhere. Used to release a device before opening another engine on it.
     pub fn stop_audio(&mut self) {
         self.close_input();
+        self.outputs = crate::output::OutputStreams::default();
         self.backend = Backend::Stopped;
         self.healthy.store(false, Ordering::Relaxed);
+    }
+
+    /// Replaces all secondary outputs after every device has opened. A failure
+    /// leaves the current outputs and their engine taps untouched.
+    pub fn set_output_routes(
+        &mut self,
+        requests: &[crate::output::OutputRouteRequest],
+    ) -> Result<Vec<crate::output::OutputRouteInfo>, String> {
+        let (streams, taps) = crate::output::OutputStreams::prepare(requests, self.sample_rate)?;
+        self.send(EngineCommand::SetOutputRoutes(taps))
+            .map_err(|_| "Audio queue is busy; try changing outputs again".to_string())?;
+        self.outputs = streams;
+        Ok(self.outputs.infos())
+    }
+
+    pub fn output_route_info(&self) -> Vec<crate::output::OutputRouteInfo> {
+        self.outputs.infos()
+    }
+
+    pub fn set_output_route_source(
+        &self,
+        index: usize,
+        source: Option<crate::output::OutputSource>,
+    ) {
+        self.outputs.set_source(index, source);
+    }
+
+    pub fn primary_output_channels(&self) -> crate::output::OutputChannels {
+        crate::output::OutputChannels::decode(self.live.output_mapping.load(Ordering::Relaxed))
+    }
+    pub fn primary_output_channel_count(&self) -> u16 {
+        self.output_channel_count
+    }
+    pub fn set_primary_output_channels(
+        &self,
+        channels: crate::output::OutputChannels,
+    ) -> Result<(), String> {
+        channels.validate(self.output_channel_count)?;
+        self.live
+            .output_mapping
+            .store(channels.encode(), Ordering::Relaxed);
+        Ok(())
     }
 
     // ---- audio input ----
@@ -430,6 +479,9 @@ fn make_parts(
         input: engine.take_live_input(),
         recorded: engine.take_recorded(),
         audio_input: engine.input_shared().clone(),
+        output_mapping: Arc::new(AtomicU32::new(
+            crate::output::OutputChannels::default().encode(),
+        )),
     };
     (engine, cmd_tx, ret_rx, live)
 }
@@ -504,10 +556,11 @@ struct Opened {
     name: String,
     sample_rate: f32,
     buffer_frames: u32,
+    channels: u16,
     warning: Option<String>,
 }
 
-fn format_rank(f: SampleFormat) -> Option<u8> {
+pub(crate) fn format_rank(f: SampleFormat) -> Option<u8> {
     Some(match f {
         SampleFormat::F32 => 0,
         SampleFormat::I16 => 1,
@@ -659,7 +712,7 @@ pub(crate) fn match_device(devices: &[(String, String)], wanted: &str) -> Option
         })
 }
 
-fn find_output_device(host: &cpal::Host, wanted: &str) -> Option<cpal::Device> {
+pub(crate) fn find_output_device(host: &cpal::Host, wanted: &str) -> Option<cpal::Device> {
     let devices: Vec<cpal::Device> = host.output_devices().ok()?.collect();
     let keys: Vec<(String, String)> = devices
         .iter()
@@ -798,6 +851,7 @@ fn open_device(
                 max_block,
                 telemetry.clone(),
                 healthy.clone(),
+                live.output_mapping.clone(),
             ) {
                 Ok(stream) => {
                     if let Err(e) = stream.play() {
@@ -820,6 +874,7 @@ fn open_device(
                         name,
                         sample_rate: cand.rate as f32,
                         buffer_frames,
+                        channels: cand.channels,
                         warning: None,
                     });
                 }
@@ -832,6 +887,7 @@ fn open_device(
     Err(last_error)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_stream(
     device: &cpal::Device,
     format: SampleFormat,
@@ -840,8 +896,15 @@ fn build_stream(
     max_block: usize,
     telemetry: Arc<Telemetry>,
     healthy: Arc<AtomicBool>,
+    mapping: Arc<AtomicU32>,
 ) -> Result<cpal::Stream, cpal::Error> {
     let channels = config.channels as usize;
+    if channels == 1 {
+        mapping.store(
+            crate::output::OutputChannels::Mono(0).encode(),
+            Ordering::Relaxed,
+        );
+    }
     let on_error = move |err: cpal::Error| match err.kind() {
         ErrorKind::Xrun => {
             telemetry.overruns.fetch_add(1, Ordering::Relaxed);
@@ -857,7 +920,7 @@ fn build_stream(
     };
     macro_rules! build {
         ($t:ty) => {{
-            let cb = make_callback::<$t>(engine, channels, max_block);
+            let cb = make_callback::<$t>(engine, channels, max_block, mapping);
             device.build_output_stream(config, cb, on_error, None)
         }};
     }
@@ -888,6 +951,7 @@ fn make_callback<T>(
     mut engine: Engine,
     channels: usize,
     max_block: usize,
+    mapping: Arc<AtomicU32>,
 ) -> impl FnMut(&mut [T], &cpal::OutputCallbackInfo) + Send + 'static
 where
     T: SizedSample + FromSample<f32> + Send + 'static,
@@ -912,13 +976,13 @@ where
             while done < frames {
                 let n = (frames - done).min(max_block);
                 engine.render(&mut left[..n], &mut right[..n]);
-                write_interleaved(
-                    &mut data[done * channels..(done + n) * channels],
-                    channels,
-                    &left[..n],
-                    &right[..n],
-                    clamp,
-                );
+                let map = crate::output::OutputChannels::decode(mapping.load(Ordering::Relaxed));
+                for (i, frame) in data[done * channels..(done + n) * channels]
+                    .chunks_exact_mut(channels)
+                    .enumerate()
+                {
+                    crate::output::write_frame(frame, map, [left[i], right[i]], clamp);
+                }
                 done += n;
             }
             for x in &mut data[frames * channels..] {
@@ -926,41 +990,6 @@ where
             }
             engine.end_callback(frames);
         });
-    }
-}
-
-/// Interleaves stereo into `channels` device channels: mono is the mid mix,
-/// stereo passes through, extra channels are silent.
-fn write_interleaved<T: Sample + FromSample<f32>>(
-    out: &mut [T],
-    channels: usize,
-    l: &[f32],
-    r: &[f32],
-    clamp: bool,
-) {
-    let conv = |x: f32| -> T { T::from_sample(if clamp { x.clamp(-1.0, 1.0) } else { x }) };
-    match channels {
-        1 => {
-            for (o, (a, b)) in out.iter_mut().zip(l.iter().zip(r)) {
-                *o = conv((a + b) * 0.5);
-            }
-        }
-        2 => {
-            let (pairs, _) = out.as_chunks_mut::<2>();
-            for (o, (a, b)) in pairs.iter_mut().zip(l.iter().zip(r)) {
-                o[0] = conv(*a);
-                o[1] = conv(*b);
-            }
-        }
-        _ => {
-            for (o, (a, b)) in out.chunks_exact_mut(channels).zip(l.iter().zip(r)) {
-                o[0] = conv(*a);
-                o[1] = conv(*b);
-                for x in &mut o[2..] {
-                    *x = T::EQUILIBRIUM;
-                }
-            }
-        }
     }
 }
 

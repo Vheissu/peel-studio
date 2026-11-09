@@ -11,6 +11,8 @@ pub enum EngineCommand {
     /// Activate a new plan at the next block boundary. The previous plan is
     /// returned through [`Retired::Plan`].
     SetPlan(Box<RenderPlan>),
+    /// Replace secondary output taps; allocation and stream setup are control-side.
+    SetOutputRoutes(Box<crate::output::OutputTaps>),
     /// Install a device that was created and `prepare`d (at the engine's
     /// sample rate and max block) on the control thread. Any device already
     /// in the slot is retired.
@@ -111,4 +113,5 @@ pub enum Retired {
     Device(Box<dyn Device>),
     Sample(Arc<SampleBuffer>),
     Monitor(Box<MonitorReceiver>),
+    OutputRoutes(Box<crate::output::OutputTaps>),
 }

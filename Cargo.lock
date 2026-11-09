@@ -2866,6 +2866,7 @@ dependencies = [
  "peel-dsp",
  "peel-time",
  "rtrb",
+ "serde",
  "thiserror 2.0.21",
 ]
 
@@ -2981,6 +2982,7 @@ dependencies = [
  "peel-midi-io",
  "peel-project",
  "peel-time",
+ "serde",
  "serde_json",
 ]
 

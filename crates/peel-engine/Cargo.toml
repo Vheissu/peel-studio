@@ -15,6 +15,7 @@ rtrb.workspace = true
 cpal.workspace = true
 log.workspace = true
 thiserror.workspace = true
+serde.workspace = true
 assert_no_alloc = { version = "1.1.2", optional = true }
 
 [features]

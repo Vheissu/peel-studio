@@ -106,6 +106,7 @@ pub struct Engine {
     commands: Option<Consumer<EngineCommand>>,
     retirer: Retirer,
     telemetry: Arc<Telemetry>,
+    outputs: Box<crate::output::OutputTaps>,
     /// Live input queue, sustain pedal and callback timing.
     live: LiveState,
 
@@ -196,6 +197,7 @@ impl Engine {
                 next_click: 0,
             },
             engine_sample: 0,
+            outputs: Box::default(),
             mixer: Mixer::new(max_block, device_slots),
             audio: AudioState::new(sample_rate),
             metronome: Metronome::new(sample_rate),
@@ -421,6 +423,10 @@ impl Engine {
     pub fn handle_command(&mut self, cmd: EngineCommand) {
         match cmd {
             EngineCommand::SetPlan(plan) => self.set_plan(plan),
+            EngineCommand::SetOutputRoutes(routes) => {
+                let old = std::mem::replace(&mut self.outputs, routes);
+                self.retirer.retire(Retired::OutputRoutes(old));
+            }
             EngineCommand::InstallDevice { slot, device } => {
                 if self.telemetry.analysis.is_selected(slot) {
                     self.telemetry.analysis.invalidate();
@@ -1126,6 +1132,7 @@ impl Engine {
             stamps,
             stamp,
             mixer,
+            outputs,
             telemetry,
             sample_rate,
             audio,
@@ -1301,6 +1308,7 @@ impl Engine {
             }
             let (tl, tr) = target_gains(route.gain, route.pan, route.muted);
             if !mixer.dirty[ti] {
+                outputs.silence(crate::output::OutputSource::TrackMeter(route.meter), frames);
                 mixer.track_ramp[ti].snap(tl, tr);
                 continue;
             }
@@ -1309,6 +1317,7 @@ impl Engine {
                 let (l, r) = mixer.track(ti, frames);
                 scale_ramped(l, r, &mut ramp, tl, tr, step);
                 let (pl, pr) = (peak(l), peak(r));
+                outputs.capture(crate::output::OutputSource::TrackMeter(route.meter), l, r);
                 if pl > 0.0 || pr > 0.0 {
                     telemetry.push_meter(route.meter, pl, pr);
                 }
@@ -1387,6 +1396,8 @@ impl Engine {
             out_l.fill(0.0);
             out_r.fill(0.0);
         }
+
+        outputs.capture(crate::output::OutputSource::Master, out_l, out_r);
 
         // ---- monitoring, after the master ----
         if self.monitoring {
