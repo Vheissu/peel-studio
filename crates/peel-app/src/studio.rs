@@ -1227,18 +1227,30 @@ impl Studio {
         // Retry any bend or pressure return the live queue refused, even
         // with the editor closed.
         crate::expression::flush(&mut self.session, &mut self.ws.inst.expr);
-        // Screenshot hook: `PEEL_BEND` (-1..1) and `PEEL_PRESSURE` (0..1) move
-        // the real session expression a few frames in, once the instrument
-        // is the live target, just as a hardware wheel would.
-        if !cfg!(test) && self.ws.inst.is_open() && std::env::var_os("PEEL_BEND").is_some() {
+        // Screenshot hooks use accepted live events after MIDI startup settles.
+        if !cfg!(test)
+            && self.ws.inst.is_open()
+            && std::env::var_os("PEEL_SCREENSHOT").is_some()
+            && (std::env::var_os("PEEL_BEND").is_some()
+                || std::env::var_os("PEEL_PRESSURE").is_some())
+        {
             let n = ui.state::<u32>(W::new("shot-expression"));
             *n += 1;
-            if *n == 6 {
-                let get = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<f32>().ok());
-                if let Some(v) = get("PEEL_BEND") {
+            if *n >= 30 && self.session.live_target().is_some() {
+                let get = |k: &str| {
+                    std::env::var(k)
+                        .ok()
+                        .and_then(|v| v.parse::<f32>().ok())
+                        .filter(|v| v.is_finite())
+                };
+                if let Some(v) = get("PEEL_BEND").map(|v| v.clamp(-1.0, 1.0))
+                    && (self.session.pitch_bend_value() - v).abs() > 1e-5
+                {
                     self.session.pitch_bend(v);
                 }
-                if let Some(v) = get("PEEL_PRESSURE") {
+                if let Some(v) = get("PEEL_PRESSURE").map(|v| v.clamp(0.0, 1.0))
+                    && (self.session.channel_pressure_value() - v).abs() > 1e-5
+                {
                     self.session.channel_pressure(v);
                 }
             }
