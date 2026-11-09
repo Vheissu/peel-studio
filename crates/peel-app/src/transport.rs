@@ -5,7 +5,7 @@ use peel_document::{Id, PALETTE, Pattern, Time};
 use peel_media::AudioFormat;
 use peel_session::PlayMode;
 use peel_ui::Id as W;
-use peel_ui::{Align, MenuItem, Rect, Ui, WindowControl, icons, vec2};
+use peel_ui::{Align, MenuBar, MenuItem, Rect, Ui, WindowControl, icons, vec2};
 
 use crate::studio::Studio;
 use crate::util::{col, format_position};
@@ -105,18 +105,67 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
     row.cut_left(win.titlebar_inset());
     let title = studio.session.project().meta.title.clone();
     let title_w = ui.measure(&title, t.label).x.min(180.0) + 2.0;
+    // Without a platform menu bar the app menus sit around View: File and
+    // Edit before it, Transport and Help after. A tight bar keeps File
+    // only (undo, transport and help have their own controls).
+    let strip = (!win.has_native_menu() || studio.menu_strip).then(|| {
+        let bar = crate::menus::bar(studio, false);
+        let (before, after): (Vec<_>, Vec<_>) = bar
+            .menus
+            .into_iter()
+            .filter(|m| m.title != "View")
+            .partition(|m| m.title == "File" || m.title == "Edit");
+        let file = before
+            .iter()
+            .filter(|m| m.title == "File")
+            .cloned()
+            .collect();
+        let full = (MenuBar { menus: before }, MenuBar { menus: after });
+        let full_w = ui.menu_bar_width(&full.0) + ui.menu_bar_width(&full.1);
+        let compact = (MenuBar { menus: file }, MenuBar::default());
+        let compact_w = ui.menu_bar_width(&compact.0);
+        (full, full_w, compact, compact_w)
+    });
     let view_w = ui.quiet_button_width(true, "View", true);
     let meter_on = studio.prefs.show_meter;
-    let fit = (0..=7)
-        .map(|n| Fit::level(n, title_w))
-        .find(|f| {
-            f.left(view_w) + f.playback() + 8.0 + f.time() + f.right(meter_on) + 32.0 <= row.w
-        })
-        .unwrap_or_else(|| Fit::level(7, title_w));
+    let fits = |f: &Fit, strip_w: f32| {
+        strip_w + f.left(view_w) + f.playback() + 8.0 + f.time() + f.right(meter_on) + 32.0 <= row.w
+    };
+    // The logo gives way last, and only to the File menu.
+    let mut logo_shown = true;
+    let (fit, strip) = match strip {
+        None => (
+            (0..=7)
+                .map(|n| Fit::level(n, title_w))
+                .find(|f| fits(f, 0.0))
+                .unwrap_or_else(|| Fit::level(7, title_w)),
+            None,
+        ),
+        Some((full, full_w, compact, compact_w)) => {
+            match (0..=4)
+                .map(|n| Fit::level(n, title_w))
+                .find(|f| fits(f, full_w))
+            {
+                Some(f) => (f, Some(full)),
+                None => (
+                    (0..=7)
+                        .map(|n| Fit::level(n, title_w))
+                        .find(|f| fits(f, compact_w))
+                        .unwrap_or_else(|| {
+                            logo_shown = false;
+                            Fit::level(7, title_w)
+                        }),
+                    Some(compact),
+                ),
+            }
+        }
+    };
 
     // ---- Left: identity, View, history.
-    logo(ui, row.cut_left(28.0));
-    row.cut_left(8.0);
+    if logo_shown {
+        logo(ui, row.cut_left(28.0));
+        row.cut_left(8.0);
+    }
     if fit.title_w > 0.0 {
         let title_r = row.cut_left(fit.title_w);
         let fitted = ui.fit_text(&title, t.label, title_r.w);
@@ -124,7 +173,21 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
         ui.describe_label(W::new("project-title"), title_r, &title);
         row.cut_left(12.0);
     }
+    let mut chosen = None;
+    if let Some((before, _)) = &strip {
+        let w = ui.menu_bar_width(before);
+        chosen = ui.menu_bar(crate::menus::STRIP, row.cut_left(w), before);
+    }
     crate::layout::view_button(ui, row.cut_left(fit.view_w(view_w)), studio, fit.view_icon);
+    if let Some((_, after)) = &strip
+        && !after.menus.is_empty()
+    {
+        let w = ui.menu_bar_width(after);
+        chosen = chosen.or(ui.menu_bar(crate::menus::STRIP.with("after"), row.cut_left(w), after));
+    }
+    if let Some(id) = chosen {
+        ui.queue_menu_command(id);
+    }
     row.cut_left(6.0);
     let undo = ui.icon_button(W::new("undo"), row.cut_left(30.0), icons::UNDO, false, None);
     let undo_label = studio

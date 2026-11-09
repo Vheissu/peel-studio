@@ -14,6 +14,9 @@ pub mod focus;
 pub mod geom;
 pub mod icons;
 pub mod input;
+pub mod menu;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+mod native_menu;
 pub mod render;
 pub mod scene;
 pub mod text;
@@ -29,7 +32,10 @@ pub use app::{App, WindowControl, WindowOptions, run};
 pub use chrome::Edge;
 pub use focus::{Adjust, FocusKind};
 pub use geom::{Color, Rect, Vec2, rect, vec2};
-pub use input::{Button, Input, Modifiers};
+pub use input::{Button, Input, KeyPress, Modifiers};
+pub use menu::{
+    Menu, MenuBar, MenuCommand, MenuEntry, MenuRole, Shortcut, ShortcutKey, StandardItem,
+};
 pub use scene::{Align, Dir, LayerId, Scene};
 pub use text::{FontKind, FontWeight, TextStyle};
 pub use theme::Theme;

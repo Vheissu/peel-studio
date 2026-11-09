@@ -296,7 +296,11 @@ fn points_insert_drag_delete_and_clear_with_undo() {
     assert_eq!(h.curve(pid, a.id, Lane::Pitch)[0].offset, Time::beats(1));
     h.command("z", KeyCode::KeyZ);
     assert!(h.curve(pid, a.id, Lane::Pitch).is_empty());
-    h.command("z", KeyCode::KeyZ);
+    // Selecting the note creates no empty Move checkpoint. Undoing the
+    // point edits leaves the original notes and their setup intact.
+    assert_eq!(h.session().doc.undo_label(), Some("setup"));
+    let notes = &h.session().project().pattern(pid).unwrap().notes;
+    assert!(notes.contains(&a) && notes.contains(&b));
     h.valid();
 
     // Two points, then right-click one away.

@@ -21,7 +21,14 @@ pub struct Studio {
     pub recorder: crate::recorder::Recorder,
     pub scripts: crate::scripts::Scripts,
     mcp: Option<peel_mcp::Bridge>,
-    recovered: Vec<peel_project::AutosaveEntry>,
+    pub(crate) recovered: Vec<peel_project::AutosaveEntry>,
+    /// A project change waiting on the save prompt.
+    pub pending: Option<crate::project::Change>,
+    /// Quit was confirmed; the window closes after this frame.
+    pub quit: bool,
+    /// Show the in-window menu strip even beside a platform menu bar
+    /// (`PEEL_FILE_MENU`, for screenshots).
+    pub menu_strip: bool,
     /// `PEEL_PLUGIN` debug insert still waiting for the plugin scan.
     debug_plugin: Option<String>,
     last_autosave: std::time::Instant,
@@ -81,6 +88,9 @@ impl Studio {
             scripts: Default::default(),
             mcp: None,
             recovered,
+            pending: None,
+            quit: false,
+            menu_strip: std::env::var_os("PEEL_FILE_MENU").is_some(),
             debug_plugin: std::env::var("PEEL_PLUGIN").ok(),
             last_autosave: std::time::Instant::now(),
             autosaved_revision: revision,
@@ -230,6 +240,12 @@ impl Studio {
     fn welcome(&mut self, ui: &mut Ui) {
         let recent = self.prefs.existing_recent();
         let mut show = self.prefs.show_welcome;
+        // Under the save prompt the keys are the prompt's.
+        let keys = if self.pending.is_some() {
+            std::mem::take(&mut ui.input.keys)
+        } else {
+            Vec::new()
+        };
         let action = crate::welcome::draw(
             ui,
             WelcomeData {
@@ -238,46 +254,26 @@ impl Studio {
                 show_at_startup: &mut show,
             },
         );
+        if self.pending.is_some() {
+            ui.input.keys = keys;
+        }
         if show != self.prefs.show_welcome {
             self.prefs.show_welcome = show;
             self.prefs.save();
         }
         let Some(action) = action else { return };
-        self.welcome = false;
+        if self.pending.is_some() {
+            return;
+        }
+        use crate::project::Change;
         match action {
-            WelcomeAction::Template(i) => {
-                let make = peel_session::template::templates()
-                    .get(i)
-                    .map_or(peel_session::template::beat_and_melody as fn() -> _, |t| {
-                        t.1
-                    });
-                self.prepare_project_change();
-                self.session.replace_project(make());
-                self.reset_workspace();
-            }
-            WelcomeAction::Empty => {
-                let mut p = peel_session::template::empty();
-                p.mixer.tracks[0]
-                    .inserts
-                    .push(peel_session::template::device("peel.fx.limiter", None));
-                self.prepare_project_change();
-                self.session.replace_project(p);
-                self.reset_workspace();
-            }
+            WelcomeAction::New => self.request(Change::New),
+            WelcomeAction::Template(i) => self.request(Change::Template(i)),
+            WelcomeAction::Demo => self.request(Change::Demo),
             WelcomeAction::Open => self.open(),
-            WelcomeAction::OpenPath(p) => self.open_path(p),
-            WelcomeAction::Recover(p) => match self.session.open(&p) {
-                Ok(()) => {
-                    self.session.path = None;
-                    self.reset_workspace();
-                    self.recovered.retain(|e| e.path != p);
-                    let title = self.session.project().meta.title.clone();
-                    self.session
-                        .notify(format!("Recovered {title}. Save it to keep it."), false);
-                }
-                Err(e) => self.session.notify(format!("Could not recover: {e}"), true),
-            },
-            WelcomeAction::Close => {}
+            WelcomeAction::OpenPath(p) => self.request(Change::OpenPath(p)),
+            WelcomeAction::Recover(p) => self.request(Change::Recover(p)),
+            WelcomeAction::Close => self.welcome = false,
         }
     }
 
@@ -668,77 +664,27 @@ impl Studio {
         if std::env::var("PEEL_PLAY").is_ok() {
             self.session.play();
         }
+        // `PEEL_UNSAVED=1` puts up the save prompt (Close with an edit).
+        if std::env::var_os("PEEL_UNSAVED").is_some() {
+            self.session
+                .doc
+                .edit("Rename project", |p| p.meta.title = "Night drive".into());
+            self.request(crate::project::Change::Close);
+        }
     }
 
-    fn shortcuts(&mut self, ui: &mut Ui, win: &WindowControl) {
+    fn shortcuts(&mut self, ui: &mut Ui) {
         if ui.text_focus() {
             return;
         }
-        crate::layout::shortcuts(ui, self);
-        let input = &mut ui.input;
-        if input.take_command("z", false)
-            && let Some(label) = self.session.doc.undo()
-        {
-            self.session.notify(format!("Undo {label}"), false);
-        }
-        if (input.take_command("z", true) || input.take_command("y", false))
-            && let Some(label) = self.session.doc.redo()
-        {
-            self.session.notify(format!("Redo {label}"), false);
-        }
-        if input.take_command("s", true) {
-            self.save_as();
-        } else if input.take_command("s", false) {
-            self.save();
-        }
-        if input.take_command("o", false) {
-            self.open();
-        }
-        if input.take_command("n", false) {
-            self.prepare_project_change();
-            self.session
-                .replace_project(peel_session::template::beat_and_melody());
-            self.reset_workspace();
-        }
-        if input.take_command("e", false) {
-            self.export();
-        }
-        if input.take_command("q", false) {
-            win.exit();
-        }
-        if ui.input.take_named(NamedKey::Space) {
-            self.session.toggle_play();
-        }
-        if ui.input.take_named(NamedKey::Home) {
-            self.session.seek(0.0);
-        }
-        if ui.input.take_named(NamedKey::End) {
-            let to = self.session.play_end();
-            self.session.seek(to);
-        }
+        // Menu shortcuts (File, Edit, View, Transport, Help) ran in
+        // `menus::frame`; these keys have no menu entry.
         let bar = self.session.project().time_signature.bar_length().as_f64();
         if ui.input.take_named(NamedKey::PageUp) {
             self.session.nudge(-bar);
         }
         if ui.input.take_named(NamedKey::PageDown) {
             self.session.nudge(bar);
-        }
-        // Choosing an editor also reveals a hidden dock.
-        for (key, tab) in [
-            (NamedKey::F6, DockTab::Rack),
-            (NamedKey::F7, DockTab::PianoRoll),
-            (NamedKey::F9, DockTab::Mixer),
-            (NamedKey::F10, DockTab::Perform),
-        ] {
-            if ui.input.take_named(key) {
-                crate::layout::dock_tab(self, tab, false);
-            }
-        }
-        if ui.input.take_named(NamedKey::F8) {
-            crate::scripts::toggle(self);
-        }
-        if ui.input.take_named(NamedKey::F1) {
-            self.show_keys = !self.show_keys;
         }
         if self.ws.fx.is_open() && !ui.any_popup() && ui.input.take_named(NamedKey::Escape) {
             self.ws.fx.close();
@@ -751,19 +697,6 @@ impl Studio {
         }
         if ui.input.take_named(NamedKey::Escape) {
             self.session.stop_preview();
-        }
-        let l_pressed = ui
-            .input
-            .keys
-            .iter_mut()
-            .find(|k| !k.consumed && k.code == Some(KeyCode::KeyL) && k.modifiers.none());
-        if let Some(k) = l_pressed {
-            k.consumed = true;
-            let next = match self.session.mode() {
-                PlayMode::Song => PlayMode::Pattern(self.current_pattern()),
-                PlayMode::Pattern(_) => PlayMode::Song,
-            };
-            self.session.set_mode(next);
         }
         self.typing_keyboard(ui);
     }
@@ -871,27 +804,41 @@ impl Studio {
         }
     }
 
-    pub fn save(&mut self) {
+    /// Saves to the project's file, or asks for one. True once the project
+    /// is on disk; false when the save failed or the dialog was cancelled.
+    pub fn save(&mut self) -> bool {
         if self.session.path.is_some() {
-            match self.session.save(None) {
-                Ok(p) => self.saved(&p),
-                Err(e) => self.session.notify(format!("Save failed: {e}"), true),
-            }
+            self.save_to(None)
         } else {
-            self.save_as();
+            self.save_as()
         }
     }
 
-    pub fn save_as(&mut self) {
+    pub fn save_as(&mut self) -> bool {
         let name = format!("{}.peelproj", self.session.project().meta.title);
-        if let Some(path) = crate::dialogs::save(&name, "Peel project", &["peelproj"]) {
-            match self.session.save(Some(path)) {
-                Ok(p) => self.saved(&p),
-                Err(e) => self.session.notify(format!("Save failed: {e}"), true),
+        match crate::dialogs::save(&name, "Peel project", &["peelproj"]) {
+            Some(path) => self.save_to(Some(path)),
+            None => false,
+        }
+    }
+
+    fn save_to(&mut self, path: Option<PathBuf>) -> bool {
+        // A take still buffered belongs in the file.
+        self.recorder.finish_capture(&mut self.session);
+        match self.session.save(path) {
+            Ok(p) => {
+                self.saved(&p);
+                true
+            }
+            Err(e) => {
+                self.session.notify(format!("Save failed: {e}"), true);
+                false
             }
         }
     }
 
+    /// Asks for a project or MIDI file, then opens it (behind the save
+    /// prompt when there is unsaved work).
     pub fn open(&mut self) {
         let Some(path) = crate::dialogs::open(&[
             ("Peel project", &["peelproj"]),
@@ -908,8 +855,15 @@ impl Studio {
         self.autosave(true);
     }
 
+    /// Opens a project or MIDI file (behind the save prompt when there is
+    /// unsaved work).
     pub fn open_path(&mut self, path: PathBuf) {
-        self.prepare_project_change();
+        self.request(crate::project::Change::OpenPath(path));
+    }
+
+    /// Loads `path` now. False (and the current project kept) on failure.
+    pub(crate) fn load_path(&mut self, path: PathBuf) -> bool {
+        self.silence();
         let ext = path
             .extension()
             .map(|e| e.to_string_lossy().to_lowercase())
@@ -931,8 +885,10 @@ impl Studio {
             self.reset_workspace();
             if ext == "peelproj" {
                 self.prefs.add_recent(&path);
+                self.prefs.save();
             }
         }
+        ok
     }
 
     /// Opens the export panel (from the shortcut or the toolbar).
@@ -1225,7 +1181,13 @@ impl App for Studio {
     }
 
     fn close_requested(&mut self) -> bool {
-        true
+        // Closing the window is Quit: unsaved work gets the save prompt.
+        self.request(crate::project::Change::Quit);
+        std::mem::take(&mut self.quit)
+    }
+
+    fn menu_bar(&mut self) -> Option<peel_ui::MenuBar> {
+        Some(crate::menus::bar(self, cfg!(target_os = "macos")))
     }
 
     fn shutdown(&mut self) {
@@ -1338,8 +1300,9 @@ impl Studio {
         self.session.poll_midi();
         self.recorder.frame(&mut self.session);
         crate::scripts::frame(ui, self);
-        if !self.welcome {
-            self.shortcuts(ui, win);
+        crate::menus::frame(ui, self);
+        if !self.welcome && self.pending.is_none() {
+            self.shortcuts(ui);
         }
         self.autosave(false);
         let t = ui.theme.clone();
@@ -1475,11 +1438,21 @@ impl Studio {
         );
         crate::layout::persist(ui, self);
 
+        // A file dropped on no pane opens (one at a time: a second waits
+        // for no prompt).
         let leftovers = std::mem::take(&mut ui.input.dropped_files);
-        for path in leftovers {
+        if let Some(path) = leftovers.into_iter().next() {
             self.open_path(path);
         }
 
+        // `PEEL_FILE_MENU=1`: the in-window menus with File open.
+        if std::env::var_os("PEEL_FILE_MENU").is_some()
+            && ui.time() < 0.5
+            && !ui.any_popup()
+            && let Some(r) = ui.widget_rect(crate::menus::STRIP.with(("title", 0usize)))
+        {
+            ui.open_popup(crate::menus::STRIP.with(("menu", 0usize)), r);
+        }
         if std::env::var_os("PEEL_SETTINGS").is_some()
             && !ui.is_popup_open(W::new("settings-panel"))
             && ui.time() < 0.5
@@ -1491,6 +1464,10 @@ impl Studio {
             self.welcome(ui);
         } else if self.show_keys && crate::keys::overlay(ui) {
             self.show_keys = false;
+        }
+        self.save_prompt(ui);
+        if self.quit {
+            win.exit();
         }
         if self.session.is_playing() {
             ui.request_repaint();

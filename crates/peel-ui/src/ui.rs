@@ -139,6 +139,8 @@ pub struct Ui {
     popup_took_focus: bool,
     dnd: Option<DragPayload>,
     dnd_dropped: bool,
+    /// Menu commands chosen since the app last took them.
+    menu_commands: Vec<u32>,
 }
 
 impl Ui {
@@ -178,7 +180,22 @@ impl Ui {
             popup_took_focus: false,
             dnd: None,
             dnd_dropped: false,
+            menu_commands: Vec::new(),
         }
+    }
+
+    // ---- application menus ----
+
+    /// Queues a menu command for the app's next frame (native menus, the
+    /// in-window strip and tests all use this).
+    pub fn queue_menu_command(&mut self, id: u32) {
+        self.menu_commands.push(id);
+        self.repaint = true;
+    }
+
+    /// Menu commands chosen since the last call, oldest first.
+    pub fn take_menu_commands(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.menu_commands)
     }
 
     // ---- frame lifecycle (called by the app runner) ----

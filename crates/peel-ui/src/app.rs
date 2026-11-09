@@ -18,6 +18,14 @@
 //!   being built, so an unused feature costs nothing.
 //!
 //! Set `PEEL_NO_A11Y=1` to skip creating the adapter.
+//!
+//! # Menus
+//!
+//! With [`WindowOptions::native_menus`], the app's [`App::menu_bar`] becomes
+//! the platform menu bar on macOS and Windows (see `native_menu`), kept in
+//! step after every frame. Choices arrive as user events and are queued on
+//! the [`Ui`] for the next frame. Elsewhere, and when installing fails,
+//! [`WindowControl::has_native_menu`] is false and the app draws its own.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -29,6 +37,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy}
 use winit::window::{Window, WindowId};
 
 use crate::geom::Rect;
+use crate::menu::MenuBar;
 use crate::render::Renderer;
 use crate::ui::Ui;
 
@@ -43,6 +52,11 @@ pub trait App {
     }
     /// Called once before the process exits.
     fn shutdown(&mut self) {}
+    /// The application menus, asked for after every frame. Only used when
+    /// [`WindowOptions::native_menus`] is set.
+    fn menu_bar(&mut self) -> Option<MenuBar> {
+        None
+    }
 }
 
 /// Window operations available to the app during a frame.
@@ -52,6 +66,7 @@ pub struct WindowControl {
     drag: std::cell::Cell<bool>,
     exit: std::cell::Cell<bool>,
     adapter: String,
+    native_menu: std::cell::Cell<bool>,
 }
 
 impl WindowControl {
@@ -63,7 +78,13 @@ impl WindowControl {
             drag: std::cell::Cell::new(false),
             exit: std::cell::Cell::new(false),
             adapter: "headless".into(),
+            native_menu: std::cell::Cell::new(false),
         }
+    }
+
+    /// The app's menus are in the platform menu bar.
+    pub fn has_native_menu(&self) -> bool {
+        self.native_menu.get()
     }
 
     pub fn title(&self) -> String {
@@ -120,6 +141,10 @@ pub struct WindowOptions {
     /// PNG bytes for the window/taskbar icon (Windows and Linux; macOS uses
     /// the bundle icon).
     pub icon_png: Option<&'static [u8]>,
+    /// Show [`App::menu_bar`] as the platform menu bar where there is one
+    /// (macOS, Windows). On macOS this also replaces winit's default menu,
+    /// whose Quit would end the process without asking the app.
+    pub native_menus: bool,
 }
 
 impl Default for WindowOptions {
@@ -129,6 +154,7 @@ impl Default for WindowOptions {
             size: (1440.0, 900.0),
             min_size: (1200.0, 720.0),
             icon_png: None,
+            native_menus: false,
         }
     }
 }
@@ -139,12 +165,23 @@ struct Running<A> {
     control: WindowControl,
     app: A,
     adapter: Option<accesskit_winit::Adapter>,
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    menu: Option<crate::native_menu::NativeMenu>,
 }
 
 /// Events the event loop receives from other threads.
 #[derive(Debug)]
 enum UserEvent {
     AccessKit(accesskit_winit::Event),
+    /// A native menu item's command id.
+    #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
+    Menu(u32),
+}
+
+impl From<u32> for UserEvent {
+    fn from(id: u32) -> UserEvent {
+        UserEvent::Menu(id)
+    }
 }
 
 impl From<accesskit_winit::Event> for UserEvent {
@@ -171,9 +208,13 @@ pub fn run<A: App + 'static, F: FnOnce(&mut Ui) -> A + 'static>(
     options: WindowOptions,
     make: F,
 ) -> Result<(), String> {
-    let event_loop = EventLoop::<UserEvent>::with_user_event()
-        .build()
-        .map_err(|e| e.to_string())?;
+    let mut builder = EventLoop::<UserEvent>::with_user_event();
+    #[cfg(target_os = "macos")]
+    if options.native_menus {
+        use winit::platform::macos::EventLoopBuilderExtMacOS;
+        builder.with_default_menu(false);
+    }
+    let event_loop = builder.build().map_err(|e| e.to_string())?;
     event_loop.set_control_flow(ControlFlow::Wait);
     let screenshot = std::env::var_os("PEEL_SCREENSHOT").map(|p| {
         let frames = std::env::var("PEEL_SCREENSHOT_FRAMES")
@@ -263,21 +304,49 @@ impl<A: App, F: FnOnce(&mut Ui) -> A> ApplicationHandler<UserEvent> for Runner<A
             drag: std::cell::Cell::new(false),
             exit: std::cell::Cell::new(false),
             adapter: renderer.adapter_info().to_string(),
+            native_menu: std::cell::Cell::new(false),
         };
         let make = self.make.take().expect("app factory");
-        let app = make(&mut self.ui);
+        #[allow(unused_mut)]
+        let mut app = make(&mut self.ui);
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        let menu = if self.options.native_menus
+            && let Some(bar) = app.menu_bar()
+        {
+            crate::native_menu::forward_events(self.proxy.clone());
+            let menu = crate::native_menu::NativeMenu::install(&bar, &window);
+            if menu.is_none() {
+                log::warn!("the platform menu bar could not be installed");
+                crate::native_menu::stop_events();
+            }
+            control.native_menu.set(menu.is_some());
+            menu
+        } else {
+            None
+        };
         self.running = Some(Running {
             window: window.clone(),
             renderer,
             control,
             app,
             adapter,
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            menu,
         });
         window.request_redraw();
     }
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
-        let UserEvent::AccessKit(event) = event;
+        let event = match event {
+            UserEvent::AccessKit(event) => event,
+            UserEvent::Menu(id) => {
+                self.ui.queue_menu_command(id);
+                if let Some(run) = &self.running {
+                    run.window.request_redraw();
+                }
+                return;
+            }
+        };
         match event.window_event {
             accesskit_winit::WindowEvent::InitialTreeRequested => {
                 self.ui.set_accessibility_active(true);
@@ -305,6 +374,9 @@ impl<A: App, F: FnOnce(&mut Ui) -> A> ApplicationHandler<UserEvent> for Runner<A
                 if run.app.close_requested() {
                     run.app.shutdown();
                     event_loop.exit();
+                } else {
+                    // Show whatever the app put up instead (a save prompt).
+                    run.window.request_redraw();
                 }
                 return;
             }
@@ -329,6 +401,10 @@ impl<A: App, F: FnOnce(&mut Ui) -> A> ApplicationHandler<UserEvent> for Runner<A
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         if let Some(run) = &mut self.running {
             run.app.shutdown();
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            if run.menu.take().is_some() {
+                crate::native_menu::stop_events();
+            }
         }
     }
 }
@@ -346,6 +422,12 @@ impl<A: App, F: FnOnce(&mut Ui) -> A> Runner<A, F> {
         };
         self.ui.begin_frame(screen, scale, now);
         run.app.update(&mut self.ui, &run.control);
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if let Some(menu) = &mut run.menu
+            && let Some(bar) = run.app.menu_bar()
+        {
+            menu.sync(&bar);
+        }
         if self.ui.accessibility_active() {
             self.ui.set_window_label(&run.control.title());
         }

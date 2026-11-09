@@ -3428,3 +3428,379 @@ fn marker_tags_stop_before_the_next_marker_and_the_edge() {
     let tags = marker_tags(&[100.0, 110.0], &[80.0, 80.0], 400.0);
     assert!(!tags[0].1 && 100.0 + tags[0].0 <= 110.0, "{tags:?}");
 }
+
+// ---- Project lifecycle and menus ----
+
+mod lifecycle {
+    use super::*;
+    use crate::menus::Command;
+    use crate::project::{Change, Choice};
+
+    fn menu(h: &mut Harness, c: Command) {
+        h.ui.queue_menu_command(c.id());
+        h.frame();
+    }
+
+    /// An undoable edit, so the project has unsaved work.
+    fn edit(h: &mut Harness) {
+        h.studio
+            .session
+            .doc
+            .edit("Rename project", |p| p.meta.title = "Edited".into());
+        h.frame();
+        assert!(h.session().doc.is_dirty());
+    }
+
+    fn assert_blank(h: &Harness) {
+        let p = h.session().project();
+        assert!(p.channels.is_empty(), "channels: {:?}", p.channels.len());
+        assert!(p.arrangement().clips.is_empty());
+        assert!(p.patterns.iter().all(|pt| pt.notes.is_empty()));
+        assert!(
+            p.mixer.tracks.iter().all(|t| t.inserts.is_empty()),
+            "a blank project has no effects"
+        );
+        assert!(h.session().path.is_none());
+        assert!(!h.session().doc.is_dirty());
+        assert!(h.session().doc.undo_label().is_none());
+        assert!(!h.session().is_playing());
+    }
+
+    fn style(name: &str) -> usize {
+        template::templates()
+            .iter()
+            .position(|(n, _)| *n == name)
+            .unwrap()
+    }
+
+    #[test]
+    fn the_app_starts_blank() {
+        let mut h = Harness {
+            ui: Ui::new(),
+            studio: Studio::new(Session::new_silent(template::empty())),
+            win: WindowControl::headless(),
+            time: 0.0,
+            size: vec2(1440.0, 900.0),
+        };
+        h.frames(2);
+        assert_blank(&h);
+        assert_eq!(h.session().project().meta.title, "Untitled");
+        // Nothing to lose: quitting does not ask.
+        assert!(h.studio.close_requested());
+    }
+
+    #[test]
+    fn new_project_from_a_clean_project_is_blank_without_asking() {
+        let mut h = Harness::new();
+        let old = h.session().project().id;
+        h.studio.session.play();
+        h.frame();
+        command_key(&mut h, "n", peel_ui::KeyCode::KeyN);
+        assert!(h.studio.pending.is_none());
+        assert_ne!(h.session().project().id, old);
+        assert_blank(&h);
+        assert!(!h.studio.welcome);
+    }
+
+    #[test]
+    fn unsaved_work_asks_and_cancel_keeps_everything() {
+        let mut h = Harness::new();
+        edit(&mut h);
+        let id = h.session().project().id;
+        command_key(&mut h, "n", peel_ui::KeyCode::KeyN);
+        assert_eq!(h.studio.pending, Some(Change::New));
+        assert_eq!(h.session().project().id, id, "nothing changes yet");
+        h.frame();
+        h.click(W::new("save-prompt-cancel"));
+        assert!(h.studio.pending.is_none());
+        assert_eq!(h.session().project().id, id);
+        assert_eq!(h.session().project().meta.title, "Edited");
+        assert!(h.session().doc.is_dirty());
+        assert_eq!(h.session().doc.undo_label(), Some("Rename project"));
+    }
+
+    #[test]
+    fn escape_cancels_the_prompt_and_typing_keys_stay_silent() {
+        let mut h = Harness::new();
+        edit(&mut h);
+        menu(&mut h, Command::Close);
+        assert_eq!(h.studio.pending, Some(Change::Close));
+        named_key(&mut h, peel_ui::NamedKey::Escape, peel_ui::KeyCode::Escape);
+        assert!(h.studio.pending.is_none());
+        assert!(!h.studio.welcome);
+        assert_eq!(h.session().project().meta.title, "Edited");
+    }
+
+    #[test]
+    fn dont_save_discards_and_starts_blank() {
+        let mut h = Harness::new();
+        edit(&mut h);
+        menu(&mut h, Command::NewProject);
+        h.frame();
+        h.click(W::new("save-prompt-discard"));
+        assert!(h.studio.pending.is_none());
+        assert_blank(&h);
+    }
+
+    #[test]
+    fn a_cancelled_save_as_cancels_the_change() {
+        let mut h = Harness::new();
+        edit(&mut h);
+        let id = h.session().project().id;
+        menu(&mut h, Command::Close);
+        h.frame();
+        // No file yet: Save asks where, and tests answer Cancel.
+        h.click(W::new("save-prompt-save"));
+        assert!(h.studio.pending.is_none());
+        assert_eq!(h.session().project().id, id);
+        assert!(h.session().doc.is_dirty());
+        assert!(!h.studio.welcome);
+    }
+
+    #[test]
+    fn a_failed_save_cancels_the_change() {
+        let mut h = Harness::new();
+        edit(&mut h);
+        let id = h.session().project().id;
+        // A folder where the file should go: the save fails.
+        let blocked = std::env::temp_dir()
+            .join(format!("peel-blocked-{}", peel_document::Id::new()))
+            .join("song.peelproj");
+        std::fs::create_dir_all(&blocked).unwrap();
+        h.studio.session.path = Some(blocked.clone());
+        h.studio.request(Change::New);
+        h.studio.resolve(Choice::Save);
+        h.frame();
+        assert_eq!(h.session().project().id, id);
+        assert!(h.session().doc.is_dirty());
+        assert!(h.session().notice().is_some_and(|n| n.error));
+        let _ = std::fs::remove_dir_all(blocked.parent().unwrap());
+    }
+
+    #[test]
+    fn save_then_close_returns_to_the_start_screen() {
+        let mut h = Harness::new();
+        edit(&mut h);
+        let dir = std::env::temp_dir().join(format!("peel-close-{}", peel_document::Id::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("song.peelproj");
+        h.studio.session.path = Some(file.clone());
+        command_key(&mut h, "w", peel_ui::KeyCode::KeyW);
+        assert_eq!(h.studio.pending, Some(Change::Close));
+        h.frame();
+        h.click(W::new("save-prompt-save"));
+        assert!(file.exists(), "saved before closing");
+        assert!(h.studio.welcome);
+        assert_blank(&h);
+        // Closing again with nothing to lose does not ask.
+        h.studio.welcome = false;
+        command_key(&mut h, "w", peel_ui::KeyCode::KeyW);
+        assert!(h.studio.pending.is_none());
+        assert!(h.studio.welcome);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn closing_the_window_asks_first() {
+        let mut h = Harness::new();
+        edit(&mut h);
+        assert!(!h.studio.close_requested(), "the window stays open");
+        assert_eq!(h.studio.pending, Some(Change::Quit));
+        h.frame();
+        h.click(W::new("save-prompt-cancel"));
+        assert!(!h.win.exit_requested());
+        // Quit from the menu, then Don't save: the window closes.
+        menu(&mut h, Command::Quit);
+        assert_eq!(h.studio.pending, Some(Change::Quit));
+        h.frame();
+        h.click(W::new("save-prompt-discard"));
+        h.frame();
+        assert!(h.win.exit_requested());
+    }
+
+    #[test]
+    fn templates_open_by_style_and_a_bad_index_changes_nothing() {
+        let mut h = Harness::new();
+        menu(&mut h, Command::Template(style("House")));
+        assert_eq!(h.session().project().bpm(), 124.0);
+        assert!(!h.session().doc.is_dirty());
+        let id = h.session().project().id;
+        menu(&mut h, Command::Template(999));
+        assert_eq!(h.session().project().id, id, "no fallback project");
+        assert!(h.session().notice().is_some_and(|n| n.error));
+        // Every style in the catalog starts from the menu.
+        for (i, name) in crate::project::styles() {
+            menu(&mut h, Command::Template(i));
+            assert!(
+                !h.session().project().channels.is_empty(),
+                "{name} has channels"
+            );
+        }
+    }
+
+    #[test]
+    fn the_start_screen_offers_blank_styles_and_the_demo() {
+        let mut h = Harness::new();
+        h.studio.welcome = true;
+        h.frame();
+        // Every style shows as its own button; the demo stands apart.
+        for (i, _) in crate::project::styles() {
+            h.rect(W::new(("welcome-template", i)));
+        }
+        if let Some(demo) = crate::project::demo_index() {
+            assert!(
+                h.ui.widget_rect(W::new(("welcome-template", demo)))
+                    .is_none()
+            );
+        }
+        h.click(W::new(("welcome-btn", 0usize)));
+        assert!(!h.studio.welcome);
+        assert_blank(&h);
+        h.studio.welcome = true;
+        h.frame();
+        h.click(W::new("welcome-demo"));
+        assert!(!h.session().project().arrangement().clips.is_empty());
+        assert!(!h.studio.welcome);
+    }
+
+    #[test]
+    fn the_start_screen_fits_a_small_window() {
+        let mut h = Harness::new();
+        h.size = vec2(1200.0, 720.0);
+        h.studio.welcome = true;
+        h.frame();
+        let panel = h.rect(W::new("welcome-panel"));
+        for (i, _) in crate::project::styles() {
+            let r = h.rect(W::new(("welcome-template", i)));
+            assert!(r.bottom() <= panel.bottom(), "template {i} overflows");
+        }
+    }
+
+    #[test]
+    fn the_in_window_file_menu_starts_a_new_project() {
+        let mut h = Harness::new();
+        assert!(!h.win.has_native_menu());
+        // File is the strip's first menu.
+        h.click(crate::menus::STRIP.with(("title", 0usize)));
+        assert!(h.ui.is_popup_open(crate::menus::STRIP.with(("menu", 0usize))));
+        h.click(
+            crate::menus::STRIP
+                .with(("menu", 0usize))
+                .with(("item", 0usize)),
+        );
+        h.frame();
+        assert_blank(&h);
+    }
+
+    #[test]
+    fn the_menu_lists_every_style_and_recent_project() {
+        let mut h = Harness::new();
+        let dir = std::env::temp_dir().join(format!("peel-recent-{}", peel_document::Id::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("Recent song.peelproj");
+        h.studio.session.save(Some(file.clone())).unwrap();
+        h.studio.prefs.add_recent(&file);
+        let bar = crate::menus::bar(&h.studio, true);
+        let labels: Vec<_> = bar.commands().iter().map(|c| c.label.clone()).collect();
+        for (_, name) in crate::project::styles() {
+            assert!(labels.iter().any(|l| l == name), "{name}");
+        }
+        assert!(labels.iter().any(|l| l == "Recent song"));
+        assert!(labels.iter().all(|l| l != "New beat"));
+        // Opening a recent project from the menu.
+        menu(&mut h, Command::NewProject);
+        menu(&mut h, Command::Recent(0));
+        assert_eq!(h.session().path.as_deref(), Some(file.as_path()));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn opening_a_file_of_another_kind_keeps_the_project() {
+        let mut h = Harness::new();
+        edit(&mut h);
+        h.studio.open_path("notes.txt".into());
+        assert!(h.studio.pending.is_none());
+        assert_eq!(h.session().project().meta.title, "Edited");
+    }
+
+    #[test]
+    fn shortcuts_and_menus_share_one_action() {
+        let mut h = Harness::new();
+        // Pane toggles from the keyboard and the menu.
+        let shown = h.studio.prefs.show_browser;
+        let mods = peel_ui::Modifiers {
+            logo: cfg!(target_os = "macos"),
+            ctrl: !cfg!(target_os = "macos"),
+            alt: true,
+            ..Default::default()
+        };
+        h.ui.input.keys.push(peel_ui::input::KeyPress {
+            key: peel_ui::Key::Character("∫".into()),
+            code: Some(peel_ui::KeyCode::KeyB),
+            repeat: false,
+            modifiers: mods,
+            consumed: false,
+        });
+        h.frame();
+        assert_ne!(h.studio.prefs.show_browser, shown);
+        menu(&mut h, Command::Browser);
+        assert_eq!(h.studio.prefs.show_browser, shown);
+        // Transport.
+        named_key(&mut h, peel_ui::NamedKey::Space, peel_ui::KeyCode::Space);
+        assert!(h.session().is_playing());
+        menu(&mut h, Command::PlayStop);
+        assert!(!h.session().is_playing());
+        // Undo from the menu.
+        edit(&mut h);
+        menu(&mut h, Command::Undo);
+        assert_ne!(h.session().project().meta.title, "Edited");
+        menu(&mut h, Command::Redo);
+        assert_eq!(h.session().project().meta.title, "Edited");
+    }
+
+    #[test]
+    fn a_take_in_progress_joins_the_project_before_it_closes() {
+        let mut h = Harness::new();
+        let ch = h.session().project().channels[0].id;
+        h.studio.ws.selected_channel = Some(ch);
+        let pid = h.session().selected_pattern();
+        let count = |h: &Harness| {
+            h.session()
+                .project()
+                .pattern(pid)
+                .unwrap()
+                .notes_for(ch)
+                .count()
+        };
+        let before = count(&h);
+        h.studio.session.set_mode(PlayMode::Pattern(pid));
+        h.studio.recorder.armed = true;
+        h.studio.session.play();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while h.session().position() <= 0.05 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "transport never started"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            h.frame();
+        }
+        h.studio.session.live_note(ch, 62, 0.8, true);
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        h.frame();
+        h.studio.session.live_note(ch, 62, 0.0, false);
+        h.frame();
+        // Still recording when the user asks for a new project.
+        menu(&mut h, Command::NewProject);
+        assert_eq!(
+            h.studio.pending,
+            Some(Change::New),
+            "the take is unsaved work"
+        );
+        assert!(!h.studio.recorder.armed);
+        assert!(count(&h) > before, "the recorded note is in the pattern");
+        h.studio.resolve(Choice::Cancel);
+        h.frame();
+        assert!(count(&h) > before);
+    }
+}

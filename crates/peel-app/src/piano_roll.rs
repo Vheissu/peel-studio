@@ -13,12 +13,20 @@ use peel_ui::{Align, Button, Color, CursorIcon, Key, MenuItem, NamedKey, Rect, U
 use crate::note_expr::{Lane, PITCH_RANGES, fit_range, points, set_curve};
 use crate::studio::current_pattern;
 use crate::util::{SCROLLBAR, col, format_length, ink_on, is_black_key, note_name};
-use crate::workspace::{Tool, Workspace};
+use crate::workspace::{
+    DOTTED, NoteLength, RollView, STRAIGHT, TRIPLETS, Tool, Workspace, rhythm_of,
+};
 
 const KEYS_W: f32 = 58.0;
 const RULER_H: f32 = 22.0;
 const VEL_H: f32 = 72.0;
 const EDGE: f32 = 7.0;
+/// Narrowest grid cell, in pixels, a newly chosen grid leaves to click in.
+/// Picking a finer grid zooms in (once) to keep cells at least this wide.
+const MIN_CELL: f32 = 8.0;
+/// Pointer travel before a press on a note becomes a move or resize, so
+/// clicking a note never re-times it.
+const DRAG_SLOP: f32 = 3.0;
 
 #[derive(Clone, Copy, PartialEq)]
 enum DragKind {
@@ -41,6 +49,10 @@ struct DragState {
     gesture: u64,
     last_key: u8,
     marquee_from: (f64, f32),
+    /// Where the press landed.
+    press: peel_ui::Vec2,
+    /// The pointer has travelled past `DRAG_SLOP` since the press.
+    moved: bool,
 }
 
 impl Default for DragState {
@@ -55,6 +67,8 @@ impl Default for DragState {
             gesture: 0,
             last_key: 0,
             marquee_from: (0.0, 0.0),
+            press: peel_ui::Vec2::ZERO,
+            moved: false,
         }
     }
 }
@@ -113,7 +127,14 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
     };
     ws.selected_channel = Some(channel.id);
 
-    let mut actions = header(ui, tools, &channel, ws);
+    // The corner over the keyboard, left of the ruler.
+    let corner = Rect {
+        x: r.x,
+        y: r.y,
+        w: KEYS_W,
+        h: RULER_H,
+    };
+    let mut actions = header(ui, tools, corner, &channel, ws);
     let quantize = actions.quantize;
     // `PEEL_NOTE_TOOLS=<tool index>` opens the note tools for screenshots.
     if let Ok(v) = std::env::var("PEEL_NOTE_TOOLS")
@@ -232,7 +253,7 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
         top_key: ws.roll.top_key,
     };
 
-    grid(ui, &v, &pattern, s, ws.roll.scale);
+    grid(ui, &v, &pattern, s, ws.roll.scale, ws.roll.snap);
     ruler(ui, top, &v, &pattern, s, pid);
     keyboard(ui, keys_r, &v, &channel, s, memo_id);
 
@@ -341,24 +362,31 @@ struct HeaderActions {
     note_tools: Option<Rect>,
 }
 
-fn header(ui: &mut Ui, tools: Rect, ch: &Channel, ws: &mut Workspace) -> HeaderActions {
+fn header(
+    ui: &mut Ui,
+    tools: Rect,
+    corner: Rect,
+    ch: &Channel,
+    ws: &mut Workspace,
+) -> HeaderActions {
     let t = ui.theme.clone();
     let mut row = tools;
     // Narrow docks drop the chord and scale names (icons stay, tinted when
     // active) before anything else.
     let compact = row.w < 600.0;
-    // Tighter still (the minimum window): the channel shows as its swatch,
-    // its name in the tooltip and accessible label.
+    // Tighter still (the minimum window): the channel moves out of the
+    // toolbar to the corner over the keyboard, so grid and note length
+    // keep their room.
     let tight = row.w < 470.0;
     // Cell width of the icon controls.
     let cw = if tight { 28.0 } else { 30.0 };
     // The channel being edited: swatch and name, quiet.
-    let chip_w = if tight {
-        18.0
+    let chip = if tight {
+        corner.shrink2(6.0, 0.0)
     } else {
-        (ui.measure(&ch.name, t.label).x + 26.0).min(if compact { 96.0 } else { 140.0 })
+        let w = (ui.measure(&ch.name, t.label).x + 26.0).min(if compact { 96.0 } else { 140.0 });
+        row.cut_right(w)
     };
-    let chip = row.cut_right(chip_w);
     let mut cr = chip;
     let sw = cr.cut_left(10.0);
     ui.scene.rect(
@@ -366,18 +394,18 @@ fn header(ui: &mut Ui, tools: Rect, ch: &Channel, ws: &mut Workspace) -> HeaderA
         3.0,
         col(ch.color),
     );
-    if tight {
-        let resp = ui.interact(W::new("roll-channel-chip"), chip);
-        ui.tooltip(&resp, &format!("Editing {}", ch.name));
-    } else {
-        cr.cut_left(8.0);
-        let name = ui.fit_text(&ch.name, t.label, cr.w);
-        ui.text(cr, &name, t.label, t.text, Align::Start);
-    }
+    cr.cut_left(if tight { 6.0 } else { 8.0 });
+    let style = if tight { t.caption } else { t.label };
+    let name = ui.fit_text(&ch.name, style, cr.w);
+    ui.text(cr, &name, style, t.text, Align::Start);
+    let resp = ui.interact(W::new("roll-channel-chip"), chip);
+    ui.tooltip(&resp, &format!("Editing {}", ch.name));
     ui.describe_label(W::new("roll-channel"), chip, &ch.name);
-    row.cut_right(if tight { 6.0 } else { 8.0 });
-    ui.divider_v(row.cut_right(1.0));
-    row.cut_right(6.0);
+    if !tight {
+        row.cut_right(8.0);
+        ui.divider_v(row.cut_right(1.0));
+        row.cut_right(6.0);
+    }
 
     // Ghosts, grid, chord stamp and scale.
     let g = ui.icon_button(
@@ -393,54 +421,11 @@ fn header(ui: &mut Ui, tools: Rect, ch: &Channel, ws: &mut Workspace) -> HeaderA
         ws.roll.ghosts = !ws.roll.ghosts;
     }
     row.cut_right(2.0);
-    let snap_r = row.cut_right(if tight { 48.0 } else { 62.0 });
-    let sresp = if tight {
-        // Value only: the magnet goes, the name stays in the tooltip.
-        let r = ui.quiet_button(
-            W::new("roll-snap"),
-            snap_r,
-            None,
-            &format_length(ws.roll.snap),
-            false,
-            ui.is_popup_open(W::new("roll-snap-menu")),
-        );
-        ui.name(&r, "Grid");
-        ui.value_text(&r, &format_length(ws.roll.snap));
-        ui.tooltip(&r, "Grid");
-        r
-    } else {
-        ui.value_button(
-            W::new("roll-snap"),
-            snap_r,
-            icons::MAGNET,
-            &format_length(ws.roll.snap),
-            "Grid",
-            false,
-        )
-    };
-    if sresp.clicked {
-        ui.open_popup(W::new("roll-snap-menu"), snap_r);
-    }
-    let snaps = [
-        Time::new(1, 1),
-        Time::new(1, 2),
-        Time::new(1, 3),
-        Time::new(1, 4),
-        Time::new(1, 6),
-        Time::new(1, 8),
-    ];
-    let items: Vec<MenuItem> = snaps
-        .iter()
-        .map(|s| MenuItem::new(format_length(*s)).checked(*s == ws.roll.snap))
-        .collect();
-    if let Some(i) = ui.menu(
-        W::new("roll-snap-menu"),
-        vec2(snap_r.x, snap_r.bottom() + 4.0),
-        &items,
-    ) {
-        ws.roll.snap = snaps[i];
-        ws.roll.note_len = snaps[i];
-    }
+    // Note length, then the grid to its left: separate settings, so a
+    // finer grid never changes how long new notes are.
+    length_button(ui, &mut row, ws, tight);
+    row.cut_right(2.0);
+    grid_button(ui, &mut row, ws, tight);
     row.cut_right(2.0);
     // Chord stamp.
     let on = ws.roll.chord != 0;
@@ -582,12 +567,183 @@ fn header(ui: &mut Ui, tools: Rect, ch: &Channel, ws: &mut Workspace) -> HeaderA
     }
 }
 
+/// Short form of a rhythmic value for the toolbar.
+fn short(t: Time) -> String {
+    rhythm_of(t).map_or_else(|| format_length(t), |r| r.short.to_string())
+}
+
+/// A toolbar menu button: the icon and value, or the value alone when
+/// tight (its name stays in the tooltip and accessible label).
+#[allow(clippy::too_many_arguments)]
+fn picker_button(
+    ui: &mut Ui,
+    id: W,
+    r: Rect,
+    icon: &str,
+    value: &str,
+    name: &str,
+    on: bool,
+    tight: bool,
+) -> peel_ui::Response {
+    let resp = if tight {
+        let open = ui.is_popup_open(id.with("menu"));
+        let b = ui.quiet_button(id, r, None, value, false, open);
+        ui.name(&b, name);
+        ui.value_text(&b, value);
+        b
+    } else {
+        ui.value_button(id, r, icon, value, name, on)
+    };
+    if resp.clicked {
+        ui.open_popup(id.with("menu"), r);
+    }
+    resp
+}
+
+/// Grid menu items and the grid each one picks.
+fn grid_menu(snap: Time) -> (Vec<MenuItem>, Vec<Option<Time>>) {
+    let mut items = vec![MenuItem::Heading("Grid".into())];
+    let mut map = vec![None];
+    for (i, list) in [&STRAIGHT[..], &TRIPLETS[..]].iter().enumerate() {
+        if i > 0 {
+            items.push(MenuItem::Separator);
+            map.push(None);
+        }
+        for r in list.iter() {
+            items.push(
+                MenuItem::new(r.name)
+                    .shortcut(r.short)
+                    .checked(r.len == snap),
+            );
+            map.push(Some(r.len));
+        }
+    }
+    (items, map)
+}
+
+/// The grid: where clicks, moves and resizes land.
+fn grid_button(ui: &mut Ui, row: &mut Rect, ws: &mut Workspace, tight: bool) {
+    let r = row.cut_right(if tight { 48.0 } else { 66.0 });
+    let id = W::new("roll-snap");
+    let value = short(ws.roll.snap);
+    let resp = picker_button(ui, id, r, icons::MAGNET, &value, "Grid", false, tight);
+    let name = rhythm_of(ws.roll.snap).map_or("custom", |r| r.name);
+    ui.tooltip(
+        &resp,
+        &format!("Grid: {} ({value}). Notes land on it", name.to_lowercase()),
+    );
+    let (items, map) = grid_menu(ws.roll.snap);
+    if let Some(i) = ui.menu(id.with("menu"), vec2(r.x, r.bottom() + 4.0), &items)
+        && let Some(Some(snap)) = map.get(i)
+    {
+        set_grid(&mut ws.roll, *snap);
+    }
+}
+
+/// Changes the grid alone. When its cells would be too narrow to click at
+/// the current zoom, zooms in once so they are not (the left edge stays).
+pub(crate) fn set_grid(roll: &mut RollView, snap: Time) {
+    roll.snap = snap;
+    let cell = roll.zoom_x * snap.as_f64() as f32;
+    if cell < MIN_CELL {
+        roll.zoom_x = (MIN_CELL / snap.as_f64() as f32).clamp(16.0, 640.0);
+    }
+}
+
+/// Note length menu items and the setting each one picks.
+fn length_menu(roll: &RollView) -> (Vec<MenuItem>, Vec<Option<NoteLength>>) {
+    let mut items = vec![
+        MenuItem::new("Follow grid")
+            .shortcut(short(roll.snap))
+            .checked(roll.length == NoteLength::Grid),
+        MenuItem::new("Last note used")
+            .shortcut(short(roll.note_len))
+            .checked(roll.length == NoteLength::Last),
+    ];
+    let mut map = vec![Some(NoteLength::Grid), Some(NoteLength::Last)];
+    for (heading, list) in [
+        (None, &STRAIGHT[..]),
+        (Some("Triplets"), &TRIPLETS[..]),
+        (Some("Dotted"), &DOTTED[..]),
+    ] {
+        items.push(MenuItem::Separator);
+        map.push(None);
+        if let Some(h) = heading {
+            items.push(MenuItem::Heading(h.into()));
+            map.push(None);
+        }
+        for r in list {
+            items.push(
+                MenuItem::new(r.name)
+                    .shortcut(r.short)
+                    .checked(roll.length == NoteLength::Fixed(r.len)),
+            );
+            map.push(Some(NoteLength::Fixed(r.len)));
+        }
+    }
+    (items, map)
+}
+
+/// How long new notes are: one grid cell, the last note used, or a value
+/// of its own.
+fn length_button(ui: &mut Ui, row: &mut Rect, ws: &mut Workspace, tight: bool) {
+    let r = row.cut_right(if tight { 48.0 } else { 66.0 });
+    let id = W::new("roll-len");
+    let value = match ws.roll.length {
+        NoteLength::Grid => "Grid".to_string(),
+        NoteLength::Last => short(ws.roll.note_len),
+        NoteLength::Fixed(t) => short(t),
+    };
+    let on = ws.roll.length != NoteLength::Grid;
+    let resp = picker_button(
+        ui,
+        id,
+        r,
+        icons::MUSIC_NOTE,
+        &value,
+        "Note length",
+        on,
+        tight,
+    );
+    let len = ws.roll.draw_length();
+    let named = rhythm_of(len).map_or_else(|| short(len), |r| r.name.to_lowercase());
+    let tip = match ws.roll.length {
+        NoteLength::Grid => format!("Note length: follows the grid ({named})"),
+        NoteLength::Last => format!("Note length: the last note used ({named})"),
+        NoteLength::Fixed(_) => format!("Note length: {named}, whatever the grid"),
+    };
+    ui.tooltip(&resp, &tip);
+    let (items, map) = length_menu(&ws.roll);
+    if let Some(i) = ui.menu(id.with("menu"), vec2(r.x, r.bottom() + 4.0), &items)
+        && let Some(Some(l)) = map.get(i)
+    {
+        ws.roll.length = *l;
+    }
+}
+
+/// The finest grid line spacing that stays readable at `zoom_x`: the grid
+/// itself, or coarser multiples that still divide a beat, then beats.
+fn line_spacing(snap: Time, zoom_x: f32) -> Time {
+    let beat = Time::beats(1);
+    let mut g = snap.min(beat);
+    while g < beat && (g.as_f64() as f32) * zoom_x < 6.0 {
+        let twice = g.mul_int(2);
+        g = if beat.rem_euclid(twice).is_zero() {
+            twice
+        } else {
+            beat
+        };
+    }
+    g
+}
+
 fn grid(
     ui: &mut Ui,
     v: &View,
     pattern: &Pattern,
     s: &Session,
     scale: Option<crate::harmony::Scale>,
+    snap: Time,
 ) {
     let t = ui.theme.clone();
     let c = v.canvas;
@@ -623,29 +779,27 @@ fn grid(
             ui.scene.hline(c.x, c.right(), y + v.row_h, t.grid_step);
         }
     }
-    let sig = s.project().time_signature;
-    let bar = sig.bar_length().as_f64();
-    let snap = v.zoom_x as f64 * 0.25;
-    let step = if snap >= 10.0 {
-        0.25
-    } else if v.zoom_x >= 20.0 {
-        1.0
+    // Vertical lines follow the grid (thinned out when zoomed far out),
+    // walked in exact time so triplet lines never drift: bars strongest,
+    // then beats, then grid lines.
+    let bar = s.project().time_signature.bar_length();
+    let step = if v.zoom_x >= 20.0 {
+        line_spacing(snap, v.zoom_x)
     } else {
         bar
     };
-    let first = (v.scroll as f64 / step).floor() * step;
-    let mut b = first;
+    let first = Time::from_f64(v.scroll.max(0.0) as f64, 960).floor_to(step);
     let end = v.beat(c.right());
-    while b <= end {
-        let x = v.x(b);
-        let color = if (b / bar).fract().abs() < 1e-6 {
+    let mut b = first;
+    while b.as_f64() <= end {
+        let color = if b.rem_euclid(bar).is_zero() {
             t.grid_bar
-        } else if b.fract().abs() < 1e-6 {
+        } else if b.rem_euclid(Time::beats(1)).is_zero() {
             t.grid_beat
         } else {
             t.grid_step
         };
-        ui.scene.vline(x, c.y, c.bottom(), color);
+        ui.scene.vline(v.x(b.as_f64()), c.y, c.bottom(), color);
         b += step;
     }
     // Shade beyond the pattern end.
@@ -888,6 +1042,7 @@ fn edit_canvas(
             start_beat: beat,
             start_key: key,
             gesture: id.0 ^ (ui.time() * 1000.0) as u64,
+            press: p,
             ..Default::default()
         };
         if ws.roll.tool == Tool::Erase {
@@ -934,7 +1089,7 @@ fn edit_canvas(
             let keys = crate::harmony::chord_keys(ws.roll.chord, root, ws.roll.scale);
             let notes: Vec<Note> = keys
                 .iter()
-                .map(|&k| Note::new(ch.id, start, ws.roll.note_len, k, 0.8))
+                .map(|&k| Note::new(ch.id, start, ws.roll.draw_length(), k, 0.8))
                 .collect();
             let Some(anchor) = notes.first().copied() else {
                 return;
@@ -957,6 +1112,7 @@ fn edit_canvas(
             st.anchor = anchor.id;
             st.last_key = anchor.key;
             st.origin = notes.clone();
+            ws.roll.note_len = anchor.length;
             for n in &notes {
                 s.live_note(ch.id, n.key, 0.8, true);
             }
@@ -994,9 +1150,18 @@ fn edit_canvas(
         s.doc.end_gesture();
     }
 
-    let st = ui.state::<DragState>(drag_id).clone();
+    let mut st = ui.state::<DragState>(drag_id).clone();
     if st.kind != DragKind::None && ui.input.down[0] {
-        if let Some(p) = pointer {
+        // A press on a note edits nothing until the pointer really moves.
+        if let Some(p) = pointer
+            && !st.moved
+            && ((p.x - st.press.x).abs() >= DRAG_SLOP || (p.y - st.press.y).abs() >= DRAG_SLOP)
+        {
+            st.moved = true;
+            ui.state::<DragState>(drag_id).moved = true;
+        }
+        let still = !st.moved && matches!(st.kind, DragKind::Move | DragKind::Resize);
+        if let Some(p) = pointer.filter(|_| !still) {
             let beat = v.beat(p.x);
             match st.kind {
                 DragKind::Move => {
@@ -1056,7 +1221,9 @@ fn edit_canvas(
                             if let Some(pt) = p.pattern_mut(pid) {
                                 for o in &origin {
                                     if let Some(n) = pt.notes.iter_mut().find(|n| n.id == o.id) {
-                                        n.length = (o.length + dl).max(snap);
+                                        // Never longer than the drag asks
+                                        // for: short notes may stay short.
+                                        n.length = (o.length + dl).max(snap.min(o.length));
                                         if o.id == anchor.id {
                                             last_len = n.length;
                                         }
@@ -1958,6 +2125,250 @@ fn expression_lane(
                     }
                 },
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Grid and note length, driven through the real toolbar and canvas.
+
+    use peel_document::{Id, Note, Time};
+    use peel_ui::{Id as W, Rect, Vec2, vec2};
+
+    use super::{MIN_CELL, grid_menu, length_menu, line_spacing};
+    use crate::rack::tests::Harness;
+    use crate::workspace::{DockTab, NoteLength};
+
+    const KEY: u8 = 64;
+
+    fn open(h: &mut Harness) -> Id {
+        let kick = h.channel("Kick");
+        h.studio.ws.selected_channel = Some(kick);
+        h.click(W::new(("dock-tab", "Piano roll")));
+        h.frames(2);
+        assert_eq!(h.studio.ws.dock, DockTab::PianoRoll);
+        kick
+    }
+
+    /// Screen point at `beat` in `key`'s row.
+    fn at(h: &Harness, beat: f64, key: u8) -> Vec2 {
+        let c = h.rect(W::new("roll-canvas"));
+        let r = &h.studio.ws.roll;
+        vec2(
+            c.x + (beat as f32 - r.scroll_beats) * r.zoom_x,
+            c.y + (r.top_key - key as f32 + 0.5) * r.row_h,
+        )
+    }
+
+    fn pick_grid(h: &mut Harness, snap: Time) {
+        h.click(W::new("roll-snap"));
+        h.frame();
+        let (_, map) = grid_menu(h.studio.ws.roll.snap);
+        let i = map.iter().position(|m| *m == Some(snap)).unwrap();
+        h.click(W::new("roll-snap").with("menu").with(("item", i)));
+        h.frame();
+        assert_eq!(h.studio.ws.roll.snap, snap);
+    }
+
+    fn pick_length(h: &mut Harness, len: NoteLength) {
+        h.click(W::new("roll-len"));
+        h.frame();
+        let (_, map) = length_menu(&h.studio.ws.roll);
+        let i = map.iter().position(|m| *m == Some(len)).unwrap();
+        h.click(W::new("roll-len").with("menu").with(("item", i)));
+        h.frame();
+        assert_eq!(h.studio.ws.roll.length, len);
+    }
+
+    fn row(h: &Harness, ch: Id) -> Vec<Note> {
+        let mut v: Vec<Note> = h.notes(ch).into_iter().filter(|n| n.key == KEY).collect();
+        v.sort_by_key(|n| n.start);
+        v
+    }
+
+    #[test]
+    fn a_fine_grid_takes_close_notes_and_length_is_its_own_setting() {
+        let mut h = Harness::new();
+        let ch = open(&mut h);
+        assert!(row(&h, ch).is_empty());
+        let sixty_fourth = Time::new(1, 16);
+        pick_grid(&mut h, sixty_fourth);
+        let cell = h.studio.ws.roll.zoom_x * sixty_fourth.as_f64() as f32;
+        assert!(cell >= MIN_CELL, "cells stay clickable: {cell}px");
+        assert_eq!(h.studio.ws.roll.length, NoteLength::Grid);
+
+        // Four sixty-fourths back to back, one click (and undo step) each.
+        let undo = h.history();
+        for k in 1..=4 {
+            let p = at(&h, (k as f64 + 0.5) / 16.0, KEY);
+            h.click_at(p);
+        }
+        let notes = row(&h, ch);
+        assert_eq!(
+            notes
+                .iter()
+                .map(|n| (n.start, n.length))
+                .collect::<Vec<_>>(),
+            (1..=4)
+                .map(|k| (Time::new(k, 16), sixty_fourth))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(h.history(), undo + 4);
+
+        // Each stays its own target: drag the third up a key.
+        let third = notes[2];
+        let from = at(&h, third.start.as_f64() + 1.0 / 64.0, KEY);
+        let to = from - vec2(0.0, h.studio.ws.roll.row_h);
+        h.drag(from, to, 4);
+        let moved = h.notes(ch);
+        let get = |id| moved.iter().find(|n| n.id == id).copied().unwrap();
+        assert_eq!(get(third.id).key, KEY + 1);
+        assert_eq!(get(third.id).start, third.start, "moved only in pitch");
+        for n in [notes[0], notes[1], notes[3]] {
+            assert_eq!(get(n.id), n, "neighbours untouched");
+        }
+        h.studio.session.doc.undo();
+        h.frame();
+
+        // Lengthen the last by its right edge, two cells.
+        let last = notes[3];
+        let c = h.rect(W::new("roll-canvas"));
+        let r = &h.studio.ws.roll;
+        let edge = c.x + (last.end().as_f64() as f32 - r.scroll_beats) * r.zoom_x - 1.5;
+        let y = at(&h, 0.0, KEY).y;
+        let cell = h.studio.ws.roll.zoom_x / 16.0;
+        h.drag(vec2(edge, y), vec2(edge + cell * 2.0, y), 4);
+        let n = row(&h, ch).into_iter().find(|n| n.id == last.id).unwrap();
+        assert_eq!(n.length, Time::new(3, 16));
+        assert_eq!(n.start, last.start);
+
+        // Quarter notes on the fine grid.
+        pick_length(&mut h, NoteLength::Fixed(Time::beats(1)));
+        h.click_at(at(&h, 9.5 / 16.0, KEY));
+        let q = row(&h, ch)
+            .into_iter()
+            .find(|n| n.start == Time::new(9, 16))
+            .unwrap();
+        assert_eq!(q.length, Time::beats(1));
+
+        // A grid change keeps the chosen length and edits nothing.
+        let before = h.pattern();
+        pick_grid(&mut h, Time::new(1, 6));
+        assert_eq!(h.studio.ws.roll.length, NoteLength::Fixed(Time::beats(1)));
+        assert_eq!(h.pattern(), before);
+        h.click_at(at(&h, 2.0 + 1.5 / 6.0, KEY));
+        let t = row(&h, ch)
+            .into_iter()
+            .find(|n| n.start == Time::new(13, 6))
+            .expect("exact sixteenth-triplet start");
+        assert_eq!(t.length, Time::beats(1));
+
+        // Short notes on a coarser grid.
+        pick_length(&mut h, NoteLength::Fixed(Time::new(1, 8)));
+        h.click_at(at(&h, 1.0 + 4.5 / 6.0, KEY));
+        let s = row(&h, ch)
+            .into_iter()
+            .find(|n| n.start == Time::new(5, 3))
+            .unwrap();
+        assert_eq!(s.length, Time::new(1, 8));
+
+        // Back to following the grid.
+        pick_length(&mut h, NoteLength::Grid);
+        h.click_at(at(&h, 1.0 + 5.5 / 6.0, KEY));
+        let g = row(&h, ch)
+            .into_iter()
+            .find(|n| n.start == Time::new(11, 6))
+            .unwrap();
+        assert_eq!(g.length, Time::new(1, 6));
+    }
+
+    #[test]
+    fn clicking_an_off_grid_note_does_not_retime_it() {
+        let mut h = Harness::new();
+        let ch = open(&mut h);
+        let pid = h.session().selected_pattern();
+        let off = Note::new(ch, Time::new(5, 12), Time::new(1, 12), KEY, 0.6);
+        h.studio.session.doc.edit("setup", |p| {
+            let pt = p.pattern_mut(pid).unwrap();
+            pt.notes.push(off);
+            pt.sort_notes();
+        });
+        // Wide enough to hit comfortably at the default sixteenth grid.
+        h.studio.ws.roll.zoom_x = 192.0;
+        h.studio.ws.roll.scroll_beats = 0.0;
+        h.frame();
+        let undo = h.history();
+        let p = at(&h, (5.0 / 12.0) + 1.0 / 48.0, KEY);
+        h.click_at(p);
+        assert_eq!(row(&h, ch), vec![off], "a click selects, nothing more");
+        assert_eq!(h.history(), undo);
+        assert!(h.studio.ws.roll.selection.contains(&off.id));
+        // Dragging it is a deliberate move onto the grid.
+        h.drag(p, p + vec2(h.studio.ws.roll.zoom_x, 0.0), 6);
+        let n = row(&h, ch)[0];
+        assert!(
+            n.start.rem_euclid(Time::new(1, 4)).is_zero(),
+            "{:?}",
+            n.start
+        );
+        assert_eq!(n.length, off.length, "a move keeps the length");
+    }
+
+    #[test]
+    fn grid_lines_follow_the_grid_in_exact_time() {
+        // Fine enough to show: the grid itself.
+        assert_eq!(line_spacing(Time::new(1, 12), 96.0), Time::new(1, 12));
+        // Zoomed out, triplets thin to coarser triplets, then to beats.
+        assert_eq!(line_spacing(Time::new(1, 12), 40.0), Time::new(1, 6));
+        assert_eq!(line_spacing(Time::new(1, 12), 20.0), Time::new(1, 3));
+        assert_eq!(line_spacing(Time::new(1, 3), 12.0), Time::beats(1));
+        assert_eq!(line_spacing(Time::new(1, 16), 40.0), Time::new(1, 4));
+        // Coarser than a beat still draws beats.
+        assert_eq!(line_spacing(Time::beats(4), 96.0), Time::beats(1));
+    }
+
+    #[test]
+    fn the_toolbar_fits_grid_and_length_at_both_window_sizes() {
+        for (w, h_px) in [(1440.0, 900.0), (1200.0, 720.0)] {
+            let mut h = Harness::sized(w, h_px);
+            open(&mut h);
+            let ids = [
+                W::new("pattern-add"),
+                W::new(("roll-tool", "Draw")),
+                W::new(("roll-tool", "Select")),
+                W::new(("roll-tool", "Erase")),
+                W::new("roll-quantize"),
+                W::new("roll-note-tools"),
+                W::new("roll-scale"),
+                W::new("roll-chord"),
+                W::new("roll-snap"),
+                W::new("roll-len"),
+                W::new("roll-ghost"),
+                W::new("dock-toggle"),
+            ];
+            let rects: Vec<Rect> = ids
+                .iter()
+                .enumerate()
+                .map(|(i, id)| {
+                    h.ui.widget_rect(*id)
+                        .unwrap_or_else(|| panic!("{w}x{h_px}: control {i} on screen"))
+                })
+                .collect();
+            for (i, pair) in rects.windows(2).enumerate() {
+                assert!(
+                    pair[0].right() <= pair[1].x + 0.01,
+                    "{w}x{h_px}: control {i} {:?} overlaps {:?}",
+                    pair[0],
+                    pair[1]
+                );
+            }
+            h.ui.set_accessibility_active(true);
+            h.frames(2);
+            assert_eq!(h.label(W::new("roll-snap")), "Grid");
+            assert_eq!(h.value(W::new("roll-snap")), "1/16");
+            assert_eq!(h.label(W::new("roll-len")), "Note length");
+            assert_eq!(h.value(W::new("roll-len")), "Grid");
         }
     }
 }

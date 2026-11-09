@@ -16,6 +16,7 @@ mod instrument_editor;
 mod keys;
 mod layout;
 mod mastering_ui;
+mod menus;
 mod midi;
 mod mixer;
 mod note_expr;
@@ -24,6 +25,7 @@ mod perform;
 mod piano_roll;
 mod playlist;
 mod prefs;
+mod project;
 mod rack;
 mod recorder;
 mod rename;
@@ -88,16 +90,17 @@ fn main() {
         return;
     }
     let prefs = prefs::Prefs::load();
+    let project = if starts_with_demo() {
+        template::showcase()
+    } else {
+        template::empty()
+    };
     // `PEEL_SILENT` (development): the software clock, no audio or MIDI
     // hardware, for screenshots that play the transport.
     let mut session = if std::env::var_os("PEEL_SILENT").is_some() {
-        Session::new_silent(template::showcase())
+        Session::new_silent(project)
     } else {
-        Session::new_with_audio(
-            template::showcase(),
-            prefs.audio_device.clone(),
-            prefs.buffer_frames,
-        )
+        Session::new_with_audio(project, prefs.audio_device.clone(), prefs.buffer_frames)
     };
     session.prefer_input_device(prefs.input_device.clone());
     if let Some(c) = prefs.input_channels() {
@@ -105,6 +108,7 @@ fn main() {
     }
     let options = WindowOptions {
         title: "Peel Studio".into(),
+        native_menus: true,
         ..Default::default()
     };
     let result = peel_ui::run(options, move |_ui| {
@@ -120,5 +124,15 @@ fn main() {
     if let Err(e) = result {
         eprintln!("Peel Studio could not start: {e}");
         std::process::exit(1);
+    }
+}
+
+/// Peel Studio opens on a blank project. The demo song is for development:
+/// `PEEL_DEMO=1` asks for it, and screenshot runs (`PEEL_SCREENSHOT`) get
+/// it unless `PEEL_DEMO=0`, since their view hooks expect its channels.
+fn starts_with_demo() -> bool {
+    match std::env::var("PEEL_DEMO") {
+        Ok(v) => v != "0",
+        Err(_) => std::env::var_os("PEEL_SCREENSHOT").is_some(),
     }
 }

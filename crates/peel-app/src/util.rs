@@ -40,27 +40,31 @@ pub fn format_position(beat: f64, sig: TimeSignature) -> String {
 
 /// Musical length label for a grid or note length.
 pub fn format_length(t: Time) -> String {
-    let v = t.as_f64();
-    let table: [(f64, &str); 12] = [
-        (4.0, "1 bar"),
-        (2.0, "1/2"),
-        (1.0, "1/4"),
-        (0.5, "1/8"),
-        (1.0 / 3.0, "1/8T"),
-        (0.25, "1/16"),
-        (1.0 / 6.0, "1/16T"),
-        (0.125, "1/32"),
-        (0.75, "1/8D"),
-        (1.5, "1/4D"),
-        (8.0, "2 bars"),
-        (16.0, "4 bars"),
+    // Exact rational matches: triplets never pass through floats.
+    let table: [(Time, &str); 16] = [
+        (Time::new(4, 1), "1 bar"),
+        (Time::new(2, 1), "1/2"),
+        (Time::new(1, 1), "1/4"),
+        (Time::new(1, 2), "1/8"),
+        (Time::new(1, 4), "1/16"),
+        (Time::new(1, 8), "1/32"),
+        (Time::new(1, 16), "1/64"),
+        (Time::new(2, 3), "1/4T"),
+        (Time::new(1, 3), "1/8T"),
+        (Time::new(1, 6), "1/16T"),
+        (Time::new(1, 12), "1/32T"),
+        (Time::new(3, 8), "1/16D"),
+        (Time::new(3, 4), "1/8D"),
+        (Time::new(3, 2), "1/4D"),
+        (Time::new(8, 1), "2 bars"),
+        (Time::new(16, 1), "4 bars"),
     ];
     for (b, l) in table {
-        if (v - b).abs() < 1e-9 {
+        if t == b {
             return l.to_string();
         }
     }
-    format!("{v:.2}")
+    format!("{:.2}", t.as_f64())
 }
 
 /// Note name, using C4 = MIDI 60.

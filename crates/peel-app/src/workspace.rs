@@ -58,6 +58,84 @@ pub enum Focus {
     Clip(Id),
 }
 
+/// A named rhythmic value, in quarter-note beats.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Rhythm {
+    pub len: Time,
+    /// Compact toolbar form: 1/16, 1/8T, 1/4D.
+    pub short: &'static str,
+    /// Readable menu form: Sixteenth, Eighth triplet.
+    pub name: &'static str,
+}
+
+const fn rhythm(num: i64, den: i64, short: &'static str, name: &'static str) -> Rhythm {
+    Rhythm {
+        len: Time::new_const(num, den),
+        short,
+        name,
+    }
+}
+
+/// Plain note values, longest first.
+pub const STRAIGHT: [Rhythm; 7] = [
+    rhythm(4, 1, "1/1", "Whole"),
+    rhythm(2, 1, "1/2", "Half"),
+    rhythm(1, 1, "1/4", "Quarter"),
+    rhythm(1, 2, "1/8", "Eighth"),
+    rhythm(1, 4, "1/16", "Sixteenth"),
+    rhythm(1, 8, "1/32", "Thirty-second"),
+    rhythm(1, 16, "1/64", "Sixty-fourth"),
+];
+
+/// Three in the space of two.
+pub const TRIPLETS: [Rhythm; 4] = [
+    rhythm(2, 3, "1/4T", "Quarter triplet"),
+    rhythm(1, 3, "1/8T", "Eighth triplet"),
+    rhythm(1, 6, "1/16T", "Sixteenth triplet"),
+    rhythm(1, 12, "1/32T", "Thirty-second triplet"),
+];
+
+/// One and a half times the plain value.
+pub const DOTTED: [Rhythm; 4] = [
+    rhythm(3, 1, "1/2D", "Dotted half"),
+    rhythm(3, 2, "1/4D", "Dotted quarter"),
+    rhythm(3, 4, "1/8D", "Dotted eighth"),
+    rhythm(3, 8, "1/16D", "Dotted sixteenth"),
+];
+
+/// Step sizes the Channel Rack offers.
+pub const RACK_STEPS: [Rhythm; 7] = [
+    STRAIGHT[3],
+    STRAIGHT[4],
+    STRAIGHT[5],
+    STRAIGHT[6],
+    TRIPLETS[1],
+    TRIPLETS[2],
+    TRIPLETS[3],
+];
+
+/// The named value for `t`, if it has one.
+pub fn rhythm_of(t: Time) -> Option<Rhythm> {
+    STRAIGHT
+        .iter()
+        .chain(&TRIPLETS)
+        .chain(&DOTTED)
+        .find(|r| r.len == t)
+        .copied()
+}
+
+/// What a new note in the Piano Roll is as long as.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum NoteLength {
+    /// One grid cell.
+    #[default]
+    Grid,
+    /// The last note clicked, drawn or resized.
+    Last,
+    /// A chosen value, whatever the grid.
+    Fixed(Time),
+}
+
 pub struct RollView {
     /// Pixels per quarter note.
     pub zoom_x: f32,
@@ -67,8 +145,12 @@ pub struct RollView {
     pub scroll_beats: f32,
     /// Highest visible key at the top edge (fractional).
     pub top_key: f32,
+    /// Grid spacing: where clicks, moves and resizes land.
     pub snap: Time,
+    /// Length of the last note clicked, drawn or resized.
     pub note_len: Time,
+    /// How long new notes are.
+    pub length: NoteLength,
     pub tool: Tool,
     pub selection: HashSet<Id>,
     pub ghosts: bool,
@@ -82,6 +164,17 @@ pub struct RollView {
     pub focus_note: Option<Id>,
     /// Pitch lane range in semitones either side of zero; None fits the note.
     pub pitch_range: Option<f32>,
+}
+
+impl RollView {
+    /// Length of the next note drawn.
+    pub fn draw_length(&self) -> Time {
+        match self.length {
+            NoteLength::Grid => self.snap,
+            NoteLength::Last => self.note_len,
+            NoteLength::Fixed(t) => t,
+        }
+    }
 }
 
 pub struct PlaylistView {
@@ -135,6 +228,10 @@ pub struct Workspace {
     /// The large effect editor (insert, EQ, mastering) and its view state.
     pub fx: crate::fx_editor::FxState,
     pub rack_scroll: f32,
+    /// Horizontal scroll of the step grid, in pixels.
+    pub rack_scroll_x: f32,
+    /// What one Channel Rack step is worth (a sixteenth by default).
+    pub rack_step: Time,
     pub rack_graph: bool,
     pub octave: i32,
     /// Computer-keyboard notes currently held: physical key -> (channel, key).
@@ -189,6 +286,7 @@ impl Default for Workspace {
                 top_key: 84.0,
                 snap: Time::new(1, 4),
                 note_len: Time::new(1, 4),
+                length: NoteLength::Grid,
                 tool: Tool::Draw,
                 selection: HashSet::new(),
                 ghosts: true,
@@ -217,6 +315,8 @@ impl Default for Workspace {
             mixer_restore_h: None,
             fx: Default::default(),
             rack_scroll: 0.0,
+            rack_scroll_x: 0.0,
+            rack_step: Time::new(1, 4),
             rack_graph: false,
             octave: 4,
             held: HashMap::new(),

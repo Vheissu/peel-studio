@@ -10,15 +10,25 @@ use peel_ui::{Align, Color, CursorIcon, MenuItem, Rect, Ui, icons, vec2};
 
 use crate::browser::BrowserItem;
 use crate::studio::current_pattern;
-use crate::util::{col, db_to_fader, fader_to_db, ink_on};
-use crate::workspace::{DockTab, Focus, Workspace};
+use crate::util::{SCROLLBAR, col, db_to_fader, fader_to_db, ink_on};
+use crate::workspace::{DockTab, Focus, RACK_STEPS, Workspace, rhythm_of};
 
 const ROW_H: f32 = 26.0;
 const ROW_GAP: f32 = 2.0;
 /// Channel volume and pan knobs.
 const KNOB: f32 = 22.0;
 const GRAPH_H: f32 = 64.0;
-const STEP: Time = Time::new_const(1, 4);
+const RULER_H: f32 = 22.0;
+/// Width of the mute, name and knob column left of the steps.
+const LEAD: f32 = 20.0 + 4.0 + NAME_W + 6.0 + KNOB * 2.0 + 4.0 + 10.0;
+const NAME_W: f32 = 124.0;
+/// Steps never shrink below this: below it they stop being easy targets,
+/// and the grid scrolls instead.
+const STEP_MIN_W: f32 = 12.0;
+const STEP_MAX_W: f32 = 26.0;
+const STEP_GAP: f32 = 2.0;
+const BEAT_GAP: f32 = 4.0;
+const BAR_GAP: f32 = 8.0;
 
 #[derive(Default)]
 struct PaintState {
@@ -27,10 +37,162 @@ struct PaintState {
     gesture: u64,
 }
 
-/// A note that the step grid can represent: on a 16th, the channel's root
-/// key and one step long.
-fn is_step(n: &Note, root: u8) -> bool {
-    n.key == root && n.length == STEP && n.start.rem_euclid(STEP).is_zero()
+/// A note the step grid shows as a hit: the channel's root key and no
+/// longer than a beat. Hits between steps show as ticks in their step.
+fn is_hit(n: &Note, root: u8) -> bool {
+    n.key == root && n.length <= Time::beats(1)
+}
+
+/// Steps needed to cover `length`.
+fn step_count(length: Time, step: Time) -> usize {
+    length
+        .ceil_to(step)
+        .checked_div(step)
+        .map_or(1, |q| q.floor_int())
+        .clamp(1, 4096) as usize
+}
+
+/// Where each step of the grid sits. Steps group by beat (so triplet steps
+/// come in threes) and bars stand further apart.
+pub(crate) struct StepLayout {
+    pub step: Time,
+    /// Left edge of every step, from the grid's left edge.
+    pub xs: Vec<f32>,
+    /// Width of one step.
+    pub w: f32,
+    /// Width of the whole grid.
+    pub width: f32,
+    /// Steps per quarter note.
+    per_beat: i64,
+    /// Steps per lighter sub-pulse inside a beat (0 for none).
+    per_pulse: i64,
+}
+
+impl StepLayout {
+    pub fn new(step: Time, length: Time, bar: Time, avail: f32) -> StepLayout {
+        let count = step_count(length, step);
+        let beat = Time::beats(1);
+        let gaps: Vec<f32> = (0..count)
+            .map(|i| {
+                let pos = step.mul_int(i as i64);
+                if i == 0 {
+                    0.0
+                } else if pos.rem_euclid(bar).is_zero() {
+                    BAR_GAP
+                } else if pos.rem_euclid(beat).is_zero() {
+                    BEAT_GAP
+                } else {
+                    STEP_GAP
+                }
+            })
+            .collect();
+        let total_gap: f32 = gaps.iter().sum();
+        let w = ((avail - total_gap) / count as f32).clamp(STEP_MIN_W, STEP_MAX_W);
+        let mut xs = Vec::with_capacity(count);
+        let mut x = 0.0;
+        for g in gaps {
+            x += g;
+            xs.push(x);
+            x += w;
+        }
+        let per_beat = beat
+            .checked_div(step)
+            .map_or(1, |q| q.floor_int().max(1) as i64);
+        let per_pulse = if per_beat > 4 && per_beat % 4 == 0 {
+            per_beat / 4
+        } else if per_beat > 3 && per_beat % 3 == 0 {
+            per_beat / 3
+        } else {
+            0
+        };
+        StepLayout {
+            step,
+            xs,
+            w,
+            width: x,
+            per_beat,
+            per_pulse,
+        }
+    }
+
+    pub fn count(&self) -> usize {
+        self.xs.len()
+    }
+
+    pub fn pos(&self, i: usize) -> Time {
+        self.step.mul_int(i as i64)
+    }
+
+    /// The step under `x` (from the grid's left edge), gaps split between
+    /// their neighbours.
+    pub fn index_at(&self, x: f32) -> Option<usize> {
+        if x < -STEP_GAP || x > self.width + STEP_GAP {
+            return None;
+        }
+        let i = self.xs.partition_point(|&l| l <= x);
+        let i = i.saturating_sub(1);
+        // Past the right half of the gap after step i: the next step.
+        match self.xs.get(i + 1) {
+            Some(&next) if x >= (self.xs[i] + self.w + next) * 0.5 => Some(i + 1),
+            _ => Some(i),
+        }
+    }
+
+    /// The step a beat position falls in.
+    pub fn index_of(&self, pos: Time) -> usize {
+        pos.checked_div(self.step)
+            .map_or(0, |q| q.floor_int().max(0) as usize)
+    }
+
+    /// Beats alternate between two neutral fills so a bar reads in beats.
+    fn beat_odd(&self, i: usize) -> bool {
+        (i as i64 / self.per_beat) % 2 == 1
+    }
+
+    /// The step starts a sub-pulse inside the beat (a sixteenth in a
+    /// 1/32 or 1/64 grid, an eighth triplet in a 1/16T grid).
+    fn pulse_start(&self, i: usize) -> bool {
+        self.per_pulse > 0 && (i as i64 % self.per_beat) % self.per_pulse == 0
+    }
+}
+
+/// One channel's hits sorted by step: the hit on the step itself, and the
+/// offsets of any between it and the next.
+struct RowHits {
+    on: Vec<Option<Note>>,
+    between: Vec<Vec<f32>>,
+}
+
+impl RowHits {
+    fn new(notes: &[Note], l: &StepLayout) -> RowHits {
+        let mut on = vec![None; l.count()];
+        let mut between = vec![Vec::new(); l.count()];
+        for n in notes {
+            let i = l.index_of(n.start);
+            if i >= l.count() || n.start.is_negative() {
+                continue;
+            }
+            let rest = n.start - l.pos(i);
+            if rest.is_zero() {
+                on[i].get_or_insert(*n);
+            } else {
+                let frac = rest.checked_div(l.step).map_or(0.0, |f| f.as_f64() as f32);
+                between[i].push(frac);
+            }
+        }
+        RowHits { on, between }
+    }
+}
+
+/// The step size that shows every hit in `rows` on a step, coarsest first.
+fn step_fitting(rows: &[Vec<Note>]) -> Option<Time> {
+    let mut sizes: Vec<Time> = RACK_STEPS.iter().map(|r| r.len).collect();
+    sizes.sort_by(|a, b| b.cmp(a));
+    sizes.into_iter().find(|&step| {
+        rows.iter()
+            .flatten()
+            .all(|n| n.start.rem_euclid(step).is_zero())
+    })
 }
 
 pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspace) {
@@ -39,11 +201,43 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
     let Some(pattern) = s.project().pattern(pid).cloned() else {
         return;
     };
-    let steps_total = (pattern.length.as_f64() * 4.0).round().max(1.0) as usize;
+    let channels: Vec<Channel> = s.project().channels.clone();
+    let bar = s.project().time_signature.bar_length();
+    // Channels the step grid shows (all hits on the root key); the rest
+    // show a preview that opens the piano roll.
+    let rows: Vec<(Vec<Note>, bool)> = channels
+        .iter()
+        .map(|ch| {
+            let notes: Vec<Note> = pattern.notes_for(ch.id).copied().collect();
+            let steps = notes.iter().all(|n| is_hit(n, ch.root_key));
+            (notes, steps)
+        })
+        .collect();
+    let step_rows: Vec<Vec<Note>> = rows
+        .iter()
+        .filter(|(_, steps)| *steps)
+        .map(|(n, _)| n.clone())
+        .collect();
+    let fits_now = step_rows
+        .iter()
+        .flatten()
+        .all(|n| n.start.rem_euclid(ws.rack_step).is_zero());
+    let hint = (!fits_now).then(|| step_fitting(&step_rows));
+
+    let mut body = r.shrink2(6.0, 4.0);
+    // The step ruler stays put above the rows: the step size over the name
+    // column, bar numbers over the steps.
+    let ruler = body.cut_top(RULER_H);
+    // Steps scroll sideways under a fixed name column when they need more
+    // room than the dock has.
+    let grid_x = body.x + LEAD;
+    let grid_w = (body.right() - grid_x - 8.0).max(80.0);
+    let layout_for = |step: Time| StepLayout::new(step, pattern.length, bar, grid_w);
+    let old_step = ws.rack_step;
 
     {
-        // Velocity graph toggle at the left of the header tools; length and
-        // swing take the rest from the right.
+        // Velocity graph toggle at the left of the header tools; length
+        // and swing take the rest from the right.
         let mut row = tools;
         let toggle = row.cut_left(30.0);
         row.cut_left(6.0);
@@ -61,9 +255,75 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
             ws.rack_graph = !ws.rack_graph;
         }
     }
+    step_size_button(
+        ui,
+        Rect {
+            x: ruler.x + 24.0,
+            w: NAME_W,
+            ..ruler
+        }
+        .shrink2(0.0, 1.0),
+        ws,
+        hint,
+    );
+    let layout = layout_for(ws.rack_step);
+    if ws.rack_step != old_step {
+        // Keep the same beat at the left edge.
+        let old = layout_for(old_step);
+        let first = old.index_at(ws.rack_scroll_x).unwrap_or(0);
+        let at = layout.index_of(old.pos(first));
+        ws.rack_scroll_x = layout.xs.get(at).copied().unwrap_or(0.0);
+    }
+    let overflow = (layout.width - grid_w).max(0.0);
 
-    let body = r.shrink2(6.0, 4.0);
-    let channels: Vec<Channel> = s.project().channels.clone();
+    // Sideways: trackpad x or Shift+wheel over the rack.
+    if overflow > 0.0 && ui.pointer_in(body) {
+        let sc = ui.input.scroll;
+        let m = ui.input.modifiers;
+        if !m.command() && !m.alt {
+            if sc.x != 0.0 {
+                ws.rack_scroll_x -= sc.x;
+                ui.input.scroll.x = 0.0;
+            } else if m.shift && sc.y != 0.0 {
+                ws.rack_scroll_x -= sc.y;
+                ui.input.scroll = peel_ui::Vec2::ZERO;
+            }
+        }
+    }
+    let hbar = (overflow > 0.0).then(|| body.cut_bottom(SCROLLBAR + 2.0));
+    // Follow playback a page at a time when the playing step leaves view.
+    let playing_step = if s.is_playing() && matches!(s.mode(), PlayMode::Pattern(p) if p == pid) {
+        let b = s.position().rem_euclid(pattern.length.as_f64());
+        Some((b / layout.step.as_f64()).floor() as usize)
+    } else {
+        None
+    };
+    if overflow > 0.0
+        && let Some(i) = playing_step
+        && let Some(&x) = layout.xs.get(i)
+        && (x < ws.rack_scroll_x || x + layout.w > ws.rack_scroll_x + grid_w)
+    {
+        ws.rack_scroll_x = x;
+    }
+    ws.rack_scroll_x = ws.rack_scroll_x.clamp(0.0, overflow);
+    if let Some(hb) = hbar {
+        let mut x = ws.rack_scroll_x;
+        ui.scrollbar(
+            W::new("rack-hbar"),
+            Rect {
+                x: grid_x,
+                w: grid_w,
+                h: SCROLLBAR,
+                y: hb.y + 2.0,
+            },
+            true,
+            &mut x,
+            grid_w,
+            layout.width,
+        );
+        ws.rack_scroll_x = x.clamp(0.0, overflow);
+    }
+
     let graph_h = if ws.rack_graph {
         GRAPH_H + ROW_GAP
     } else {
@@ -109,31 +369,18 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
         }
     }
 
-    // Column layout.
-    let name_w = 124.0;
-    let ctrl_w = KNOB * 2.0 + 4.0;
-    let lead = 20.0 + 4.0 + name_w + 6.0 + ctrl_w + 10.0;
-    let avail = (body.w - lead - 8.0).max(80.0);
-    let beats = steps_total.div_ceil(4);
-    let group_gap = 4.0;
-    let step_gap = 2.0;
-    let step_w = ((avail
-        - group_gap * (beats as f32 - 1.0)
-        - step_gap * (steps_total as f32 - beats as f32))
-        / steps_total as f32)
-        .clamp(12.0, 26.0);
-
-    let playing_step = if s.is_playing() && matches!(s.mode(), PlayMode::Pattern(p) if p == pid) {
-        let b = s.position().rem_euclid(pattern.length.as_f64());
-        Some((b * 4.0).floor() as usize)
-    } else {
-        None
+    let grid = StepGrid {
+        layout: &layout,
+        view_x: grid_x,
+        view_w: grid_w,
+        scroll: ws.rack_scroll_x,
     };
+    step_ruler(ui, ruler, &grid, bar);
 
     ui.scene.push_clip(body);
     let paint_id = W::new("rack-paint");
     let mut y = body.y - offset.y;
-    for ch in &channels {
+    for (ch, (notes, as_steps)) in channels.iter().zip(&rows) {
         let row = Rect {
             x: body.x,
             y,
@@ -181,7 +428,7 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
         cells.cut_left(4.0);
         channel_button(
             ui,
-            cells.cut_left(name_w).shrink2(0.0, 1.0),
+            cells.cut_left(NAME_W).shrink2(0.0, 1.0),
             ch,
             selected,
             s,
@@ -236,52 +483,20 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
         if vresp.released || presp.released {
             s.doc.end_gesture();
         }
-        cells.cut_left(10.0);
 
-        let notes: Vec<Note> = pattern.notes_for(ch.id).copied().collect();
-        let as_steps = notes.iter().all(|n| is_step(n, ch.root_key));
-        let grid = Rect {
-            w: (steps_total as f32 * (step_w + step_gap) + beats as f32 * (group_gap - step_gap))
-                .min(cells.w),
-            ..cells
-        };
-        if as_steps {
-            step_row(
-                ui,
-                grid,
-                ch,
-                &notes,
-                steps_total,
-                step_w,
-                step_gap,
-                group_gap,
-                playing_step,
-                paint_id,
-                s,
-                pid,
-            );
+        if *as_steps {
+            let hits = RowHits::new(notes, &layout);
+            step_row(ui, &grid, row, ch, &hits, playing_step, paint_id, s, pid);
             if let Some(g) = graph_row {
-                let grid_g = Rect {
-                    y: g.y,
-                    h: g.h,
-                    ..grid
-                };
-                velocity_graph(
-                    ui,
-                    g,
-                    grid_g,
-                    ch,
-                    &notes,
-                    steps_total,
-                    step_w,
-                    step_gap,
-                    group_gap,
-                    s,
-                    pid,
-                );
+                velocity_graph(ui, g, &grid, ch, &hits, s, pid);
             }
         } else {
-            note_preview(ui, grid, ch, &notes, pattern.length, ws);
+            let preview = Rect {
+                x: grid_x,
+                w: layout.width.min(grid_w),
+                ..row
+            };
+            note_preview(ui, preview, ch, notes, pattern.length, ws);
         }
     }
 
@@ -289,7 +504,7 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
     let add_r = Rect {
         x: body.x + 24.0,
         y: y + 1.0,
-        w: name_w,
+        w: NAME_W,
         h: ROW_H - 2.0,
     };
     let add = ui.interact(W::new("rack-add"), add_r);
@@ -346,6 +561,151 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
     }
 }
 
+/// The step grid as drawn this frame: the layout, the visible column and
+/// how far it is scrolled.
+struct StepGrid<'a> {
+    layout: &'a StepLayout,
+    view_x: f32,
+    view_w: f32,
+    scroll: f32,
+}
+
+impl StepGrid<'_> {
+    /// Screen rect of step `i` in a row spanning `y..y + h`.
+    fn cell(&self, i: usize, y: f32, h: f32) -> Rect {
+        Rect {
+            x: self.view_x - self.scroll + self.layout.xs[i],
+            y,
+            w: self.layout.w,
+            h,
+        }
+    }
+
+    fn view(&self, y: f32, h: f32) -> Rect {
+        Rect {
+            x: self.view_x,
+            y,
+            w: self.view_w,
+            h,
+        }
+    }
+
+    /// Visible steps, first to last.
+    fn visible(&self) -> std::ops::Range<usize> {
+        let l = self.layout;
+        let lo = l.xs.partition_point(|&x| x + l.w < self.scroll);
+        let hi = l.xs.partition_point(|&x| x <= self.scroll + self.view_w);
+        lo..hi.max(lo)
+    }
+
+    fn index_at(&self, x: f32) -> Option<usize> {
+        self.layout.index_at(x - self.view_x + self.scroll)
+    }
+}
+
+/// The step size menu: readable names with the short value beside them,
+/// and the step each item picks.
+fn step_menu(current: Time) -> (Vec<MenuItem>, Vec<Option<Time>>) {
+    let mut items = vec![MenuItem::Heading("Step size".into())];
+    let mut map = vec![None];
+    for (i, step) in RACK_STEPS.iter().enumerate() {
+        if i > 0 && step.short.ends_with('T') && !RACK_STEPS[i - 1].short.ends_with('T') {
+            items.push(MenuItem::Separator);
+            map.push(None);
+        }
+        items.push(
+            MenuItem::new(step.name)
+                .shortcut(step.short)
+                .checked(step.len == current),
+        );
+        map.push(Some(step.len));
+    }
+    (items, map)
+}
+
+/// Bar numbers over the steps, scrolled with them.
+fn step_ruler(ui: &mut Ui, ruler: Rect, grid: &StepGrid, bar: Time) {
+    let t = ui.theme.clone();
+    let view = grid.view(ruler.y, ruler.h);
+    ui.scene.push_clip(view);
+    let l = grid.layout;
+    for i in grid.visible() {
+        let pos = l.pos(i);
+        if !pos.rem_euclid(Time::beats(1)).is_zero() {
+            continue;
+        }
+        let x = grid.cell(i, ruler.y, ruler.h).x;
+        if pos.rem_euclid(bar).is_zero() {
+            let n = pos.checked_div(bar).map_or(0, |q| q.floor_int()) + 1;
+            ui.text_at(
+                vec2(x + 1.0, ruler.y + 4.0),
+                &n.to_string(),
+                t.caption,
+                t.text_dim,
+            );
+        } else {
+            ui.scene.vline(
+                x + 0.5,
+                ruler.bottom() - 6.0,
+                ruler.bottom() - 2.0,
+                t.text_faint.alpha(0.5),
+            );
+        }
+    }
+    ui.scene.pop_clip();
+}
+
+/// The step size picker: what one step is worth. `hint` is set when some
+/// hits fall between steps, with the step size that would show them.
+fn step_size_button(ui: &mut Ui, r: Rect, ws: &mut Workspace, hint: Option<Option<Time>>) {
+    let t = ui.theme.clone();
+    let short = rhythm_of(ws.rack_step).map_or_else(
+        || crate::util::format_length(ws.rack_step),
+        |r| r.short.to_string(),
+    );
+    let label = format!("Steps {short}");
+    let w = ui.quiet_button_width(false, &label, true).min(r.w);
+    let r = Rect { w, ..r };
+    let menu_id = W::new("rack-steps-menu");
+    let b = ui.quiet_button(
+        W::new("rack-steps"),
+        r,
+        None,
+        &label,
+        true,
+        ui.is_popup_open(menu_id),
+    );
+    ui.name(&b, "Step size");
+    ui.value_text(&b, &short);
+    let name = rhythm_of(ws.rack_step).map_or("Custom", |r| r.name);
+    let mut tip = format!(
+        "Step size: each step is one {} note. Pattern length is in the toolbar",
+        name.to_lowercase()
+    );
+    if let Some(fit) = hint {
+        // Some hits sit between steps: say so, and which size shows them.
+        ui.scene
+            .circle(vec2(r.right() + 4.0, r.center().y), 2.5, t.accent);
+        match fit.and_then(rhythm_of) {
+            Some(f) => tip.push_str(&format!(
+                ". Some hits fall between steps; {} shows them all",
+                f.short
+            )),
+            None => tip.push_str(". Some hits fall between steps"),
+        }
+    }
+    ui.tooltip(&b, &tip);
+    if b.clicked {
+        ui.open_popup(menu_id, r);
+    }
+    let (items, map) = step_menu(ws.rack_step);
+    if let Some(i) = ui.menu(menu_id, vec2(r.x, r.bottom() + 4.0), &items)
+        && let Some(Some(step)) = map.get(i)
+    {
+        ws.rack_step = *step;
+    }
+}
+
 fn select(ws: &mut Workspace, id: Id) {
     ws.selected_channel = Some(id);
     ws.focus = Some(Focus::Channel(id));
@@ -379,13 +739,10 @@ fn header_tools(
     } else {
         format!("{bars} bars")
     };
-    ui.text(
-        len_row.cut_right(56.0),
-        &label,
-        t.label,
-        t.text_dim,
-        Align::Center,
-    );
+    let len_r = len_row.cut_right(56.0);
+    ui.text(len_r, &label, t.label, t.text_dim, Align::Center);
+    let len_resp = ui.interact(W::new("rack-len-label"), len_r);
+    ui.tooltip(&len_resp, &format!("Pattern length: {label}"));
     let minus = ui.icon_button(
         W::new("rack-len-minus"),
         len_row.cut_right(28.0),
@@ -395,7 +752,7 @@ fn header_tools(
     );
     ui.name(&plus, "Lengthen pattern");
     ui.name(&minus, "Shorten pattern");
-    ui.tooltip(&plus, "Lengthen pattern");
+    ui.tooltip(&plus, "Lengthen pattern by a bar");
     ui.tooltip(&minus, "Shorten pattern");
     let mut new_len = None;
     if plus.clicked {
@@ -573,13 +930,10 @@ fn channel_button(
 #[allow(clippy::too_many_arguments)]
 fn step_row(
     ui: &mut Ui,
-    grid: Rect,
+    grid: &StepGrid,
+    row: Rect,
     ch: &Channel,
-    notes: &[Note],
-    steps: usize,
-    step_w: f32,
-    step_gap: f32,
-    group_gap: f32,
+    hits: &RowHits,
     playing: Option<usize>,
     paint_id: W,
     s: &mut Session,
@@ -587,42 +941,61 @@ fn step_row(
 ) {
     let t = ui.theme.clone();
     let c = col(ch.color);
-    let mut x = grid.x;
-    for i in 0..steps {
-        if i > 0 {
-            x += if i % 4 == 0 { group_gap } else { step_gap };
-        }
-        let cell = Rect {
-            x,
-            y: grid.y + 1.0,
-            w: step_w,
-            h: grid.h - 2.0,
-        };
-        x += step_w;
-        if cell.x > grid.right() + 1.0 {
-            break;
-        }
-        let pos = STEP.mul_int(i as i64);
-        let note = notes.iter().find(|n| n.start == pos);
+    let l = grid.layout;
+    let view = grid.view(row.y, row.h);
+    ui.scene.push_clip(view);
+    for i in grid.visible() {
+        let cell = grid.cell(i, row.y + 1.0, row.h - 2.0);
+        let pos = l.pos(i);
+        let note = hits.on[i];
+        let between = &hits.between[i];
         let on = note.is_some();
         let id = W::new(("step", ch.id, i));
-        let resp = ui.interact_button(id, cell, &format!("{} step {}", ch.name, i + 1));
-        // Beats alternate between two neutral values so the bar reads in
-        // groups of four.
-        let beat_odd = (i / 4) % 2 == 1;
-        let off_fill = if beat_odd {
+        // Only the visible part of a step at the edge takes the pointer.
+        let target = cell.intersect(&view);
+        let label = if between.is_empty() {
+            format!("{} step {}", ch.name, i + 1)
+        } else {
+            format!(
+                "{} step {}, {} between steps",
+                ch.name,
+                i + 1,
+                between.len()
+            )
+        };
+        let resp = ui.interact_button(id, target, &label);
+        let off_fill = if l.beat_odd(i) {
             t.control.lighten(0.04)
         } else {
             t.control.darken(0.18)
         };
+        let off_fill = if l.pulse_start(i) {
+            off_fill.lighten(0.05)
+        } else {
+            off_fill
+        };
         let hot = resp.hovered as i32 as f32;
-        if on {
-            let vel = note.map_or(1.0, |n| n.velocity);
-            let fill = c.mix(t.control, (1.0 - vel) * 0.55);
+        if let Some(n) = note {
+            let fill = c.mix(t.control, (1.0 - n.velocity) * 0.55);
             ui.scene.rect(cell, t.radius_s, fill.lighten(hot * 0.1));
         } else {
             ui.scene
                 .rect(cell, t.radius_s, off_fill.lighten(hot * 0.08));
+        }
+        // Hits between steps: a tick where each one lands, so nothing
+        // hides at a coarse step size.
+        for f in between {
+            let x = cell.x + cell.w * f;
+            ui.scene.rect(
+                Rect {
+                    x: x - 1.0,
+                    y: cell.y + 3.0,
+                    w: 2.0,
+                    h: cell.h - 6.0,
+                },
+                1.0,
+                if on { ink_on(c).alpha(0.7) } else { c },
+            );
         }
         if playing == Some(i) {
             ui.scene.rect(
@@ -633,9 +1006,23 @@ fn step_row(
         }
         if resp.hovered {
             ui.set_cursor(CursorIcon::Pointer);
+            if !between.is_empty() {
+                ui.tooltip(
+                    &resp,
+                    &format!(
+                        "{} between steps. A finer step size shows {}",
+                        if between.len() == 1 {
+                            "1 hit".to_string()
+                        } else {
+                            format!("{} hits", between.len())
+                        },
+                        if between.len() == 1 { "it" } else { "them" }
+                    ),
+                );
+            }
         }
         // Paint: the first step touched decides on/off for the whole drag.
-        let pointer_inside = ui.pointer().is_some_and(|p| cell.contains(p));
+        let pointer_inside = ui.pointer().is_some_and(|p| target.contains(p));
         let (paint_active, paint_on, gesture) = {
             let st = ui.state::<PaintState>(paint_id);
             (st.active, st.on, st.gesture)
@@ -649,21 +1036,21 @@ fn step_row(
                 st.on = want;
                 st.gesture = gesture;
             }
-            set_step(s, pid, ch, pos, want, gesture);
+            set_step(s, pid, ch, pos, l.step, want, gesture);
             if want {
                 s.live_note(ch.id, ch.root_key, 0.8, true);
                 s.live_note(ch.id, ch.root_key, 0.0, false);
             }
         } else if paint_active && ui.input.down[0] && pointer_inside && on != paint_on {
-            set_step(s, pid, ch, pos, paint_on, gesture);
+            set_step(s, pid, ch, pos, l.step, paint_on, gesture);
         }
         // Keyboard or assistive activation (no mouse press behind it).
         if resp.clicked && !paint_active && !resp.pressed {
-            set_step(s, pid, ch, pos, !on, id.0 ^ 0x6b);
+            set_step(s, pid, ch, pos, l.step, !on, id.0 ^ 0x6b);
             s.doc.end_gesture();
         }
         if resp.secondary_clicked && on {
-            set_step(s, pid, ch, pos, false, id.0 ^ 0xdead);
+            set_step(s, pid, ch, pos, l.step, false, id.0 ^ 0xdead);
             s.doc.end_gesture();
         }
         // Wheel over a lit step adjusts its velocity.
@@ -683,9 +1070,12 @@ fn step_row(
             });
         }
     }
+    ui.scene.pop_clip();
 }
 
-fn set_step(s: &mut Session, pid: Id, ch: &Channel, pos: Time, on: bool, gesture: u64) {
+/// Turns the step at `pos` on (a hit one step long) or off. Hits between
+/// steps are never touched.
+fn set_step(s: &mut Session, pid: Id, ch: &Channel, pos: Time, len: Time, on: bool, gesture: u64) {
     let cid = ch.id;
     let key = ch.root_key;
     let label = if on { "Add steps" } else { "Remove steps" };
@@ -693,7 +1083,7 @@ fn set_step(s: &mut Session, pid: Id, ch: &Channel, pos: Time, on: bool, gesture
         if let Some(pt) = p.pattern_mut(pid) {
             let exists = pt.notes.iter().any(|n| n.channel == cid && n.start == pos);
             if on && !exists {
-                pt.notes.push(Note::new(cid, pos, STEP, key, 0.8));
+                pt.notes.push(Note::new(cid, pos, len, key, 0.8));
                 pt.sort_notes();
             } else if !on {
                 pt.notes.retain(|n| !(n.channel == cid && n.start == pos));
@@ -889,27 +1279,23 @@ pub fn delete_channel(s: &mut Session, ws: &mut Workspace, cid: Id) {
 }
 
 /// Velocity bars under the selected channel's steps; drag across to draw.
-#[allow(clippy::too_many_arguments)]
 fn velocity_graph(
     ui: &mut Ui,
     row: Rect,
-    grid: Rect,
+    grid: &StepGrid,
     ch: &Channel,
-    notes: &[Note],
-    steps: usize,
-    step_w: f32,
-    step_gap: f32,
-    group_gap: f32,
+    hits: &RowHits,
     s: &mut Session,
     pid: Id,
 ) {
     let t = ui.theme.clone();
     let c = col(ch.color);
+    let l = grid.layout;
     ui.scene.rect(row, 0.0, t.well);
     ui.text(
         Rect {
             x: row.x + 24.0,
-            w: 124.0,
+            w: NAME_W,
             ..row
         },
         "Velocity",
@@ -917,65 +1303,522 @@ fn velocity_graph(
         t.text_faint,
         Align::Start,
     );
-    let inner = grid.shrink2(0.0, 6.0);
+    let view = grid.view(row.y, row.h);
+    let inner = view.shrink2(0.0, 6.0);
     let id = W::new(("rack-velocity", ch.id));
     let resp = ui.interact(id, inner);
     if resp.hovered {
         ui.set_cursor(CursorIcon::Crosshair);
     }
-    let mut x = grid.x;
-    let mut cells = Vec::with_capacity(steps);
-    for i in 0..steps {
-        if i > 0 {
-            x += if i % 4 == 0 { group_gap } else { step_gap };
-        }
-        cells.push(Rect {
-            x,
-            y: inner.y,
-            w: step_w,
-            h: inner.h,
-        });
-        x += step_w;
-    }
-    for (i, cell) in cells.iter().enumerate() {
-        let pos = STEP.mul_int(i as i64);
-        ui.scene.rect(*cell, 0.0, t.control.darken(0.18));
-        if let Some(n) = notes.iter().find(|n| n.start == pos) {
+    ui.scene.push_clip(view);
+    for i in grid.visible() {
+        let cell = grid.cell(i, inner.y, inner.h);
+        ui.scene.rect(cell, 0.0, t.control.darken(0.18));
+        if let Some(n) = hits.on[i] {
             let h = cell.h * n.velocity;
             ui.scene.rect(
                 Rect {
                     y: cell.bottom() - h,
                     h,
-                    ..*cell
+                    ..cell
                 },
                 2.0,
                 c.alpha(0.85),
             );
         }
     }
+    ui.scene.pop_clip();
     if (resp.pressed || resp.dragging)
         && let Some(p) = ui.pointer()
-        && let Some(i) = cells
-            .iter()
-            .position(|r| p.x >= r.x - step_gap * 0.5 && p.x < r.right() + step_gap * 0.5)
+        && let Some(i) = grid.index_at(p.x)
+        && hits.on.get(i).is_some_and(|n| n.is_some())
     {
-        let pos = STEP.mul_int(i as i64);
-        if notes.iter().any(|n| n.start == pos) {
-            let vel = ((inner.bottom() - p.y) / inner.h).clamp(0.05, 1.0);
-            let cid = ch.id;
-            s.doc.edit_gesture(id.0, "Change velocity", |p| {
-                if let Some(pt) = p.pattern_mut(pid)
-                    && let Some(n) = pt
-                        .notes
-                        .iter_mut()
-                        .find(|n| n.channel == cid && n.start == pos)
-                {
-                    n.velocity = vel;
-                }
-            });
-        }
+        let pos = l.pos(i);
+        let vel = ((inner.bottom() - p.y) / inner.h).clamp(0.05, 1.0);
+        let cid = ch.id;
+        s.doc.edit_gesture(id.0, "Change velocity", |p| {
+            if let Some(pt) = p.pattern_mut(pid)
+                && let Some(n) = pt
+                    .notes
+                    .iter_mut()
+                    .find(|n| n.channel == cid && n.start == pos)
+            {
+                n.velocity = vel;
+            }
+        });
     }
     if resp.released {
         s.doc.end_gesture();
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    //! Step size and step grid interaction, driven frame by frame.
+
+    use peel_document::{ExpressionPoint, Id, Note, Pattern, Time};
+    use peel_session::{Session, template};
+    use peel_ui::{App, Id as W, Rect, Ui, Vec2, WindowControl, vec2};
+
+    use super::{STEP_MIN_W, step_menu};
+    use crate::note_expr::{Lane, set_curve};
+    use crate::studio::Studio;
+
+    /// The real Studio against a silent engine, with scripted input.
+    pub(crate) struct Harness {
+        pub ui: Ui,
+        pub studio: Studio,
+        win: WindowControl,
+        time: f64,
+        pub size: Vec2,
+    }
+
+    impl Harness {
+        pub fn new() -> Harness {
+            Harness::sized(1440.0, 900.0)
+        }
+
+        pub fn sized(w: f32, h: f32) -> Harness {
+            let session = Session::new_silent(template::beat_and_melody());
+            let mut h = Harness {
+                ui: Ui::new(),
+                studio: Studio::new(session),
+                win: WindowControl::headless(),
+                time: 0.0,
+                size: vec2(w, h),
+            };
+            h.frames(3);
+            h
+        }
+
+        pub fn frame(&mut self) {
+            self.time += 1.0 / 60.0;
+            let r = Rect {
+                x: 0.0,
+                y: 0.0,
+                w: self.size.x,
+                h: self.size.y,
+            };
+            self.ui.begin_frame(r, 1.0, self.time);
+            self.studio.update(&mut self.ui, &self.win);
+            self.ui.end_frame();
+        }
+
+        pub fn frames(&mut self, n: usize) {
+            for _ in 0..n {
+                self.frame();
+            }
+        }
+
+        #[track_caller]
+        pub fn rect(&self, id: W) -> Rect {
+            match self.ui.widget_rect(id) {
+                Some(r) => r,
+                None => panic!("widget {id:?} not on screen"),
+            }
+        }
+
+        pub fn move_to(&mut self, p: Vec2) {
+            let old = self.ui.input.pointer.unwrap_or(p);
+            self.ui.input.pointer = Some(p);
+            self.ui.input.pointer_delta = p - old;
+            self.ui.input.had_event = true;
+            self.frame();
+        }
+
+        pub fn press(&mut self) {
+            self.ui.input.down[0] = true;
+            self.ui.input.pressed[0] = true;
+            self.ui.input.press_pos[0] = self.ui.input.pointer.unwrap_or_default();
+            self.frame();
+        }
+
+        pub fn release(&mut self) {
+            self.ui.input.down[0] = false;
+            self.ui.input.released[0] = true;
+            self.frame();
+        }
+
+        pub fn click_at(&mut self, p: Vec2) {
+            self.move_to(p);
+            self.move_to(p);
+            self.press();
+            self.release();
+        }
+
+        pub fn click(&mut self, id: W) {
+            let c = self.rect(id).center();
+            self.click_at(c);
+        }
+
+        pub fn drag(&mut self, from: Vec2, to: Vec2, steps: usize) {
+            self.move_to(from);
+            self.move_to(from);
+            self.press();
+            for i in 1..=steps {
+                let t = i as f32 / steps as f32;
+                self.move_to(from + (to - from) * t);
+            }
+            self.release();
+        }
+
+        pub fn session(&self) -> &Session {
+            &self.studio.session
+        }
+
+        pub fn pattern(&self) -> Pattern {
+            let pid = self.session().selected_pattern();
+            (**self.session().project().pattern(pid).unwrap()).clone()
+        }
+
+        pub fn notes(&self, ch: Id) -> Vec<Note> {
+            self.pattern().notes_for(ch).copied().collect()
+        }
+
+        pub fn history(&self) -> usize {
+            self.session().doc.history_labels().count()
+        }
+
+        pub fn channel(&self, name: &str) -> Id {
+            self.session()
+                .project()
+                .channels
+                .iter()
+                .find(|c| c.name == name)
+                .unwrap()
+                .id
+        }
+
+        /// Picks a step size from the rack's own menu.
+        pub fn pick_step(&mut self, step: Time) {
+            self.click(W::new("rack-steps"));
+            self.frame();
+            let (_, map) = step_menu(self.studio.ws.rack_step);
+            let i = map.iter().position(|m| *m == Some(step)).unwrap();
+            self.click(W::new("rack-steps-menu").with(("item", i)));
+            self.frame();
+            assert_eq!(self.studio.ws.rack_step, step);
+        }
+
+        /// Accessible name of a widget (accessibility must be on).
+        pub fn label(&self, id: W) -> String {
+            self.ui
+                .accessibility_node(id)
+                .and_then(|n| n.label())
+                .unwrap_or_default()
+                .to_string()
+        }
+
+        /// Accessible value of a widget (accessibility must be on).
+        pub fn value(&self, id: W) -> String {
+            self.ui
+                .accessibility_node(id)
+                .and_then(|n| n.value())
+                .unwrap_or_default()
+                .to_string()
+        }
+
+        #[track_caller]
+        fn step(&self, ch: Id, i: usize) -> Rect {
+            self.rect(W::new(("step", ch, i)))
+        }
+    }
+
+    /// Starts of `notes` other than those in `before`.
+    fn added(before: &[Note], after: &[Note]) -> Vec<Note> {
+        after
+            .iter()
+            .filter(|n| !before.iter().any(|b| b.id == n.id))
+            .copied()
+            .collect()
+    }
+
+    #[test]
+    fn fine_steps_place_a_fast_kick_burst_between_the_beats() {
+        let mut h = Harness::new();
+        let kick = h.channel("Kick");
+        let original = h.notes(kick);
+        assert_eq!(original.len(), 4);
+
+        // Thirty-seconds: the sixteenth hits stay where they are, and the
+        // steps between them take new hits.
+        h.pick_step(Time::new(1, 8));
+        assert_eq!(h.notes(kick), original, "a view change edits nothing");
+        let before = h.notes(kick);
+        let undo_before = h.history();
+        // A quick double: paint steps 1 to 3 in one drag (between beat 1's
+        // hit on step 0 and beat 2's on step 8).
+        let a = h.step(kick, 1).center();
+        let b = h.step(kick, 3).center();
+        h.drag(a, b, 9);
+        let mut burst = added(&before, &h.notes(kick));
+        burst.sort_by_key(|n| n.start);
+        let starts: Vec<Time> = burst.iter().map(|n| n.start).collect();
+        assert_eq!(
+            starts,
+            vec![Time::new(1, 8), Time::new(1, 4), Time::new(3, 8)]
+        );
+        assert!(burst.iter().all(|n| n.length == Time::new(1, 8)));
+        assert!(burst.iter().all(|n| n.key == 60));
+        assert_eq!(h.history(), undo_before + 1, "one drag, one undo step");
+        h.studio.session.doc.undo();
+        h.frame();
+        assert_eq!(h.notes(kick), before, "undo takes the whole burst back");
+
+        // The original sixteenth hit on beat 2 (step 8 at 1/32) is still a
+        // step: clicking it removes exactly it, undo brings it back intact.
+        let beat2 = original
+            .iter()
+            .find(|n| n.start == Time::beats(1))
+            .copied()
+            .unwrap();
+        h.click(W::new(("step", kick, 8usize)));
+        assert!(h.notes(kick).iter().all(|n| n.id != beat2.id));
+        h.studio.session.doc.undo();
+        h.frame();
+        let back = h.notes(kick);
+        let n = back.iter().find(|n| n.id == beat2.id).unwrap();
+        assert_eq!(*n, beat2, "length and velocity survive");
+
+        // Sixty-fourths right after the downbeat.
+        h.pick_step(Time::new(1, 16));
+        let before = h.notes(kick);
+        h.click(W::new(("step", kick, 1usize)));
+        h.click(W::new(("step", kick, 2usize)));
+        let mut new = added(&before, &h.notes(kick));
+        new.sort_by_key(|n| n.start);
+        assert_eq!(
+            new.iter().map(|n| (n.start, n.length)).collect::<Vec<_>>(),
+            vec![
+                (Time::new(1, 16), Time::new(1, 16)),
+                (Time::new(1, 8), Time::new(1, 16)),
+            ]
+        );
+
+        // Sixteenth triplets: exact thirds of an eighth, no drift even
+        // far into the bar.
+        h.pick_step(Time::new(1, 6));
+        let before = h.notes(kick);
+        for i in [1usize, 2, 4, 23] {
+            h.click(W::new(("step", kick, i)));
+        }
+        let mut new = added(&before, &h.notes(kick));
+        new.sort_by_key(|n| n.start);
+        assert_eq!(
+            new.iter().map(|n| n.start).collect::<Vec<_>>(),
+            vec![
+                Time::new(1, 6),
+                Time::new(1, 3),
+                Time::new(2, 3),
+                Time::new(23, 6)
+            ]
+        );
+        assert!(new.iter().all(|n| n.length == Time::new(1, 6)));
+    }
+
+    #[test]
+    fn triplet_steps_group_in_threes_per_beat() {
+        let mut h = Harness::new();
+        let kick = h.channel("Kick");
+        h.pick_step(Time::new(1, 3));
+        // Twelve eighth-triplet steps in a 4/4 bar, a beat gap after every
+        // third and plain gaps inside the beat.
+        assert!(h.ui.widget_rect(W::new(("step", kick, 11usize))).is_some());
+        assert!(h.ui.widget_rect(W::new(("step", kick, 12usize))).is_none());
+        let gap = |h: &Harness, i: usize| h.step(kick, i + 1).x - h.step(kick, i).right();
+        assert!((gap(&h, 0) - gap(&h, 1)).abs() < 0.01);
+        assert!(gap(&h, 2) > gap(&h, 1) + 1.0, "beat break after step 3");
+        assert!((gap(&h, 3) - gap(&h, 1)).abs() < 0.01);
+        assert!(gap(&h, 5) > gap(&h, 4) + 1.0, "and after step 6");
+    }
+
+    #[test]
+    fn changing_step_size_or_grid_never_touches_notes_or_expression() {
+        let mut h = Harness::new();
+        let kick = h.channel("Kick");
+        let pid = h.session().selected_pattern();
+        let first = h.notes(kick)[0].id;
+        // A hit with a pitch curve and one between sixteenths.
+        h.studio.session.doc.edit("setup", |p| {
+            let pt = p.pattern_mut(pid).unwrap();
+            pt.notes
+                .push(Note::new(kick, Time::new(5, 12), Time::new(1, 12), 60, 0.4));
+            pt.sort_notes();
+            set_curve(
+                pt,
+                first,
+                Lane::Pitch,
+                &[
+                    ExpressionPoint {
+                        offset: Time::ZERO,
+                        value: 0.5,
+                    },
+                    ExpressionPoint {
+                        offset: Time::new(1, 8),
+                        value: -1.0,
+                    },
+                ],
+            );
+        });
+        h.frame();
+        let before = h.pattern();
+        let undo = h.history();
+        for step in crate::workspace::RACK_STEPS {
+            h.pick_step(step.len);
+            h.frames(2);
+        }
+        h.studio.ws.dock = crate::workspace::DockTab::PianoRoll;
+        h.frames(2);
+        for r in crate::workspace::STRAIGHT
+            .iter()
+            .chain(&crate::workspace::TRIPLETS)
+        {
+            crate::piano_roll::set_grid(&mut h.studio.ws.roll, r.len);
+            h.frames(2);
+        }
+        assert_eq!(h.pattern(), before, "notes and expression unchanged");
+        assert_eq!(h.history(), undo, "no edits recorded");
+    }
+
+    #[test]
+    fn hits_between_coarse_steps_stay_and_are_left_alone() {
+        let mut h = Harness::new();
+        let kick = h.channel("Kick");
+        // A sixteenth hit on the "e" of beat 1, then switch to eighths:
+        // it falls inside step 0.
+        h.click(W::new(("step", kick, 1usize)));
+        let e = h
+            .notes(kick)
+            .into_iter()
+            .find(|n| n.start == Time::new(1, 4))
+            .unwrap();
+        h.pick_step(Time::new(1, 2));
+        // Still a step row (not the piano-roll preview), and the hit's step
+        // reports it.
+        assert!(h.ui.widget_rect(W::new(("rack-preview", kick))).is_none());
+        h.ui.set_accessibility_active(true);
+        h.frames(2);
+        let label = h.label(W::new(("step", kick, 0usize)));
+        assert!(label.contains("1 between steps"), "{label}");
+        // Toggling the on-step hit and adding the next step leave it be.
+        h.click(W::new(("step", kick, 0usize)));
+        h.click(W::new(("step", kick, 1usize)));
+        let notes = h.notes(kick);
+        assert!(notes.contains(&e), "the between-step hit is untouched");
+        assert!(notes.iter().all(|n| n.start != Time::ZERO));
+        assert!(notes.iter().any(|n| n.start == Time::new(1, 2)));
+    }
+
+    #[test]
+    fn late_steps_in_a_long_pattern_are_reachable_at_the_minimum_window() {
+        let mut h = Harness::sized(1200.0, 720.0);
+        let kick = h.channel("Kick");
+        let pid = h.session().selected_pattern();
+        h.studio.session.doc.edit("lengthen", |p| {
+            p.pattern_mut(pid).unwrap().length = Time::beats(16);
+        });
+        h.frame();
+        h.pick_step(Time::new(1, 8));
+        let last = 127usize;
+        let name_x = h.rect(W::new(("rack-name", kick))).x;
+        let first = h.step(kick, 0);
+        assert!(first.w >= STEP_MIN_W - 0.01, "steps keep a usable width");
+        assert!(h.ui.widget_rect(W::new("rack-hbar")).is_some());
+        // Scroll sideways (trackpad) until the last step shows.
+        let over = h.step(kick, 0).center();
+        h.move_to(over);
+        for _ in 0..200 {
+            if let Some(r) = h.ui.widget_rect(W::new(("step", kick, last)))
+                && r.w >= STEP_MIN_W - 0.01
+            {
+                break;
+            }
+            h.ui.input.scroll = vec2(-120.0, 0.0);
+            h.frame();
+        }
+        let r = h.step(kick, last);
+        assert!(r.w >= STEP_MIN_W - 0.01, "the last step is whole: {r:?}");
+        let dock_right = h.rect(W::new("rack-hbar")).right();
+        assert!(r.right() <= dock_right, "inside the rack");
+        assert_eq!(
+            h.rect(W::new(("rack-name", kick))).x,
+            name_x,
+            "the name column does not scroll"
+        );
+        let before = h.notes(kick);
+        h.click(W::new(("step", kick, last)));
+        let new = added(&before, &h.notes(kick));
+        assert_eq!(new.len(), 1);
+        assert_eq!(new[0].start, Time::new(127, 8));
+        assert_eq!(new[0].length, Time::new(1, 8));
+        // Velocity graph lines up with the scrolled steps.
+        h.click(W::new(("rack-name", kick)));
+        h.click(W::new("rack-graph"));
+        h.frame();
+        let g = h.rect(W::new(("rack-velocity", kick)));
+        let cell = h.step(kick, last);
+        h.drag(
+            vec2(cell.center().x, g.y + g.h * 0.75),
+            vec2(cell.center().x, g.y + g.h * 0.7),
+            2,
+        );
+        let n = h
+            .notes(kick)
+            .into_iter()
+            .find(|n| n.id == new[0].id)
+            .unwrap();
+        assert!(n.velocity < 0.5, "graph edits the late hit: {}", n.velocity);
+    }
+
+    #[test]
+    fn the_rack_toolbar_fits_the_step_size_at_both_window_sizes() {
+        for (w, h_px) in [(1440.0, 900.0), (1200.0, 720.0)] {
+            let mut h = Harness::sized(w, h_px);
+            let ids = [
+                "pattern-add",
+                "rack-graph",
+                "rack-swing-label",
+                "rack-swing",
+                "rack-len-minus",
+                "rack-len-label",
+                "rack-len-plus",
+                "dock-toggle",
+            ];
+            let rects: Vec<Rect> = ids
+                .iter()
+                .map(|id| {
+                    h.ui.widget_rect(W::new(*id))
+                        .unwrap_or_else(|| panic!("{w}x{h_px}: {id} on screen"))
+                })
+                .collect();
+            for (i, pair) in rects.windows(2).enumerate() {
+                assert!(
+                    pair[0].right() <= pair[1].x + 0.01,
+                    "{w}x{h_px}: {} {:?} overlaps {} {:?}",
+                    ids[i],
+                    pair[0],
+                    ids[i + 1],
+                    pair[1]
+                );
+            }
+            // The step size sits over the channel names, below the toolbar.
+            let steps = h.rect(W::new("rack-steps"));
+            let kick = h.channel("Kick");
+            let name = h.rect(W::new(("rack-name", kick)));
+            assert!(steps.y >= rects[1].bottom(), "{w}: below the toolbar");
+            assert!(steps.bottom() <= name.y, "{w}: above the first channel");
+            assert!(steps.x >= name.x - 0.01 && steps.right() <= name.right() + 0.01);
+            h.ui.set_accessibility_active(true);
+            h.frames(2);
+            assert_eq!(h.label(W::new("rack-steps")), "Step size");
+            assert_eq!(
+                h.value(W::new("rack-steps")),
+                "1/16",
+                "{w}: sixteenths by default"
+            );
+            // The step menu opens and picks with the same layout.
+            h.pick_step(Time::new(1, 12));
+            assert!(h.ui.widget_rect(W::new("rack-swing-label")).is_some());
+        }
     }
 }

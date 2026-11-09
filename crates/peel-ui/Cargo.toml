@@ -20,6 +20,11 @@ png = "0.18"
 accesskit = "0.25.2"
 accesskit_winit = "0.34.2"
 
+# Native menu bars. GTK (muda's Linux backend) is left out: winit windows
+# are not GTK windows, so Linux uses the in-window menu strip instead.
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+muda = { version = "0.21.2", default-features = false }
+
 [dev-dependencies]
 accesskit_consumer = "0.39.2"
 env_logger.workspace = true

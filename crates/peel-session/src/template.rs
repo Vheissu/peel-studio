@@ -2,10 +2,14 @@
 //! on a fresh install.
 
 mod showcase;
+mod songs;
+#[cfg(test)]
+mod tests;
 
 use std::sync::Arc;
 
 pub use showcase::showcase;
+pub use songs::{edm, hip_hop, rap, synthwave, trap};
 
 use peel_document::{
     Arrangement, Channel, Clip, ClipContent, DeviceInstance, Id, MixerTrack, Note, PALETTE,
@@ -437,114 +441,6 @@ pub fn house() -> Project {
     p
 }
 
-/// Hip-hop at 88 BPM in D minor with swing: a boom-bap groove, a sub
-/// bass and jazzy electric piano chords.
-pub fn hip_hop() -> Project {
-    let mut p = Project::empty("Untitled");
-    p.set_bpm(88.0);
-    p.swing = 0.45;
-    p.patterns.clear();
-    let kick = add_channel(
-        &mut p,
-        "Kick",
-        0,
-        device("peel.drum.kick", Some("Deep")),
-        60,
-    );
-    let snare = add_channel(&mut p, "Snare", 9, device("peel.drum.snare", None), 60);
-    let hat = add_channel(&mut p, "Hat", 2, device("peel.drum.hat", Some("Dark")), 60);
-    let bass = add_channel(
-        &mut p,
-        "Bass",
-        6,
-        device("peel.synth.bass", Some("Sub")),
-        38,
-    );
-    let keys = add_channel(
-        &mut p,
-        "Keys",
-        4,
-        device("peel.keys.tine", Some("Mellow")),
-        60,
-    );
-    set_gains(
-        &mut p,
-        &[
-            (kick, -3.0),
-            (snare, -5.0),
-            (hat, -10.0),
-            (bass, -5.0),
-            (keys, -7.0),
-        ],
-    );
-    p.mixer.tracks[0]
-        .inserts
-        .push(device("peel.fx.limiter", None));
-    let keys_track = p.channel(keys).map(|c| c.track);
-    if let Some(t) = keys_track.and_then(|t| p.mixer.track_mut(t)) {
-        t.inserts.push(device("peel.fx.chorus", None));
-        t.inserts.push(device("peel.fx.reverb", None));
-    }
-
-    let mut beat = steps(kick, &[(0, 1.0), (7, 0.7), (10, 0.9)], 60);
-    beat.extend(steps(snare, &[(4, 1.0), (12, 1.0), (15, 0.25)], 60));
-    beat.extend(steps(
-        hat,
-        &(0..8)
-            .map(|i| (i * 2, if i % 2 == 0 { 0.75 } else { 0.5 }))
-            .collect::<Vec<_>>(),
-        60,
-    ));
-    let beat = pattern("Beat", 0, 4, beat);
-
-    // Dm9 - G13 - Cmaj9 - A7(b9)
-    let chords: [&[u8]; 4] = [
-        &[50, 53, 57, 60, 64],
-        &[43, 53, 59, 64],
-        &[48, 52, 55, 59, 62],
-        &[45, 55, 58, 61],
-    ];
-    let mut chord_notes = Vec::new();
-    for (bar, ks) in chords.iter().enumerate() {
-        for (i, &k) in ks.iter().enumerate() {
-            // A slight roll from the bottom up.
-            let start = Time::beats(bar as i64 * 4) + Time::new(i as i64, 64);
-            chord_notes.push(Note::new(keys, start, Time::new(15, 4), k, 0.65));
-        }
-    }
-    let chords_pat = pattern("Keys", 4, 16, chord_notes);
-
-    let roots = [38u8, 43, 36, 45];
-    let mut bass_notes = Vec::new();
-    for (bar, &root) in roots.iter().enumerate() {
-        bass_notes.push(Note::new(
-            bass,
-            Time::beats(bar as i64 * 4),
-            Time::new(7, 4),
-            root,
-            0.9,
-        ));
-        bass_notes.push(Note::new(
-            bass,
-            Time::beats(bar as i64 * 4) + Time::new(5, 2),
-            Time::new(1, 1),
-            root,
-            0.75,
-        ));
-    }
-    let bass_pat = pattern("Bass", 6, 16, bass_notes);
-
-    let (b, c, l) = (beat.id, chords_pat.id, bass_pat.id);
-    p.patterns = vec![Arc::new(beat), Arc::new(chords_pat), Arc::new(bass_pat)];
-    arrange(
-        &mut p,
-        &["Drums", "Keys", "Bass"],
-        &[(1, c, 0, 12), (0, b, 2, 10), (2, l, 2, 10)],
-        &[(0, "Intro"), (2, "Verse")],
-    );
-    p
-}
-
 /// A starter project: its name and how to build it.
 pub type Template = (&'static str, fn() -> Project);
 
@@ -555,47 +451,15 @@ pub fn templates() -> Vec<Template> {
         ("Beat and melody", beat_and_melody),
         ("House", house),
         ("Hip-hop", hip_hop),
+        ("Rap", rap),
+        ("Trap", trap),
+        ("Synthwave", synthwave),
+        ("EDM", edm),
     ]
 }
 
-/// An empty project with one pattern and no channels.
+/// A blank project: one empty pattern, no channels, no clips and no
+/// effects on the master.
 pub fn empty() -> Project {
     Project::empty("Untitled")
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn every_template_is_valid_and_sounds() {
-        for (name, make) in super::templates() {
-            let p = make();
-            let issues = peel_document::validate(&p);
-            assert!(issues.iter().all(|i| !i.is_error()), "{name}: {issues:?}");
-            assert!(!p.arrangement().clips.is_empty(), "{name}");
-            for c in &p.channels {
-                assert!(
-                    peel_devices::descriptor(&c.device.type_id).is_some(),
-                    "{name}: {}",
-                    c.device.type_id
-                );
-                if let Some(pr) = &c.device.preset {
-                    assert!(
-                        peel_devices::presets(&c.device.type_id)
-                            .iter()
-                            .any(|x| x.name == pr),
-                        "{name}: preset {pr}"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn template_is_valid() {
-        let p = super::beat_and_melody();
-        let issues = peel_document::validate(&p);
-        assert!(issues.iter().all(|i| !i.is_error()), "{issues:?}");
-        assert_eq!(p.channels.len(), 7);
-        assert_eq!(p.patterns.len(), 3);
-    }
 }

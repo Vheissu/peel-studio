@@ -197,6 +197,21 @@ status:   notices                                  device · MIDI · settings
   rewind and fast-forward, the meter, the Export label, the clock, the
   project title and finally the View label.
 
+## Menus
+
+File, Edit, View, Transport and Help live in the platform menu bar on
+macOS (with the application and Window menus) and Windows. Linux has no
+menu bar winit can host, so File and Edit sit before the View button and
+Transport and Help after it; a tight bar keeps File only. Menus, their
+shortcuts and the start screen run the same commands (`menus.rs`).
+
+New project (Cmd/Ctrl+N) is blank: no channels, notes, clips or effects.
+Templates come from `template::templates()` and show on the start screen
+as a two-column grid; the demo song is a separate link. Close project
+(Cmd/Ctrl+W) returns to the start screen. New, a template, Open, Recent,
+Recover, Close, Quit and closing the window first finish any recording,
+then ask Save, Don't save or Cancel when there is unsaved work.
+
 ## Visibility
 
 The View menu, rails, pane headers and shortcuts (Cmd/Ctrl + Opt/Alt +
@@ -252,6 +267,19 @@ beats than between steps. A lit step takes the channel color, mixed toward
 the cell value as velocity drops. The playing step brightens. Only the
 selected channel's row gets a band, edge to edge; other rows have no fill
 of their own.
+
+## Rhythm
+
+The rack's Steps picker sets the spacing of drum hits, independently of the
+pattern's bar count. It offers eighths through sixty-fourths and triplets.
+Names and knobs stay fixed while a long grid scrolls sideways. Existing
+hits between the selected steps stay visible and are preserved.
+
+The Piano Roll separates Grid from Note length. Length can follow the grid,
+reuse the last note, or use a fixed straight, triplet or dotted value.
+Picking a fine grid zooms in once when needed to keep cells clickable.
+Grid lines follow the selected division and thin out at low zoom. Clicking
+a note only selects it; moving or resizing requires a deliberate drag.
 
 ## Mixer
 

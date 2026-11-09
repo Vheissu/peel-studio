@@ -62,6 +62,21 @@ effects. There is no web view.
 | --- |
 | ![Performance view](docs/images/perform.png) |
 
+## Projects
+
+File > New project starts blank, with no instruments or notes. File > New
+from template offers Rap, Trap, Hip-hop, Synthwave and EDM song starters,
+alongside House and Beat and melody. The demo song is a separate choice.
+File > Close project returns to the start screen. New, Open and Close ask
+before replacing unsaved work; cancelling Save As keeps the current project.
+
+In Channels, **Steps** sets the drum grid; the bar count sets the pattern's
+length. Choose 1/32 or 1/64 for fast repeated kicks. The Piano Roll has
+separate **Grid** and **Note length** controls, with quarter notes, eighths,
+sixteenths, finer divisions and triplets. Note length also offers dotted
+values. Changing the grid leaves existing notes untouched. Cmd/Ctrl+wheel
+zooms the Piano Roll; Shift+wheel scrolls a long step grid sideways.
+
 ## Build
 
 You need Rust (the exact toolchain is pinned in `rust-toolchain.toml`, and

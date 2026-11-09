@@ -1,9 +1,10 @@
-//! Workspace layout: the navigation rails, the View menu and the
-//! shortcuts that show and hide panes. Which panes show is stored in
+//! Workspace layout: the navigation rails, the View button's menu and the
+//! pane toggles (their shortcuts live with the app menus, `menus.rs`).
+//! Which panes show is stored in
 //! `Prefs` (shared with scripts' `ui.get`/`ui.set`); sizes and tabs live in
 //! the `Workspace` and are copied to `Prefs` when they settle.
 
-use peel_ui::{Edge, Id as W, KeyCode, MenuItem, Rect, Ui, icons};
+use peel_ui::{Edge, Id as W, MenuItem, Rect, Ui, icons};
 
 use crate::studio::Studio;
 use crate::workspace::{BrowserTab, DockTab};
@@ -74,37 +75,6 @@ pub fn toggle_editor(studio: &mut Studio) {
 pub fn toggle_help(studio: &mut Studio) {
     studio.prefs.show_help = !studio.prefs.show_help;
     studio.prefs.save();
-}
-
-/// Takes Cmd/Ctrl + Option/Alt + `code` (matched by physical key, since
-/// Option changes the character on macOS).
-fn take_layout_key(ui: &mut Ui, code: KeyCode) -> bool {
-    for k in ui.input.keys.iter_mut() {
-        if !k.consumed
-            && k.modifiers.command()
-            && k.modifiers.alt
-            && !k.modifiers.shift
-            && k.code == Some(code)
-        {
-            k.consumed = true;
-            return true;
-        }
-    }
-    false
-}
-
-/// Pane shortcuts; runs before the other command shortcuts so the Option
-/// variants are not mistaken for them.
-pub fn shortcuts(ui: &mut Ui, studio: &mut Studio) {
-    if take_layout_key(ui, KeyCode::KeyB) {
-        toggle_browser(studio);
-    }
-    if take_layout_key(ui, KeyCode::KeyI) {
-        toggle_inspector(studio);
-    }
-    if take_layout_key(ui, KeyCode::KeyE) {
-        toggle_editor(studio);
-    }
 }
 
 /// The left rail: one entry per browser tab.
@@ -260,19 +230,22 @@ pub fn view_button(ui: &mut Ui, r: Rect, studio: &mut Studio, icon_only: bool) {
                 studio.prefs.save();
             }
             8 => toggle_help(studio),
-            10 => {
-                studio.prefs.reset_layout();
-                let d = crate::workspace::Workspace::default();
-                studio.ws.browser_w = d.browser_w;
-                studio.ws.inspector_w = d.inspector_w;
-                studio.ws.dock_h = d.dock_h;
-                studio.ws.dock = d.dock;
-                studio.ws.browser_tab = d.browser_tab;
-                studio.prefs.save();
-            }
+            10 => reset_layout(studio),
             _ => {}
         }
     }
+}
+
+/// Restores the default panes, sizes and tabs.
+pub fn reset_layout(studio: &mut Studio) {
+    studio.prefs.reset_layout();
+    let d = crate::workspace::Workspace::default();
+    studio.ws.browser_w = d.browser_w;
+    studio.ws.inspector_w = d.inspector_w;
+    studio.ws.dock_h = d.dock_h;
+    studio.ws.dock = d.dock;
+    studio.ws.browser_tab = d.browser_tab;
+    studio.prefs.save();
 }
 
 /// Saves pane sizes and tabs once they settle (no drag in progress).

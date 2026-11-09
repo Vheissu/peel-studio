@@ -261,6 +261,17 @@ impl Input {
     }
 
     /// Consumes a character shortcut such as `Cmd+Z` (`ch` lowercase).
+    /// Takes an unconsumed press of `s`.
+    pub fn take_shortcut(&mut self, s: &crate::menu::Shortcut) -> bool {
+        for k in self.keys.iter_mut() {
+            if !k.consumed && s.matches(k) {
+                k.consumed = true;
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn take_command(&mut self, ch: &str, shift: bool) -> bool {
         for k in self.keys.iter_mut() {
             if k.consumed || !k.modifiers.command() || k.modifiers.shift != shift {
