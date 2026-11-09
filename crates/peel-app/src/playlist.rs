@@ -1,7 +1,7 @@
 //! Playlist: the arrangement. Pattern clips are linked instances; editing
 //! the pattern changes every instance.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use peel_document::{Clip, ClipContent, Id, Pattern, Time, Track};
 use peel_session::{PlayMode, Session};
@@ -65,6 +65,20 @@ struct DragState {
     start_beat: f64,
     gesture: u64,
     last_paint: Option<(Id, Time)>,
+}
+
+#[derive(Clone, Copy)]
+enum ClipAction {
+    None,
+    Open,
+    Unique,
+    Rename,
+    Mute,
+    Duplicate,
+    Delete,
+    Reverse,
+    Render,
+    Chop,
 }
 
 struct View {
@@ -994,6 +1008,61 @@ fn clip_rect(v: &View, lane: usize, c: &Clip) -> Rect {
     }
 }
 
+fn selected_clips(s: &Session, ws: &Workspace) -> Vec<Clip> {
+    s.project()
+        .arrangement()
+        .clips
+        .iter()
+        .filter(|c| ws.playlist.selection.contains(&c.id))
+        .cloned()
+        .collect()
+}
+
+fn delete_selection(s: &mut Session, ws: &mut Workspace) {
+    let selected: HashSet<Id> = selected_clips(s, ws).iter().map(|c| c.id).collect();
+    if selected.is_empty() {
+        return;
+    }
+    s.doc.edit("Delete clips", |p| {
+        p.arrangement_mut()
+            .clips
+            .retain(|c| !selected.contains(&c.id));
+    });
+    if let Some(Focus::Clip(id)) = ws.focus
+        && selected.contains(&id)
+    {
+        ws.focus = None;
+    }
+    ws.playlist.selection.clear();
+}
+
+fn duplicate_selection(s: &mut Session, ws: &mut Workspace) {
+    let selected = selected_clips(s, ws);
+    let Some(start) = selected.iter().map(|c| c.start).min() else {
+        return;
+    };
+    let end = selected.iter().map(Clip::end).max().unwrap_or(start);
+    let span = end - start;
+    // Translate the whole selection equally, preserving gaps, overlaps and lanes.
+    let copies: Vec<Clip> = selected
+        .iter()
+        .map(|c| Clip {
+            id: Id::new(),
+            start: c.start + span,
+            ..c.clone()
+        })
+        .collect();
+    if let Some(Focus::Clip(id)) = ws.focus
+        && let Some(i) = selected.iter().position(|c| c.id == id)
+    {
+        ws.focus = Some(Focus::Clip(copies[i].id));
+    }
+    ws.playlist.selection = copies.iter().map(|c| c.id).collect();
+    s.doc.edit("Duplicate clips", |p| {
+        p.arrangement_mut().clips.extend(copies)
+    });
+}
+
 fn clips(
     ui: &mut Ui,
     v: &View,
@@ -1292,8 +1361,10 @@ fn clips(
         && !deleted_point
         && let Some((c, _)) = &hit
     {
-        ws.playlist.selection.clear();
-        ws.playlist.selection.insert(c.id);
+        if !ws.playlist.selection.contains(&c.id) {
+            ws.playlist.selection.clear();
+            ws.playlist.selection.insert(c.id);
+        }
         *ui.state::<Option<Clip>>(menu_id) = Some(c.clone());
         ui.open_popup(
             menu_id,
@@ -1302,129 +1373,149 @@ fn clips(
     }
     if let Some(c) = ui.state::<Option<Clip>>(menu_id).clone() {
         let at = ui.popup_rect().map(|r| vec2(r.x, r.y)).unwrap_or_default();
-        let shared = match c.content {
-            ClipContent::Pattern { pattern } => s.project().pattern_usage(pattern) > 1,
-            _ => false,
+        let selected = selected_clips(s, ws);
+        let multiple = selected.len() > 1;
+        let muted = !selected.is_empty() && selected.iter().all(|c| c.muted);
+        let cmd = if cfg!(target_os = "macos") {
+            "Cmd"
+        } else {
+            "Ctrl"
         };
-        let items = [
-            MenuItem::new("Open pattern"),
-            MenuItem::new("Make unique").enabled(shared),
-            MenuItem::new("Rename pattern"),
-            MenuItem::new(if c.muted { "Unmute clip" } else { "Mute clip" }),
-            MenuItem::Separator,
-            MenuItem::new("Delete clip").shortcut("Del"),
-            MenuItem::new("Render to audio").enabled(s.render_progress().is_none()),
-        ];
-        if let ClipContent::Automation { .. } = c.content {
-            let items = [
-                MenuItem::new(if c.muted { "Unmute clip" } else { "Mute clip" }),
-                MenuItem::Separator,
-                MenuItem::new("Delete clip").shortcut("Del"),
-            ];
-            let cid = c.id;
-            match ui.menu(menu_id, at, &items) {
-                Some(0) => s
-                    .doc
-                    .edit(if c.muted { "Unmute clip" } else { "Mute clip" }, |p| {
-                        if let Some(x) = p.arrangement_mut().clips.iter_mut().find(|x| x.id == cid)
-                        {
-                            x.muted = !x.muted;
-                        }
-                    }),
-                Some(2) => s.doc.edit("Delete clip", |p| {
-                    p.arrangement_mut().clips.retain(|x| x.id != cid)
-                }),
-                _ => {}
-            }
-        } else if let ClipContent::Audio { reversed, .. } = c.content {
-            let audio_items = [
-                MenuItem::new(if reversed { "Play forwards" } else { "Reverse" }),
-                MenuItem::new(if c.muted { "Unmute clip" } else { "Mute clip" }),
-                MenuItem::Separator,
-                MenuItem::new("Delete clip").shortcut("Del"),
-                MenuItem::new("Chop at hits").enabled(!reversed),
-            ];
-            let cid = c.id;
-            match ui.menu(menu_id, at, &audio_items) {
-                Some(0) => s.doc.edit(
-                    if reversed {
-                        "Play clip forwards"
-                    } else {
-                        "Reverse clip"
-                    },
-                    |p| {
-                        if let Some(x) = p.arrangement_mut().clips.iter_mut().find(|x| x.id == cid)
-                            && let ClipContent::Audio { reversed, .. } = &mut x.content
-                        {
-                            *reversed = !*reversed;
-                        }
-                    },
-                ),
-                Some(1) => s
-                    .doc
-                    .edit(if c.muted { "Unmute clip" } else { "Mute clip" }, |p| {
-                        if let Some(x) = p.arrangement_mut().clips.iter_mut().find(|x| x.id == cid)
-                        {
-                            x.muted = !x.muted;
-                        }
-                    }),
-                Some(3) => s.doc.edit("Delete clip", |p| {
-                    p.arrangement_mut().clips.retain(|x| x.id != cid)
-                }),
-                Some(4) => match chop_at_hits(s, &c) {
-                    Some(n) => s.notify(format!("Chopped into {n} clips"), false),
-                    None => s.notify("No hits found in this clip", true),
-                },
-                _ => {}
-            }
-        } else if let Some(choice) = ui.menu(menu_id, at, &items) {
-            let ClipContent::Pattern { pattern } = c.content else {
-                return;
-            };
-            match choice {
-                0 => {
-                    s.select_pattern(pattern);
-                    ws.dock = DockTab::Rack;
+        let mut entries = Vec::new();
+        if !multiple {
+            match c.content {
+                ClipContent::Pattern { pattern } => {
+                    entries.extend([
+                        (MenuItem::new("Open pattern"), ClipAction::Open),
+                        (
+                            MenuItem::new("Make unique")
+                                .enabled(s.project().pattern_usage(pattern) > 1),
+                            ClipAction::Unique,
+                        ),
+                        (MenuItem::new("Rename pattern"), ClipAction::Rename),
+                    ]);
                 }
-                1 => {
-                    if let Some(new) = make_unique(s, c.id, pattern) {
+                ClipContent::Audio { reversed, .. } => entries.push((
+                    MenuItem::new(if reversed { "Play forwards" } else { "Reverse" }),
+                    ClipAction::Reverse,
+                )),
+                ClipContent::Automation { .. } => {}
+            }
+        }
+        entries.extend([
+            (
+                MenuItem::new(match (muted, multiple) {
+                    (true, true) => "Unmute clips",
+                    (true, false) => "Unmute clip",
+                    (false, true) => "Mute clips",
+                    (false, false) => "Mute clip",
+                }),
+                ClipAction::Mute,
+            ),
+            (MenuItem::Separator, ClipAction::None),
+            (
+                MenuItem::new(if multiple {
+                    "Duplicate clips"
+                } else {
+                    "Duplicate clip"
+                })
+                .shortcut(format!("{cmd}+D")),
+                ClipAction::Duplicate,
+            ),
+            (
+                MenuItem::new(if multiple {
+                    "Delete clips"
+                } else {
+                    "Delete clip"
+                })
+                .shortcut("Del"),
+                ClipAction::Delete,
+            ),
+        ]);
+        if !multiple {
+            match c.content {
+                ClipContent::Pattern { .. } => entries.extend([
+                    (MenuItem::Separator, ClipAction::None),
+                    (
+                        MenuItem::new("Render to audio").enabled(s.render_progress().is_none()),
+                        ClipAction::Render,
+                    ),
+                ]),
+                ClipContent::Audio { reversed, .. } => entries.extend([
+                    (MenuItem::Separator, ClipAction::None),
+                    (
+                        MenuItem::new("Chop at hits").enabled(!reversed),
+                        ClipAction::Chop,
+                    ),
+                ]),
+                ClipContent::Automation { .. } => {}
+            }
+        }
+        let items: Vec<MenuItem> = entries.iter().map(|(item, _)| item.clone()).collect();
+        if let Some(choice) = ui.menu(menu_id, at, &items) {
+            match entries[choice].1 {
+                ClipAction::Open => {
+                    if let ClipContent::Pattern { pattern } = c.content {
+                        s.select_pattern(pattern);
+                        ws.dock = DockTab::Rack;
+                    }
+                }
+                ClipAction::Unique => {
+                    if let ClipContent::Pattern { pattern } = c.content
+                        && let Some(new) = make_unique(s, c.id, pattern)
+                    {
                         s.select_pattern(new);
                     }
                 }
-                2 => {
-                    let name = s
-                        .project()
-                        .pattern(pattern)
-                        .map(|p| p.name.clone())
-                        .unwrap_or_default();
-                    let lane = lane_of.get(&c.track).copied().unwrap_or(0);
-                    let anchor = clip_rect(v, lane, &c);
-                    *ui.state::<Option<Id>>(W::new("pl-rename-target")) = Some(pattern);
-                    crate::rename::open(ui, W::new("pl-rename-pattern"), anchor, &name);
+                ClipAction::Rename => {
+                    if let ClipContent::Pattern { pattern } = c.content {
+                        let name = s
+                            .project()
+                            .pattern(pattern)
+                            .map(|p| p.name.clone())
+                            .unwrap_or_default();
+                        let lane = lane_of.get(&c.track).copied().unwrap_or(0);
+                        let anchor = clip_rect(v, lane, &c);
+                        *ui.state::<Option<Id>>(W::new("pl-rename-target")) = Some(pattern);
+                        crate::rename::open(ui, W::new("pl-rename-pattern"), anchor, &name);
+                    }
                 }
-                3 => {
-                    let cid = c.id;
+                ClipAction::Mute => {
+                    let sel = ws.playlist.selection.clone();
                     s.doc
-                        .edit(if c.muted { "Unmute clip" } else { "Mute clip" }, |p| {
-                            if let Some(x) =
-                                p.arrangement_mut().clips.iter_mut().find(|x| x.id == cid)
+                        .edit(if muted { "Unmute clips" } else { "Mute clips" }, |p| {
+                            for clip in p
+                                .arrangement_mut()
+                                .clips
+                                .iter_mut()
+                                .filter(|c| sel.contains(&c.id))
                             {
-                                x.muted = !x.muted;
+                                clip.muted = !muted;
                             }
                         });
                 }
-                5 => {
+                ClipAction::Duplicate => duplicate_selection(s, ws),
+                ClipAction::Delete => delete_selection(s, ws),
+                ClipAction::Reverse => {
                     let cid = c.id;
-                    s.doc.edit("Delete clip", |p| {
-                        p.arrangement_mut().clips.retain(|x| x.id != cid)
+                    s.doc.edit("Reverse clip", |p| {
+                        if let Some(c) = p.arrangement_mut().clips.iter_mut().find(|c| c.id == cid)
+                            && let ClipContent::Audio { reversed, .. } = &mut c.content
+                        {
+                            *reversed = !*reversed;
+                        }
                     });
                 }
-                6 => {
+                ClipAction::Render => {
                     if let Err(e) = s.render_clip_to_audio(c.id) {
                         s.notify(e, true);
                     }
                 }
-                _ => {}
+                ClipAction::Chop => match chop_at_hits(s, &c) {
+                    Some(n) => s.notify(format!("Chopped into {n} clips"), false),
+                    None => s.notify("No hits found in this clip", true),
+                },
+                ClipAction::None => {}
             }
         }
         if !ui.is_popup_open(menu_id) {
@@ -1712,30 +1803,10 @@ fn clips(
         if ui.input.take_named(peel_ui::NamedKey::Delete)
             || ui.input.take_named(peel_ui::NamedKey::Backspace)
         {
-            let sel = ws.playlist.selection.clone();
-            s.doc.edit("Delete clips", |p| {
-                p.arrangement_mut().clips.retain(|c| !sel.contains(&c.id))
-            });
-            ws.playlist.selection.clear();
+            delete_selection(s, ws);
         }
         if ui.input.take_command("d", false) {
-            let sel = ws.playlist.selection.clone();
-            let copies: Vec<Clip> = s
-                .project()
-                .arrangement()
-                .clips
-                .iter()
-                .filter(|c| sel.contains(&c.id))
-                .map(|c| Clip {
-                    id: Id::new(),
-                    start: c.end(),
-                    ..c.clone()
-                })
-                .collect();
-            ws.playlist.selection = copies.iter().map(|c| c.id).collect();
-            s.doc.edit("Duplicate clips", |p| {
-                p.arrangement_mut().clips.extend(copies)
-            });
+            duplicate_selection(s, ws);
         }
     }
 

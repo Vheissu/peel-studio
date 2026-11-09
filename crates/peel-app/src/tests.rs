@@ -523,6 +523,198 @@ fn playlist_marquee_selects_and_moves_a_group() {
     assert_eq!(h.session().doc.undo_label(), Some("Move 2 clips"));
 }
 
+/// Open a clip's header menu without triggering an automation-point edit.
+fn clip_menu(h: &mut Harness, clip: &peel_document::Clip) {
+    h.frame();
+    let canvas = h.rect(W::new("pl-canvas"));
+    let lane = h
+        .session()
+        .project()
+        .arrangement()
+        .tracks
+        .iter()
+        .position(|t| t.id == clip.track)
+        .unwrap();
+    let p = vec2(
+        canvas.x
+            + (clip.start.as_f64() as f32 - h.studio.ws.playlist.scroll_beats)
+                * h.studio.ws.playlist.zoom_x
+            + 12.0,
+        canvas.y + lane as f32 * h.studio.ws.playlist.lane_h - h.studio.ws.playlist.scroll_y + 8.0,
+    );
+    h.move_to(p);
+    h.move_to(p);
+    h.press(1);
+    h.release(1);
+    h.frame();
+}
+
+#[test]
+fn playlist_duplicate_shortcut_repeats_a_group_without_changing_its_timing() {
+    let mut h = Harness::new();
+    h.studio.ws.playlist.fit = 0;
+    h.studio.session.doc.edit("Stagger clips", |p| {
+        let clips = &mut p.arrangement_mut().clips;
+        clips[0].start = Time::new(3, 2);
+        clips[0].length = Time::beats(3);
+        clips[1].start = Time::beats(7);
+        clips[1].length = Time::new(5, 2);
+        clips[1].offset = Time::new(1, 2);
+        clips[1].muted = true;
+    });
+    let originals = h.session().project().arrangement().clips.clone();
+    h.studio.ws.playlist.selection = originals.iter().take(2).map(|c| c.id).collect();
+    let canvas = h.rect(W::new("pl-canvas"));
+    h.move_to(canvas.center());
+    let history = h.session().doc.history_labels().count();
+    command_key(&mut h, "d", peel_ui::KeyCode::KeyD);
+    let copies = h.session().project().arrangement().clips[originals.len()..].to_vec();
+    assert_eq!(copies.len(), 2);
+    for (source, copy) in originals.iter().zip(&copies) {
+        assert_ne!(copy.id, source.id);
+        let mut expected = source.clone();
+        expected.id = copy.id;
+        expected.start += Time::beats(8);
+        assert_eq!(
+            *copy, expected,
+            "source settings and relative timing survive"
+        );
+        assert!(h.studio.ws.playlist.selection.contains(&copy.id));
+        assert!(!h.studio.ws.playlist.selection.contains(&source.id));
+    }
+    assert_eq!(h.session().doc.history_labels().count(), history + 1);
+    assert_eq!(
+        &h.session().project().arrangement().clips[..originals.len()],
+        originals
+    );
+    command_key(&mut h, "d", peel_ui::KeyCode::KeyD);
+    let next = &h.session().project().arrangement().clips[originals.len() + 2..];
+    assert_eq!(next[0].start, copies[0].start + Time::beats(8));
+    assert_eq!(next[1].start, copies[1].start + Time::beats(8));
+    h.studio.session.doc.undo();
+    h.studio.session.doc.undo();
+    assert_eq!(h.session().project().arrangement().clips, originals);
+    h.studio.session.doc.redo();
+    assert_eq!(
+        &h.session().project().arrangement().clips[originals.len()..],
+        copies
+    );
+}
+
+#[test]
+fn playlist_clip_menus_duplicate_every_content_type() {
+    use peel_document::{AutomationPoint, AutomationTarget, Id};
+    for kind in 0..3 {
+        let mut h = Harness::new();
+        h.studio.ws.playlist.fit = 0;
+        let track = h.session().project().mixer.master().id;
+        h.studio.session.doc.edit("Clip settings", |p| {
+            let c = &mut p.arrangement_mut().clips[0];
+            c.length = Time::new(7, 2);
+            c.offset = Time::new(1, 2);
+            c.muted = true;
+            match kind {
+                1 => {
+                    c.content = ClipContent::Audio {
+                        // Copying an offline clip must preserve its reference too.
+                        asset: Id::new(),
+                        track,
+                        gain_db: -3.0,
+                        reversed: true,
+                        fade_in: Time::new(1, 4),
+                        fade_out: Time::new(3, 4),
+                        source_bpm: Some(98.0),
+                    }
+                }
+                2 => {
+                    c.content = ClipContent::Automation {
+                        target: AutomationTarget::TrackGain { track },
+                        points: vec![
+                            AutomationPoint {
+                                position: Time::ZERO,
+                                value: 0.6,
+                                tension: -0.4,
+                            },
+                            AutomationPoint::new(Time::beats(4), 0.9),
+                        ],
+                    }
+                }
+                _ => {}
+            }
+        });
+        let before = h.session().project().arrangement().clips.clone();
+        let source = before[0].clone();
+        clip_menu(&mut h, &source);
+        let index: usize = match kind {
+            0 => 5,
+            1 => 3,
+            _ => 2,
+        };
+        h.click(W::new("pl-clip-menu").with(("item", index)));
+        let clips = &h.session().project().arrangement().clips;
+        assert_eq!(clips.len(), before.len() + 1);
+        let copy = clips.last().unwrap().clone();
+        let mut expected = source.clone();
+        expected.id = copy.id;
+        expected.start = source.end();
+        assert_eq!(copy, expected);
+        assert_ne!(copy.id, source.id);
+        assert_eq!(
+            h.studio.ws.playlist.selection,
+            [copy.id].into_iter().collect()
+        );
+        h.studio.session.doc.undo();
+        assert_eq!(h.session().project().arrangement().clips, before);
+        h.studio.session.doc.redo();
+        assert_eq!(
+            h.session().project().arrangement().clips.last(),
+            Some(&copy)
+        );
+    }
+}
+
+#[test]
+fn playlist_group_menu_preserves_selection_and_edits_the_group() {
+    let mut h = Harness::new();
+    let originals = h.session().project().arrangement().clips.clone();
+    let selection = originals.iter().take(2).map(|c| c.id).collect();
+    h.studio.ws.playlist.selection = selection;
+    clip_menu(&mut h, &originals[0]);
+    assert_eq!(h.studio.ws.playlist.selection.len(), 2);
+    h.click(W::new("pl-clip-menu").with(("item", 2usize)));
+    assert_eq!(
+        h.session().project().arrangement().clips.len(),
+        originals.len() + 2
+    );
+    let copies = h.session().project().arrangement().clips[originals.len()..].to_vec();
+    clip_menu(&mut h, &copies[0]);
+    h.click(W::new("pl-clip-menu").with(("item", 0usize)));
+    assert!(
+        h.session()
+            .project()
+            .arrangement()
+            .clips
+            .iter()
+            .filter(|c| h.studio.ws.playlist.selection.contains(&c.id))
+            .all(|c| c.muted)
+    );
+    clip_menu(&mut h, &copies[0]);
+    h.click(W::new("pl-clip-menu").with(("item", 3usize)));
+    assert_eq!(h.session().project().arrangement().clips, originals);
+    assert!(h.studio.ws.playlist.selection.is_empty());
+    h.studio.session.doc.undo();
+    assert_eq!(
+        h.session().project().arrangement().clips.len(),
+        originals.len() + 2
+    );
+    // Right-clicking an unselected clip switches the menu target to that clip.
+    clip_menu(&mut h, &originals[0]);
+    assert_eq!(
+        h.studio.ws.playlist.selection,
+        [originals[0].id].into_iter().collect()
+    );
+}
+
 #[test]
 fn browser_presets_add_configured_channels() {
     let mut h = Harness::new();
