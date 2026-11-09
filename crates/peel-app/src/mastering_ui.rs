@@ -313,8 +313,7 @@ fn knob(
     ui.name(&resp, p.name);
     ui.value_text(&resp, &text);
     let extra = match key {
-        // The effect has no delay compensation in the engine yet: later
-        // gain can still push the signal past the ceiling.
+        // Gain after this effect can still push the signal past the ceiling.
         "ceiling" => " Applies at this effect; faders and effects after it can exceed it.",
         _ => "",
     };

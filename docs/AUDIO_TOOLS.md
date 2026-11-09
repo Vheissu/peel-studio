@@ -87,7 +87,7 @@ normal response curve. CC64 keeps its sustain role; CC120 and CC123
 remain panic and all-notes-off controls. Pitch bend, channel aftertouch and
 polyphonic aftertouch reach the selected instrument, including held and
 sustained notes. The default bend range is two semitones; choose 0–48 in
-Audio and MIDI. The instrument editor also has pitch and pressure controls.
+the instrument editor, alongside its pitch and pressure controls.
 
 Native pressure adds up to about 4 dB of gain and, on filtered instruments,
 up to three quarters of an octave of brightness. Per-key pressure affects
@@ -135,7 +135,9 @@ output; silent command-line hosts keep hardware output closed.
 
 Peel uses the latency reported by each device after preparation. Bypass,
 insert changes and reported latency changes rebuild compensation on the
-control thread. Stop, seek and panic clear delayed audio; normal loop wraps
+control thread. A CLAP restart request briefly suspends that instance while
+it is prepared again, then recalculates its compensation. Stop, seek and
+panic clear delayed audio; normal loop wraps
 keep continuous history so paths remain aligned even in short loops. The
 metronome and recorded take placement account for the graph delay. Direct
 input monitoring remains a low-latency feed after the master inserts.
