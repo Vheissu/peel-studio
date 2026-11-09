@@ -7,7 +7,7 @@ mod common;
 use common::*;
 use peel_dsp::{DeviceKind, EventKind, ParamDescriptor};
 
-const TYPE_IDS: [&str; 14] = [
+const TYPE_IDS: [&str; 15] = [
     "peel.fx.eq",
     "peel.fx.compressor",
     "peel.fx.limiter",
@@ -22,6 +22,7 @@ const TYPE_IDS: [&str; 14] = [
     "peel.fx.flanger",
     "peel.fx.phaser",
     "peel.fx.glitch",
+    "peel.fx.multiband",
 ];
 
 #[test]
