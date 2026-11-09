@@ -932,3 +932,168 @@ fn grand_sixteen_note_chord_is_cheap_and_clean() {
     // debug-profile test build (dependencies are optimized).
     assert!(elapsed < 1.0, "took {elapsed} s for 4 s of audio");
 }
+
+// ----------------------------------------------------------------- violin
+
+fn violin_note(d: &mut dyn Device, key: u8, vel: f32, secs: f32) -> (Vec<f32>, Vec<f32>) {
+    let n = (SR * secs) as usize;
+    render(d, &[note_on(0, key, vel, 1)], n, 256)
+}
+
+#[test]
+fn violin_sustained_notes_hold_pitch() {
+    for key in [55u8, 62, 69, 76, 84, 88] {
+        let mut d = fresh("peel.strings.violin");
+        set(d.as_mut(), "vibrato.depth", 0.0);
+        set(d.as_mut(), "vibrato.variation", 0.0);
+        let (l, _) = violin_note(d.as_mut(), key, 0.8, 1.5);
+        let want = 440.0 * 2f32.powf((key as f32 - 69.0) / 12.0);
+        let got = detect_pitch(&l[SR as usize / 2..], SR);
+        let cents = 1200.0 * (got / want).log2();
+        println!(
+            "key {key}: {got} Hz vs {want} Hz ({cents} cents) f0 {} half {}",
+            tone_level(&l[SR as usize / 2..], want),
+            tone_level(&l[SR as usize / 2..], want / 2.0)
+        );
+        assert!(
+            cents.abs() < 15.0,
+            "key {key}: {got} Hz vs {want} Hz ({cents} cents)"
+        );
+    }
+}
+
+#[test]
+fn violin_top_notes_stay_on_the_fundamental() {
+    // Autocorrelation is unreliable up here, so compare spectral peaks.
+    let near = |buf: &[f32], f: f32| {
+        (-20..=20)
+            .map(|i| tone_level(buf, f * (1.0 + i as f32 * 0.0007)))
+            .fold(0.0f32, f32::max)
+    };
+    for key in [93u8, 96, 98, 100] {
+        let mut d = fresh("peel.strings.violin");
+        set(d.as_mut(), "vibrato.depth", 0.0);
+        set(d.as_mut(), "vibrato.variation", 0.0);
+        let (l, _) = violin_note(d.as_mut(), key, 0.8, 1.0);
+        let want = 440.0 * 2f32.powf((key as f32 - 69.0) / 12.0);
+        let s = &l[24_000..];
+        let f0 = near(s, want);
+        assert!(f0 > 0.003, "key {key}: fundamental {f0}");
+        assert!(near(s, want / 2.0) < 0.1 * f0, "key {key}: subharmonic");
+    }
+}
+
+#[test]
+fn violin_presets_sound_across_the_range() {
+    let d0 = peel_instruments::descriptors()
+        .iter()
+        .find(|d| d.type_id == "peel.strings.violin")
+        .unwrap();
+    for preset in peel_instruments::presets("peel.strings.violin") {
+        for key in [55u8, 67, 79, 91, 100] {
+            let mut d = fresh("peel.strings.violin");
+            for (k, v) in preset.params {
+                d.set_param(d0.param_by_key(k).unwrap().id, *v);
+            }
+            let (l, r) = render(
+                d.as_mut(),
+                &[note_on(0, key, 0.9, 1), note_off(36_000, key, 1)],
+                60_000,
+                256,
+            );
+            assert!(
+                all_finite(&l) && all_finite(&r),
+                "{} key {key}",
+                preset.name
+            );
+            let body = rms(&l[..60_000]).max(rms(&r[..60_000]));
+            println!(
+                "{} key {key}: rms {body} peak {}",
+                preset.name,
+                peak(&l).max(peak(&r))
+            );
+            assert!(body > 0.001, "{} key {key}: rms {body}", preset.name);
+            assert!(peak(&l).max(peak(&r)) < 1.5, "{} key {key}", preset.name);
+        }
+    }
+}
+
+#[test]
+fn violin_is_silent_after_release_and_has_no_dc() {
+    let mut d = fresh("peel.strings.violin");
+    set(d.as_mut(), "voice.ensemble", 1.0);
+    let ev = [
+        note_on(0, 60, 0.9, 1),
+        note_on(0, 67, 0.9, 2),
+        note_off(48_000, 60, 1),
+        note_off(48_000, 67, 2),
+    ];
+    let (l, r) = render(d.as_mut(), &ev, 48_000 * 6, 512);
+    assert!(d.is_silent());
+    assert_eq!(peak(&l[48_000 * 5..]).max(peak(&r[48_000 * 5..])), 0.0);
+    let mean = l[10_000..48_000].iter().sum::<f32>() / 38_000.0;
+    assert!(
+        mean.abs() < 0.01 * rms(&l[10_000..48_000]).max(1e-6) + 1e-3,
+        "dc {mean}"
+    );
+}
+
+#[test]
+fn violin_pizzicato_decays_and_ensemble_is_wider() {
+    let mut d = fresh("peel.strings.violin");
+    set(d.as_mut(), "bow.style", 1.0);
+    let (l, _) = violin_note(d.as_mut(), 69, 0.9, 3.0);
+    let early = rms(&l[2_000..6_000]);
+    let late = rms(&l[96_000..100_000]);
+    println!("pizz {early} -> {late}");
+    assert!(early > 0.01 && late < early * 0.2, "pizz {early} -> {late}");
+
+    let side = |ens: f32| {
+        let mut d = fresh("peel.strings.violin");
+        set(d.as_mut(), "voice.ensemble", ens);
+        set(d.as_mut(), "voice.width", 1.0);
+        let (l, r) = violin_note(d.as_mut(), 67, 0.8, 1.5);
+        let s: Vec<f32> = l.iter().zip(&r).map(|(a, b)| a - b).collect();
+        rms(&s[24_000..]) / rms(&l[24_000..])
+    };
+    assert!(side(1.0) > side(0.0) + 0.1);
+}
+
+#[test]
+fn violin_legato_glides_between_overlapping_notes() {
+    let mut d = fresh("peel.strings.violin");
+    set(d.as_mut(), "voice.mode", 1.0);
+    set(d.as_mut(), "voice.glide", 0.3);
+    set(d.as_mut(), "vibrato.depth", 0.0);
+    let ev = [
+        note_on(0, 60, 0.8, 1),
+        note_on(48_000, 67, 0.8, 2),
+        note_off(49_000, 60, 1),
+        note_off(96_000, 67, 2),
+    ];
+    let (l, _) = render(d.as_mut(), &ev, 100_000, 256);
+    let before = detect_pitch(&l[30_000..46_000], SR);
+    let mid = detect_pitch(&l[50_000..54_000], SR);
+    let after = detect_pitch(&l[80_000..96_000], SR);
+    let (a, b) = (261.63, 392.0);
+    println!("legato {before} {mid} {after}");
+    assert!((before / a - 1.0).abs() < 0.015, "before {before}");
+    assert!(mid > a * 1.02 && mid < b * 0.995, "mid-glide {mid}");
+    assert!((after / b - 1.0).abs() < 0.015, "after {after}");
+}
+
+#[test]
+fn violin_phrase_analysis() {
+    let mut d = fresh("peel.strings.violin");
+    let (l, _) = violin_note(d.as_mut(), 69, 0.8, 30.0);
+    let w = |a: usize, b: usize| rms(&l[a * 48_000..b * 48_000]);
+    let mean = l.iter().sum::<f32>() / l.len() as f32;
+    println!(
+        "violin A4 30 s: peak {} rms 1-2s {} 14-15s {} 28-30s {} mean {mean}",
+        peak(&l),
+        w(1, 2),
+        w(14, 15),
+        w(28, 30)
+    );
+    assert!(all_finite(&l) && w(28, 30) > 0.5 * w(1, 2) && w(28, 30) < 2.0 * w(1, 2));
+}

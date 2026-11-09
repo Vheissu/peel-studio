@@ -14,6 +14,7 @@
 //! | `peel.keys.tine`   | Tine    | Keys     | FM electric piano                            |
 //! | `peel.keys.grand`  | Grand   | Keys     | Synthesized acoustic piano (modal)           |
 //! | `peel.sampler`     | Sampler | Sampler  | Pitched one-shot / looping sample player     |
+//! | `peel.strings.violin` | Violin | Strings | Bowed-string waveguide, body, ensemble, pizzicato |
 //!
 //! Each instrument is a [`common::Synth`] wrapped in a shared adapter that
 //! implements `Device`: parameters are stored and clamped once, events split
@@ -32,10 +33,11 @@ mod sampler;
 mod snare;
 mod tine;
 mod tom;
+mod violin;
 
 use peel_dsp::{Device, DeviceDescriptor, Preset};
 
-static ALL: [&DeviceDescriptor; 10] = [
+static ALL: [&DeviceDescriptor; 11] = [
     &kick::DESC,
     &snare::DESC,
     &hat::DESC,
@@ -46,6 +48,7 @@ static ALL: [&DeviceDescriptor; 10] = [
     &tine::DESC,
     &grand::DESC,
     &sampler::DESC,
+    &violin::DESC,
 ];
 
 /// Every instrument descriptor, in browser order.
@@ -66,6 +69,7 @@ pub fn create(type_id: &str) -> Option<Box<dyn Device>> {
         "peel.keys.tine" => Some(tine::create()),
         "peel.keys.grand" => Some(grand::create()),
         "peel.sampler" => Some(sampler::create()),
+        "peel.strings.violin" => Some(violin::create()),
         _ => None,
     }
 }
@@ -84,6 +88,7 @@ pub fn presets(type_id: &str) -> &'static [Preset] {
         "peel.keys.tine" => &tine::PRESETS,
         "peel.keys.grand" => &grand::PRESETS,
         "peel.sampler" => &sampler::PRESETS,
+        "peel.strings.violin" => &violin::PRESETS,
         _ => &[],
     }
 }
