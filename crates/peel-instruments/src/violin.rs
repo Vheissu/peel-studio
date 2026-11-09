@@ -39,7 +39,8 @@ use peel_dsp::voice::StealPolicy;
 use peel_dsp::{Device, DeviceDescriptor, DeviceKind, ParamId, Preset, ProcessContext};
 
 use crate::common::{
-    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, lerp, ramp_coef, vel_gain,
+    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, Tilt, Vx, lerp, ramp_coef,
+    vel_gain,
 };
 
 const STYLE: ParamId = 1;
@@ -560,6 +561,16 @@ struct Ctl {
     bend_cents: f32,
 }
 
+impl Ctl {
+    /// The settings for one voice: its own bend.
+    fn with(&self, x: &Vx) -> Ctl {
+        Ctl {
+            bend_cents: x.bend * 100.0,
+            ..*self
+        }
+    }
+}
+
 /// Bow settings shared by the strings of one note.
 #[derive(Clone, Copy)]
 struct Drive {
@@ -782,6 +793,12 @@ struct VioVoice {
     active: bool,
     releasing: bool,
     id: u32,
+    /// Runtime voice ID whose per-note expression this voice plays: the
+    /// note on top of a legato phrase, otherwise `id`.
+    xid: u32,
+    /// Brightness from timbre. A shelf rather than the bridge loss, which
+    /// would change how the bow grips the string.
+    tilt: Tilt,
     pizz: bool,
     n: usize,
     strings: [Str; MAX_STRINGS],
@@ -805,6 +822,8 @@ impl VioVoice {
             active: false,
             releasing: false,
             id: 0,
+            xid: 0,
+            tilt: Tilt::new(),
             pizz: false,
             n: 1,
             strings: std::array::from_fn(|i| {
@@ -917,6 +936,7 @@ impl VioVoice {
             l += o * s.gl * s.og;
             r += o * s.gr * s.og;
         }
+        let (l, r) = self.tilt.tick(l, r);
         let g = self.fade.tick() * self.xgain;
         let (l, r) = (l * g, r * g);
         let a = l.abs().max(r.abs());
@@ -1231,8 +1251,10 @@ impl Violin {
         // The body follows the register being played.
         let (mut sum, mut cnt) = (0.0f32, 0.0f32);
         for v in self.pool.voices.iter_mut().filter(|v| v.active) {
-            v.xgain = ex.gain(v.key);
-            v.update(&ctl);
+            let x = ex.voice(v.xid, v.key);
+            v.xgain = x.gain();
+            v.tilt.set(&x);
+            v.update(&ctl.with(&x));
             if !v.releasing {
                 sum += v.tgt_st;
                 cnt += 1.0;
@@ -1290,12 +1312,16 @@ impl Violin {
         let (variation, width) = (self.variation, self.width);
         let pole = self.ctl.pole;
         let pluck_amp = 0.9 * vel_gain(velocity, self.vel_sens);
-        let xgain = self.expr.gain(key);
-        let bend_cents = self.expr.bend_st() * 100.0;
+        let x = self.expr.voice(id, key);
+        let xgain = x.gain();
         let v = &mut self.pool.voices[slot];
         v.active = true;
         v.releasing = false;
         v.id = id;
+        v.xid = id;
+        v.tilt.prepare(sr);
+        v.tilt.reset();
+        v.tilt.set(&x);
         v.key = key;
         v.xgain = xgain;
         v.pizz = pizz;
@@ -1363,9 +1389,7 @@ impl Violin {
             s.thump_n = if pizz { 0 } else { u32::MAX };
         }
         // Make the delay lengths valid before the first sample.
-        let mut ctl = self.ctl;
-        ctl.bend_cents = bend_cents;
-        v.update(&ctl);
+        v.update(&self.ctl.with(&x));
         v.age_s = 0.0;
         self.leg_slot = slot;
         self.leg_id = id;
@@ -1483,6 +1507,7 @@ impl Synth for Violin {
                 let v = &mut self.pool.voices[slot];
                 v.tgt_st = key as f32;
                 v.key = key;
+                v.xid = id;
                 v.drive.bow = bow;
                 v.vel = velocity;
                 if snap {
@@ -1513,6 +1538,7 @@ impl Synth for Violin {
                 {
                     v.tgt_st = key as f32;
                     v.key = key;
+                    v.xid = self.stack[self.stack_len - 1].id;
                     if snap {
                         v.st = v.tgt_st;
                     }

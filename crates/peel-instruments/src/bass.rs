@@ -751,6 +751,9 @@ pub(crate) struct Bass {
     xgain: f32,
     stack: [Held; STACK],
     stack_len: usize,
+    /// Runtime voice ID of the note on top of the stack; its per-note
+    /// expression drives the single voice.
+    voice_id: u32,
     last_key: Option<f32>,
     // Unsmoothed settings.
     wave: Waveform,
@@ -828,6 +831,7 @@ impl Bass {
             vel_level: 1.0,
             stack: [Held { id: 0, key: 0 }; STACK],
             stack_len: 0,
+            voice_id: 0,
             last_key: None,
             wave: Waveform::Sine,
             mode: 1,
@@ -925,9 +929,10 @@ impl Bass {
         let hold = (1.3 * self.sr / CTRL as f32) as u32;
         let pe = self.pitch_env.level() * self.pitch_env_amt.get();
         let base = self.cur_key + pe;
-        let base = base + safe_bend(base + 1.0, self.expr.bend_st(), 0.45 * self.sr);
         let key = self.target_key.round().clamp(0.0, 127.0) as u8;
-        self.xgain = self.expr.gain(key);
+        let x = self.expr.voice(self.voice_id, key);
+        let base = base + safe_bend(base + 1.0, x.bend, 0.45 * self.sr);
+        self.xgain = x.gain();
         let inv_sr = 1.0 / self.sr;
         let hz = key_to_hz(base);
         self.dt1 = hz * cents_ratio(self.drift_o1.tick(slew, hold) * 3.0 * dr) * inv_sr;
@@ -947,7 +952,7 @@ impl Bass {
             + self.filter_vel.get() * (self.velocity - 0.6) * 3.0
             + self.move_filter.get() * self.lfo_value * 1.5
             + self.drift_cut.tick(slew, hold) * 0.08 * dr
-            + self.expr.octaves(key);
+            + x.cutoff_oct();
         let cutoff =
             (self.cutoff.get().exp() * oct.clamp(-12.0, 12.0).exp2()).clamp(20.0, 0.45 * self.sr);
         let drive = self.drive.get();
@@ -1136,6 +1141,7 @@ impl Synth for Bass {
         }
         self.stack[self.stack_len] = Held { id, key };
         self.stack_len += 1;
+        self.voice_id = id;
 
         let legato = self.mode != 0 && overlapping;
         // Glide: always in Retrigger/Legato; only between overlapping notes
@@ -1168,6 +1174,7 @@ impl Synth for Bass {
             self.glide_on = self.glide_k < 1.0;
             self.target_key = back.key as f32;
             self.last_key = Some(back.key as f32);
+            self.voice_id = back.id;
         }
     }
 

@@ -46,7 +46,8 @@ use peel_dsp::voice::StealPolicy;
 use peel_dsp::{Device, DeviceDescriptor, DeviceKind, ParamId, Preset, ProcessContext};
 
 use crate::common::{
-    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, lerp, ramp_coef, vel_gain,
+    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, Vx, lerp, ramp_coef,
+    vel_gain,
 };
 
 const DECAY: ParamId = 1;
@@ -823,6 +824,8 @@ struct GuitarVoice {
     key: u8,
     /// Aftertouch gain, 1.0 when nothing is pressed.
     xgain: f32,
+    /// Runtime voice ID, for per-note expression.
+    id: u32,
     age: usize,
     start: u64,
     fade: Fade,
@@ -853,6 +856,7 @@ impl GuitarVoice {
             level: 1.0,
             key: 60,
             xgain: 1.0,
+            id: 0,
             age: 0,
             start: 0,
             fade: Fade::new(),
@@ -923,6 +927,18 @@ struct StringParams {
     humbucker: bool,
     /// Live pitch bend in cents.
     bend_cents: f32,
+}
+
+impl StringParams {
+    /// The settings for one voice: its own bend, and timbre lightening or
+    /// darkening the string loss (brighter above 0.5).
+    fn with(&self, x: &Vx) -> StringParams {
+        StringParams {
+            bend_cents: x.bend * 100.0,
+            damping: (self.damping - 0.4 * x.tone).clamp(0.0, 1.0),
+            ..*self
+        }
+    }
 }
 
 impl PoolVoice for GuitarVoice {
@@ -1434,7 +1450,8 @@ impl Guitar {
         let gk = self.glide_k;
         let ex = &self.expr;
         for v in self.pool.voices.iter_mut().filter(|v| v.active) {
-            v.xgain = ex.gain(v.key);
+            let x = ex.voice(v.id, v.key);
+            v.xgain = x.gain();
             if v.pending > 0 {
                 continue;
             }
@@ -1447,7 +1464,7 @@ impl Guitar {
                     v.f_cur * (r * gk).exp()
                 };
             }
-            v.tune(sr, &p, lfo);
+            v.tune(sr, &p.with(&x), lfo);
         }
     }
 
@@ -1653,7 +1670,8 @@ impl Synth for Guitar {
         let pick_noise = self.pick_noise;
         let palm = p.palm;
         let beta = self.pickup_beta();
-        let xgain = self.expr.gain(key);
+        let x = self.expr.voice(id, key);
+        let xgain = x.gain();
 
         {
             let v = &mut self.pool.voices[slot];
@@ -1661,6 +1679,7 @@ impl Synth for Guitar {
             v.released = false;
             v.f0 = f0;
             v.key = key;
+            v.id = id;
             v.xgain = xgain;
             if !legato {
                 v.f_cur = f0;
@@ -1704,7 +1723,7 @@ impl Synth for Guitar {
                 v.a.clear();
                 v.b.clear();
             }
-            v.tune(sr, &p, lfo);
+            v.tune(sr, &p.with(&x), lfo);
         }
         let (pa, pb) = {
             let v = &self.pool.voices[slot];

@@ -19,9 +19,13 @@ use peel_dsp::{
 };
 
 use crate::common::{
-    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, ramp_coef, st_ratio,
-    vel_gain,
+    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, Tilt, ramp_coef,
+    st_ratio, vel_gain,
 };
+
+/// Fastest playback, in source frames per output sample. Far above any
+/// musical use; it keeps extreme per-note bends from skipping whole loops.
+const MAX_STEP: f64 = 32.0;
 
 const START: ParamId = 1;
 const REVERSE: ParamId = 2;
@@ -306,6 +310,10 @@ struct SamplerVoice {
     /// Unbent step magnitude and the pitch ratio applied to `step`.
     base_step: f64,
     applied: f32,
+    /// Runtime voice ID, for per-note expression.
+    id: u32,
+    /// Brightness from timbre.
+    tilt: Tilt,
 }
 
 impl SamplerVoice {
@@ -328,6 +336,8 @@ impl SamplerVoice {
             xgain: 1.0,
             base_step: 1.0,
             applied: 1.0,
+            id: 0,
+            tilt: Tilt::new(),
         }
     }
 
@@ -337,7 +347,7 @@ impl SamplerVoice {
             return;
         }
         self.applied = ratio;
-        self.step = self.step.signum() * self.base_step * ratio as f64;
+        self.step = self.step.signum() * (self.base_step * ratio as f64).min(MAX_STEP.max(self.base_step));
     }
 
     #[inline]
@@ -410,6 +420,7 @@ impl SamplerVoice {
             l = self.filter_l.process(l, peel_dsp::filter::SvfMode::LowPass);
             r = self.filter_r.process(r, peel_dsp::filter::SvfMode::LowPass);
         }
+        (l, r) = self.tilt.tick(l, r);
         let env = self.env.tick();
         let g = env * self.gain * tail * self.fade.tick() * self.xgain;
         if self.env.is_idle() || self.fade.is_done() {
@@ -534,10 +545,11 @@ impl Sampler {
         self.derive();
         self.expr.tick();
         let ex = &self.expr;
-        let ratio = ex.bend_ratio();
         for v in self.pool.voices.iter_mut().filter(|v| v.active) {
-            v.xgain = ex.gain(v.key);
-            v.retune(ratio);
+            let x = ex.voice(v.id, v.key);
+            v.xgain = x.gain();
+            v.retune(x.ratio);
+            v.tilt.set(&x);
         }
         self.pool.sync();
     }
@@ -635,11 +647,16 @@ impl Synth for Sampler {
         let reverse = self.reverse;
         let honors_off = self.gate_mode || loop_mode != LoopMode::Off;
         let (c, r, sr, adsr) = (self.cutoff_hz, self.resonance, self.sr, self.adsr);
-        let (bend_ratio, xgain) = (self.expr.bend_ratio(), self.expr.gain(key));
+        let x = self.expr.voice(id, key);
+        let (bend_ratio, xgain) = (x.ratio, x.gain());
         let v = &mut self.pool.voices[slot];
         v.active = true;
         v.key = key;
+        v.id = id;
         v.xgain = xgain;
+        v.tilt.prepare(sr);
+        v.tilt.reset();
+        v.tilt.set(&x);
         v.base_step = ratio;
         v.applied = 1.0;
         v.step = if reverse { -ratio } else { ratio };

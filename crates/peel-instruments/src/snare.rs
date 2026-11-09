@@ -13,8 +13,8 @@ use peel_dsp::voice::StealPolicy;
 use peel_dsp::{Device, DeviceDescriptor, DeviceKind, ParamId, Preset, ProcessContext};
 
 use crate::common::{
-    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, drive_curve, key_offset,
-    lerp, ramp_coef, shape, st_ratio, vel_gain,
+    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, TIMBRE_OCTAVES, Vx,
+    drive_curve, key_offset, lerp, ramp_coef, shape, st_ratio, vel_gain,
 };
 
 const PITCH: ParamId = 1;
@@ -359,9 +359,21 @@ struct SnareVoice {
     xgain: f32,
     /// Pitch bend ratio, 1.0 when centred.
     bend: f32,
+    /// Timbre the wire band is tuned for (bipolar, 0 neutral) and its base.
+    tone: f32,
+    band_hz: f32,
 }
 
 impl SnareVoice {
+    /// Timbre moves the wire band up or down by up to two octaves.
+    fn set_tone(&mut self, x: &Vx, sr: f32) {
+        if x.tone != self.tone {
+            self.tone = x.tone;
+            self.band
+                .set_q((self.band_hz * x.tone_ratio(TIMBRE_OCTAVES)).min(0.4 * sr), 0.8, sr);
+        }
+    }
+
     fn new() -> SnareVoice {
         let mut snap_hp = OnePole::new();
         snap_hp.set_cutoff(2_500.0, 48_000.0);
@@ -407,6 +419,8 @@ impl SnareVoice {
             fade: Fade::new(),
             xgain: 1.0,
             bend: 1.0,
+            tone: 0.0,
+            band_hz: 4_800.0,
         }
     }
 
@@ -558,10 +572,12 @@ impl Snare {
         self.derive();
         self.expr.tick();
         let ex = &self.expr;
-        let ratio = ex.bend_ratio();
-        self.pool.for_active(|v, key| {
-            v.xgain = ex.gain(key);
-            v.bend = ratio;
+        let sr = self.sr;
+        self.pool.for_active_id(|v, key, id| {
+            let x = ex.voice(id, key);
+            v.xgain = x.gain();
+            v.bend = x.ratio;
+            v.set_tone(&x, sr);
         });
     }
 }
@@ -611,12 +627,11 @@ impl Synth for Snare {
         let f3 = (f2 * 1.27).min(0.4 * sr);
         let center = (self.noise_tone * ratio.sqrt() * lerp(0.7, 1.0, velocity)).min(0.4 * sr);
         let hits = self.hits;
-        let xgain0 = self.expr.gain(key);
-        let bend0 = self.expr.bend_ratio();
+        let x = self.expr.voice(id, key);
         let v = &mut self.pool.voices[slot];
         v.active = true;
-        v.xgain = xgain0;
-        v.bend = bend0;
+        v.xgain = x.gain();
+        v.bend = x.ratio;
         v.ph1 = 0.0;
         v.ph2 = 0.0;
         v.ph3 = 0.0;
@@ -637,7 +652,10 @@ impl Synth for Snare {
         v.wires_fast.set_t60(self.noise_decay * 0.22, sr);
         v.wires_fast.trigger(1.0, 0.000_5, sr);
         v.noise.reseed(hits);
+        v.band_hz = center;
+        v.tone = 0.0;
         v.band.set_q(center, 0.8, sr);
+        v.set_tone(&x, sr);
         v.band.reset();
         v.snap_hp.set_cutoff(2_500.0, sr);
         v.snap_hp.reset();

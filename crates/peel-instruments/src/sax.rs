@@ -511,6 +511,9 @@ struct SaxVoice {
     /// Live expression, set by the synth each control interval.
     bend: f32,
     xgain: f32,
+    /// Runtime voice ID whose per-note expression this voice plays (in mono,
+    /// the note on top of the key stack).
+    id: u32,
     oct: f32,
     cur_key: f32,
     target_key: f32,
@@ -593,6 +596,7 @@ impl SaxVoice {
             fade: Fade::new(),
             bend: 0.0,
             xgain: 1.0,
+            id: 0,
             oct: 0.0,
             cur_key: 60.0,
             target_key: 60.0,
@@ -1123,9 +1127,10 @@ impl Sax {
         for v in &mut self.pool.voices {
             if v.active {
                 let key = v.target_key.round().clamp(0.0, 127.0) as u8;
-                v.bend = ex.bend_st();
-                v.xgain = ex.gain(key);
-                v.oct = ex.octaves(key);
+                let x = ex.voice(v.id, key);
+                v.bend = x.bend;
+                v.xgain = x.gain();
+                v.oct = x.cutoff_oct();
                 v.control(&sh);
             }
         }
@@ -1229,12 +1234,14 @@ impl Synth for Sax {
             let glide = self.sh.glide_k < 1.0;
             let v = &mut self.pool.voices[0];
             v.glide_on = glide && v.active;
+            v.id = id;
             v.start(key, velocity, sens, !overlapping, &breath);
         } else {
             let slot = self.pool.begin(key, id);
             let v = &mut self.pool.voices[slot];
             v.active = false;
             v.glide_on = false;
+            v.id = id;
             v.start(key, velocity, sens, true, &breath);
         }
     }
@@ -1256,6 +1263,7 @@ impl Synth for Sax {
                 let back = self.stack[self.stack_len - 1];
                 v.glide_on = glide;
                 v.target_key = back.key as f32;
+                v.id = back.id;
             }
         } else {
             self.pool.release_id(id, SaxVoice::release);

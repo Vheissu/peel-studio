@@ -15,8 +15,8 @@ use peel_dsp::voice::StealPolicy;
 use peel_dsp::{Device, DeviceDescriptor, DeviceKind, ParamId, Preset, ProcessContext};
 
 use crate::common::{
-    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, drive_curve, key_offset,
-    lerp, ramp_coef, shape, st_ratio, vel_gain,
+    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, TIMBRE_OCTAVES,
+    drive_curve, key_offset, lerp, ramp_coef, shape, st_ratio, vel_gain,
 };
 
 const PITCH: ParamId = 1;
@@ -366,6 +366,8 @@ struct KickVoice {
     xgain: f32,
     /// Pitch bend ratio, 1.0 when centred.
     bend: f32,
+    /// Tone filter multiplier from timbre, 1.0 at neutral.
+    tone_r: f32,
 }
 
 impl KickVoice {
@@ -400,6 +402,7 @@ impl KickVoice {
             fade: Fade::new(),
             xgain: 1.0,
             bend: 1.0,
+            tone_r: 1.0,
         }
     }
 
@@ -551,7 +554,7 @@ impl Kick {
         self.tone_hz = self.tone.get().exp();
         self.level_gain = db_to_gain(self.level.get()) * 0.85;
         for v in self.pool.voices.iter_mut().filter(|v| v.active) {
-            v.lp.set_cutoff(self.tone_hz * v.bright, self.sr);
+            v.lp.set_cutoff(self.tone_hz * v.bright * v.tone_r, self.sr);
         }
     }
 
@@ -564,10 +567,11 @@ impl Kick {
         self.derive();
         self.expr.tick();
         let ex = &self.expr;
-        let ratio = ex.bend_ratio();
-        self.pool.for_active(|v, key| {
-            v.xgain = ex.gain(key);
-            v.bend = ratio;
+        self.pool.for_active_id(|v, key, id| {
+            let x = ex.voice(id, key);
+            v.xgain = x.gain();
+            v.bend = x.ratio;
+            v.tone_r = x.tone_ratio(TIMBRE_OCTAVES);
         });
     }
 }
@@ -618,12 +622,11 @@ impl Synth for Kick {
         let f_snap = (f0 * sweep_ratio * (snap_ratio - 1.0))
             .min(0.4 * sr - f0 - f_span)
             .max(0.0);
-        let xgain0 = self.expr.gain(key);
-        let bend0 = self.expr.bend_ratio();
+        let x = self.expr.voice(id, key);
         let v = &mut self.pool.voices[slot];
         v.active = true;
-        v.xgain = xgain0;
-        v.bend = bend0;
+        v.xgain = x.gain();
+        v.bend = x.ratio;
         v.phase = 0.0;
         v.f0 = f0;
         v.f_span = f_span;
@@ -636,7 +639,8 @@ impl Synth for Kick {
         v.amp.trigger(1.0, 0.000_4, sr);
         v.click_env = 1.0;
         v.click_coef = (-1.0 / (0.002 * sr)).exp();
-        v.click_gain = self.click * 0.9 * lerp(0.35, 1.0, velocity);
+        // Timbre also sets how hard the beater clicks.
+        v.click_gain = self.click * 0.9 * lerp(0.35, 1.0, velocity) * x.tone_ratio(1.0);
         v.click_atk = 0.0;
         v.click_atk_inc = 1.0 / (0.000_3 * sr);
         v.band
@@ -649,7 +653,8 @@ impl Synth for Kick {
         v.noise.reseed(self.hits);
         v.bright = lerp(0.3, 1.0, velocity.sqrt());
         v.push = lerp(0.7, 1.0, velocity);
-        v.lp.set_cutoff(self.tone_hz * v.bright, sr);
+        v.tone_r = x.tone_ratio(TIMBRE_OCTAVES);
+        v.lp.set_cutoff(self.tone_hz * v.bright * v.tone_r, sr);
         v.lp.reset();
         v.dc.set_cutoff(18.0, sr);
         v.dc.reset();

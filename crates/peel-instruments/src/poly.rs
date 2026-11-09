@@ -1142,6 +1142,9 @@ struct PolyVoice {
     /// Aftertouch gain, 1.0 when nothing is pressed.
     xgain: f32,
     fade: Fade,
+    /// Runtime voice ID whose per-note expression this voice plays (in mono
+    /// modes, the note on top of the key stack).
+    id: u32,
 }
 
 impl PolyVoice {
@@ -1181,6 +1184,7 @@ impl PolyVoice {
             vel_gain: 1.0,
             xgain: 1.0,
             fade: Fade::new(),
+            id: 0,
         }
     }
 
@@ -1600,11 +1604,11 @@ impl Poly {
         let m = self.m;
         self.expr.tick();
         let ex = &self.expr;
-        let bend = ex.bend_st();
         for v in self.pool.voices.iter_mut().filter(|v| v.active) {
             let key = v.target_key.round().clamp(0.0, 127.0) as u8;
-            v.xgain = ex.gain(key);
-            v.control(&m, bend, ex.octaves(key));
+            let x = ex.voice(v.id, key);
+            v.xgain = x.gain();
+            v.control(&m, x.bend, x.cutoff_oct());
         }
         self.pool.sync();
     }
@@ -1621,7 +1625,7 @@ impl Poly {
 
     /// Initializes `slot` for a new note. With `fresh` false the voice keeps
     /// sounding (legato): only pitch target and velocity change.
-    fn start_voice(&mut self, slot: usize, key: u8, velocity: f32, fresh: bool, retrigger: bool) {
+    fn start_voice(&mut self, slot: usize, key: u8, id: u32, velocity: f32, fresh: bool, retrigger: bool) {
         self.notes = self.notes.wrapping_add(1);
         let target = key as f32;
         let glide_from = if self.m.glide_k < 1.0 {
@@ -1639,6 +1643,7 @@ impl Poly {
         let vel_amp = vel_gain(velocity, self.vel_amp);
         let v = &mut self.pool.voices[slot];
         v.active = true;
+        v.id = id;
         if fresh {
             v.cur_key = glide_from;
         }
@@ -1709,8 +1714,9 @@ impl Poly {
             v.pitch_env.trigger();
         }
         let key = target.round().clamp(0.0, 127.0) as u8;
-        v.xgain = self.expr.gain(key);
-        v.control(&m, self.expr.bend_st(), self.expr.octaves(key));
+        let x = self.expr.voice(id, key);
+        v.xgain = x.gain();
+        v.control(&m, x.bend, x.cutoff_oct());
         if fresh {
             // Start the filters at their first coefficients rather than
             // gliding in from stale ones.
@@ -1734,7 +1740,7 @@ impl Poly {
         // Legato keeps the envelopes running when notes overlap; Mono
         // retriggers them every note.
         let retrigger = !(self.voice_mode == 2 && overlapping);
-        self.start_voice(0, key, velocity, !reuse, retrigger);
+        self.start_voice(0, key, id, velocity, !reuse, retrigger);
     }
 }
 
@@ -1852,7 +1858,7 @@ impl Synth for Poly {
             return;
         }
         let slot = self.pool.begin(key, id);
-        self.start_voice(slot, key, velocity, true, true);
+        self.start_voice(slot, key, id, velocity, true, true);
     }
 
     fn note_off(&mut self, _key: u8, _velocity: f32, id: u32) {
@@ -1868,6 +1874,7 @@ impl Synth for Poly {
                 // Fall back to the previous held key without retriggering.
                 let back = self.stack[self.stack_len - 1];
                 self.pool.voices[0].target_key = back.key as f32;
+                self.pool.voices[0].id = back.id;
                 self.last_key = Some(back.key as f32);
             }
         }

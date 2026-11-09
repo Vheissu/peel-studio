@@ -26,8 +26,8 @@ use peel_dsp::voice::StealPolicy;
 use peel_dsp::{Device, DeviceDescriptor, DeviceKind, ParamId, Preset, ProcessContext};
 
 use crate::common::{
-    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, Synth, key_offset, lerp, ramp_coef, st_ratio,
-    vel_gain,
+    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, Synth, TIMBRE_OCTAVES, Vx, key_offset, lerp,
+    ramp_coef, st_ratio, vel_gain,
 };
 
 const TUNE: ParamId = 1;
@@ -385,10 +385,24 @@ struct HatVoice {
     fade: Fade,
     /// Aftertouch gain, 1.0 when nothing is pressed.
     xgain: f32,
+    /// Timbre the top filters are set for (bipolar, 0 neutral) and their base.
+    tone: f32,
+    bright_hz: f32,
     choke_ms: f32,
 }
 
 impl HatVoice {
+    /// Timbre moves the bright band and hiss by up to two octaves.
+    fn set_tone(&mut self, x: &Vx, sr: f32) {
+        if x.tone != self.tone {
+            self.tone = x.tone;
+            let hz = (self.bright_hz * x.tone_ratio(TIMBRE_OCTAVES)).min(0.42 * sr);
+            self.high.set_q(hz, 0.8, sr);
+            self.hiss_l.set_q(hz * 0.8, 0.7, sr);
+            self.hiss_r.set_q(hz * 0.8, 0.7, sr);
+        }
+    }
+
     fn new() -> HatVoice {
         HatVoice {
             active: false,
@@ -428,6 +442,8 @@ impl HatVoice {
             gain: 1.0,
             fade: Fade::new(),
             xgain: 1.0,
+            tone: 0.0,
+            bright_hz: 6_500.0,
             choke_ms: 6.0,
         }
     }
@@ -596,7 +612,12 @@ impl Hat {
         self.derive();
         self.expr.tick();
         let ex = &self.expr;
-        self.pool.for_active(|v, key| v.xgain = ex.gain(key));
+        let sr = self.sr;
+        self.pool.for_active_id(|v, key, id| {
+            let x = ex.voice(id, key);
+            v.xgain = x.gain();
+            v.set_tone(&x, sr);
+        });
     }
 }
 
@@ -652,10 +673,11 @@ impl Synth for Hat {
         let bright = (self.bright * ratio.sqrt() * vb).min(0.42 * sr);
         let color = (self.color * ratio.sqrt()).min(0.42 * sr);
         let hits = self.hits;
-        let xgain0 = self.expr.gain(key);
+        // Inharmonic metal has no pitch to bend; pressure and timbre apply.
+        let x = self.expr.voice(id, key);
         let v = &mut self.pool.voices[slot];
         v.active = true;
-        v.xgain = xgain0;
+        v.xgain = x.gain();
         for (i, &hz) in BANK.iter().enumerate() {
             v.dt[i] = (hz * ratio / sr).min(0.45);
             // Fixed, spread phases so every hit has the same metallic attack.
@@ -673,6 +695,9 @@ impl Synth for Hat {
             f.set_q(bright * 0.8, 0.7, sr);
             f.reset();
         }
+        v.bright_hz = bright;
+        v.tone = 0.0;
+        v.set_tone(&x, sr);
         let atk = self.bloom;
         v.fast.set_t60(self.decay * 0.3, sr);
         v.fast.trigger(1.0, atk.min(0.004), sr);

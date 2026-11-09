@@ -189,7 +189,7 @@ pub static DESC: DeviceDescriptor = DeviceDescriptor {
 };
 
 use crate::common::{
-    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, ramp_coef,
+    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, Vx, ramp_coef,
     vel_gain,
 };
 use peel_dsp::delay::{AllpassTap, DelayLine};
@@ -459,6 +459,8 @@ impl StringLoop {
 struct Voice {
     active: bool,
     key: u8,
+    /// Runtime voice ID, for per-note expression.
+    id: u32,
     velocity: f32,
     held: bool,
     strings: [StringLoop; 2],
@@ -476,6 +478,7 @@ impl Voice {
         Self {
             active: false,
             key: 60,
+            id: 0,
             velocity: 0.0,
             held: false,
             strings: std::array::from_fn(|_| StringLoop::new(sr)),
@@ -489,27 +492,29 @@ impl Voice {
             bow_level: 0.0,
         }
     }
-    fn derive(&mut self, p: &[f32; 18], sr: f32, expr: &Expression) {
-        let f = key_to_hz(self.key as f32) * expr.bend_ratio();
+    fn derive(&mut self, p: &[f32; 18], sr: f32, x: Vx) {
+        let f = key_to_hz(self.key as f32) * x.ratio;
         let decay = if !self.held && p[13] >= 0.5 {
             p[4].min(p[14])
         } else {
             p[4]
         };
-        self.strings[0].tune(f, decay, p[5], sr);
+        // Timbre opens or closes the string damping: brighter above 0.5.
+        let damping = (p[5] - 0.4 * x.tone).clamp(0.0, 1.0);
+        self.strings[0].tune(f, decay, damping, sr);
         self.strings[1].tune(
             f * RATIOS[p[6].round() as usize] * (p[7] / 1200.0).exp2(),
             decay,
-            p[5],
+            damping,
             sr,
         );
         self.life_coef = (-6.907755 / (decay * sr)).exp();
         self.bow_level = if self.held {
-            p[3] * (1.0 + 0.5 * expr.pressure(self.key)) * self.velocity * 0.025
+            p[3] * (1.0 + 0.5 * x.pressure) * self.velocity * 0.025
         } else {
             0.0
         };
-        self.gain = 0.85 * vel_gain(self.velocity, p[16]) * db_to_gain(p[17]) * expr.gain(self.key);
+        self.gain = 0.85 * vel_gain(self.velocity, p[16]) * db_to_gain(p[17]) * x.gain();
         for (f, hz) in self.body.iter_mut().zip(BODIES[p[11].round() as usize]) {
             f.set_q(hz, 2.5, sr);
         }
@@ -558,7 +563,7 @@ impl Zither {
         }
         self.expr.tick();
         for v in self.pool.voices.iter_mut().filter(|v| v.active) {
-            v.derive(&self.values, self.sr, &self.expr)
+            v.derive(&self.values, self.sr, self.expr.voice(v.id, v.key))
         }
     }
 }
@@ -612,12 +617,13 @@ impl Synth for Zither {
         }
         v.active = true;
         v.key = key;
+        v.id = id;
         v.velocity = velocity;
         v.held = true;
         v.life = 1.0;
         v.fade.reset();
         v.noise.reseed(self.hits);
-        v.derive(&self.values, self.sr, &self.expr);
+        v.derive(&self.values, self.sr, self.expr.voice(id, key));
         let tone = self.values[1] * (0.5 + velocity).min(2.0);
         for string in &mut v.strings {
             string.excite(

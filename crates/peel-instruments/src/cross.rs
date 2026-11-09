@@ -202,7 +202,7 @@ pub static DESC: DeviceDescriptor = DeviceDescriptor {
 
 use crate::analog::Down2;
 use crate::common::{
-    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, ramp_coef,
+    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, Vx, ramp_coef,
     vel_gain,
 };
 use peel_dsp::envelope::{Adsr, Decay};
@@ -327,6 +327,8 @@ pub static PRESETS: [Preset; 7] = [
 struct Voice {
     active: bool,
     key: u8,
+    /// Runtime voice ID, for per-note expression.
+    id: u32,
     velocity: f32,
     phase: [f32; 2],
     last2: f32,
@@ -344,6 +346,7 @@ impl Voice {
         Self {
             active: false,
             key: 60,
+            id: 0,
             velocity: 0.0,
             phase: [0.0; 2],
             last2: 0.0,
@@ -357,8 +360,8 @@ impl Voice {
             gain: 0.0,
         }
     }
-    fn derive(&mut self, p: &[f32; 19], sr: f32, expr: &Expression) {
-        let f = key_to_hz(self.key as f32) * expr.bend_ratio();
+    fn derive(&mut self, p: &[f32; 19], sr: f32, x: Vx) {
+        let f = key_to_hz(self.key as f32) * x.ratio;
         self.dt = [
             (f / (2.0 * sr)).min(0.45),
             (f * (p[2] / 12.0 + p[3] / 1200.0).exp2() / (2.0 * sr)).min(0.45),
@@ -366,12 +369,12 @@ impl Voice {
         let cutoff = p[10]
             * (0.5 * (self.key as f32 - 60.0) / 12.0
                 + p[12] * self.mod_env.level()
-                + expr.octaves(self.key))
+                + x.cutoff_oct())
             .exp2();
         self.filter.set(cutoff.min(0.45 * sr), p[11], 1.0, sr);
         self.amp.set(p[13], p[14], p[15], p[16], false);
         self.mod_env.set_t60(p[9], sr);
-        self.gain = 0.3 * db_to_gain(p[18]) * vel_gain(self.velocity, p[17]) * expr.gain(self.key);
+        self.gain = 0.3 * db_to_gain(p[18]) * vel_gain(self.velocity, p[17]) * x.gain();
     }
     fn pair(&mut self, p: &[f32; 19], env: f32) -> f32 {
         let mod_scale =
@@ -465,7 +468,7 @@ impl Cross {
         }
         self.expr.tick();
         for v in self.pool.voices.iter_mut().filter(|v| v.active) {
-            v.derive(&self.values, self.sr, &self.expr)
+            v.derive(&self.values, self.sr, self.expr.voice(v.id, v.key))
         }
     }
 }
@@ -499,6 +502,7 @@ impl Synth for Cross {
         let v = &mut self.pool.voices[slot];
         v.active = true;
         v.key = key;
+        v.id = id;
         v.velocity = velocity;
         v.phase = [0.0, 0.17];
         v.last2 = 0.0;
@@ -509,7 +513,7 @@ impl Synth for Cross {
         v.amp.reset();
         v.mod_env.set_t60(self.values[9], self.sr);
         v.mod_env.trigger(1.0, 0.001, self.sr);
-        v.derive(&self.values, self.sr, &self.expr);
+        v.derive(&self.values, self.sr, self.expr.voice(id, key));
         v.amp.note_on();
     }
     fn note_off(&mut self, _: u8, _: f32, id: u32) {

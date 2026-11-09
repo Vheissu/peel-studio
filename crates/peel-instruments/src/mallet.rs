@@ -174,7 +174,7 @@ pub static DESC: DeviceDescriptor = DeviceDescriptor {
 };
 
 use crate::common::{
-    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, ramp_coef,
+    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, Vx, ramp_coef,
     vel_gain,
 };
 use peel_dsp::noise::Noise;
@@ -320,6 +320,8 @@ impl Mode {
 struct Voice {
     active: bool,
     key: u8,
+    /// Runtime voice ID, for per-note expression.
+    id: u32,
     velocity: f32,
     modes: [Mode; 8],
     fade: Fade,
@@ -338,6 +340,7 @@ impl Voice {
         Self {
             active: false,
             key: 60,
+            id: 0,
             velocity: 0.0,
             modes: [Mode::default(); 8],
             fade: Fade::new(),
@@ -352,12 +355,14 @@ impl Voice {
             max_age: 0,
         }
     }
-    fn derive(&mut self, p: &[f32; 17], sr: f32, expr: &Expression) {
-        let f = key_to_hz(60.0 + p[12] + p[13] * (self.key as f32 - 60.0)) * expr.bend_ratio();
+    fn derive(&mut self, p: &[f32; 17], sr: f32, x: Vx) {
+        let f = key_to_hz(60.0 + p[12] + p[13] * (self.key as f32 - 60.0)) * x.ratio;
         let tension =
             (p[9] * self.velocity * (-(self.age as f32) / (0.04 * sr)).exp() / 12.0).exp2();
         let ratios = RATIOS[p[4].round() as usize];
         let mut longest = 0.0f32;
+        let tilt_step = x.tone_ratio(0.35);
+        let mut tilt = 1.0f32;
         for (i, m) in self.modes.iter_mut().enumerate() {
             let ratio = 1.0 + (ratios[i] - 1.0) * (1.0 + 0.5 * p[8]);
             let hz = f * ratio * tension;
@@ -380,9 +385,12 @@ impl Voice {
                             .sin()
                             .abs())
                     / ((i + 1) as f32).sqrt()
+                    * tilt
             } else {
                 0.0
             };
+            // Timbre tilts the spectrum: upper modes louder above 0.5.
+            tilt *= tilt_step;
         }
         self.max_age = (longest * 1.7 * sr) as usize
             + self.pulse_len
@@ -391,7 +399,7 @@ impl Voice {
             } else {
                 0
             };
-        self.gain = 0.55 * vel_gain(self.velocity, p[15]) * db_to_gain(p[16]) * expr.gain(self.key);
+        self.gain = 0.55 * vel_gain(self.velocity, p[15]) * db_to_gain(p[16]) * x.gain();
     }
 }
 impl PoolVoice for Voice {
@@ -437,7 +445,7 @@ impl Mallet {
         }
         self.expr.tick();
         for v in self.pool.voices.iter_mut().filter(|v| v.active) {
-            v.derive(&self.values, self.sr, &self.expr)
+            v.derive(&self.values, self.sr, self.expr.voice(v.id, v.key))
         }
     }
 }
@@ -472,18 +480,21 @@ impl Synth for Mallet {
         let v = &mut self.pool.voices[slot];
         v.active = true;
         v.key = key;
+        v.id = id;
         v.velocity = velocity;
         v.modes = [Mode::default(); 8];
         v.fade.reset();
         v.age = 0;
         v.released = false;
         v.release_at = 0;
-        let hard = (p[0] + p[1] * (velocity - 0.7)).clamp(0.0, 1.0);
+        // Timbre picks a harder or softer mallet as well as tilting the modes.
+        let x = self.expr.voice(id, key);
+        let hard = (p[0] + p[1] * (velocity - 0.7) + 0.4 * x.tone).clamp(0.0, 1.0);
         v.pulse_len = ((0.006 + (0.00025 - 0.006) * hard) * self.sr).max(2.0) as usize;
         v.noise.reseed(self.hits);
         v.noise_env = p[2] * 0.035;
         v.noise_coef = (-6.907755 / (p[3] * self.sr)).exp();
-        v.derive(p, self.sr, &self.expr);
+        v.derive(p, self.sr, x);
     }
     fn note_off(&mut self, _: u8, _: f32, id: u32) {
         self.pool.release_id(id, |v| {

@@ -95,6 +95,27 @@ fn audio_path_never_allocates() {
                 kind,
             });
         }
+        // Per-voice snapshots, including more voices than the table holds
+        // (eviction) and a snapshot arriving before its note.
+        for i in 0..80u32 {
+            events.push(DeviceEvent {
+                offset: 160 + i,
+                kind: EventKind::VoiceExpression {
+                    voice: i,
+                    pitch: -120.0 + 3.0 * i as f32,
+                    pressure: (i % 5) as f32 * 0.25,
+                    timbre: (i % 3) as f32 * 0.5,
+                },
+            });
+        }
+        events.push(DeviceEvent {
+            offset: 245,
+            kind: EventKind::NoteOn {
+                key: 60,
+                velocity: 0.7,
+                voice: 77,
+            },
+        });
         events.push(DeviceEvent {
             offset: 200,
             kind: EventKind::NoteOff {

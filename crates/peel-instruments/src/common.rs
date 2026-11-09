@@ -106,7 +106,9 @@ impl<S: Synth> Instrument<S> {
                 };
                 // A new strike inherits channel pressure, not a previous
                 // strike's per-key aftertouch (including its smoothing tail).
-                self.synth.expression().clear_key(key);
+                let ex = self.synth.expression();
+                ex.clear_key(key);
+                ex.claim(voice);
                 self.synth.note_on(key.min(127), vel, voice);
             }
             EventKind::NoteOff {
@@ -119,6 +121,7 @@ impl<S: Synth> Instrument<S> {
                 } else {
                     0.0
                 };
+                self.synth.expression().release(voice);
                 self.synth.note_off(key.min(127), vel, voice);
             }
             EventKind::Param { id, value } => self.apply(id, value),
@@ -129,11 +132,43 @@ impl<S: Synth> Instrument<S> {
             EventKind::PolyPressure { key, value } => {
                 self.synth.expression().set_poly(key, value);
             }
-            EventKind::ResetExpression => self.synth.expression().reset(),
+            EventKind::VoiceExpression {
+                voice,
+                pitch,
+                pressure,
+                timbre,
+            } => self.synth.expression().set_voice(voice, pitch, pressure, timbre),
+            // Live controllers return to centre; a sequenced note keeps the
+            // curve it is playing.
+            EventKind::ResetExpression => self.synth.expression().reset_shared(),
             EventKind::AllNotesOff => self.synth.all_notes_off(),
             EventKind::AllSoundOff => {
                 self.synth.expression().reset();
                 self.synth.all_sound_off();
+            }
+        }
+    }
+}
+
+impl<S: Synth> Instrument<S> {
+    /// A note's snapshot may be planned right after its NoteOn at the same
+    /// sample. Applying it first starts the note on its own pitch, pressure
+    /// and timbre instead of gliding in from the shared state.
+    fn prime(&mut self, events: &[DeviceEvent], at: usize) {
+        let EventKind::NoteOn { voice, .. } = events[at].kind else {
+            return;
+        };
+        let offset = events[at].offset;
+        for e in events[at + 1..].iter().take_while(|e| e.offset == offset) {
+            if let EventKind::VoiceExpression {
+                voice: v,
+                pitch,
+                pressure,
+                timbre,
+            } = e.kind
+                && v == voice
+            {
+                self.synth.expression().prime(voice, pitch, pressure, timbre);
             }
         }
     }
@@ -159,6 +194,7 @@ impl<S: Synth> Device for Instrument<S> {
 
     fn reset(&mut self) {
         self.synth.reset();
+        self.synth.expression().reset();
     }
 
     fn set_param(&mut self, id: ParamId, value: f32) {
@@ -190,6 +226,7 @@ impl<S: Synth> Device for Instrument<S> {
         };
         while pos < frames {
             while next_event < events.len() && (events[next_event].offset as usize) <= pos {
+                self.prime(events, next_event);
                 self.handle(events[next_event].kind);
                 next_event += 1;
             }
@@ -206,6 +243,7 @@ impl<S: Synth> Device for Instrument<S> {
         // Events at or past the end of the block (not expected) still apply so
         // note-offs are never lost.
         while next_event < events.len() {
+            self.prime(events, next_event);
             self.handle(events[next_event].kind);
             next_event += 1;
         }
@@ -353,11 +391,12 @@ impl<V: PoolVoice> Pool<V> {
         }
     }
 
-    /// Calls `f` on each active voice with the key it was started for.
-    pub(crate) fn for_active(&mut self, mut f: impl FnMut(&mut V, u8)) {
+    /// Calls `f` on each active voice with its key and runtime voice ID.
+    pub(crate) fn for_active_id(&mut self, mut f: impl FnMut(&mut V, u8, u32)) {
         for (i, v) in self.voices.iter_mut().enumerate() {
             if v.is_active() {
-                f(v, self.alloc.slot(i).key);
+                let s = self.alloc.slot(i);
+                f(v, s.key, s.id);
             }
         }
     }
@@ -411,14 +450,118 @@ pub(crate) fn st_ratio(st: f32) -> f32 {
     (st * (std::f32::consts::LN_2 / 12.0)).exp()
 }
 
-/// Largest pitch displacement honoured, in semitones.
+/// Largest legacy (instrument-wide) pitch displacement, in semitones.
 pub(crate) const BEND_MAX: f32 = 48.0;
+/// Largest per-note pitch displacement, in semitones (MPE manager + member).
+pub(crate) const NOTE_BEND_MAX: f32 = 120.0;
 /// Gain added at full pressure: `1 + 0.6 * p` (about +4 dB).
 pub(crate) const PRESSURE_GAIN: f32 = 0.6;
 /// Filter cutoff opened at full pressure, in octaves.
 pub(crate) const PRESSURE_OCTAVES: f32 = 0.75;
+/// Cutoff moved by timbre (CC74) at either extreme, in octaves.
+pub(crate) const TIMBRE_OCTAVES: f32 = 2.0;
+/// Per-note expression entries kept at once. Larger than any voice pool, so
+/// eviction only ever drops long-finished release tails.
+const SCOPED: usize = 64;
 
-/// Transient pitch bend and aftertouch for one instrument.
+/// The expression one voice should play with.
+///
+/// For a voice without its own snapshot these are exactly the legacy shared
+/// values (instrument bend, channel and per-key pressure, neutral timbre).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Vx {
+    /// Pitch displacement in semitones.
+    pub bend: f32,
+    /// `2^(bend/12)`, exactly 1.0 when centred.
+    pub ratio: f32,
+    /// Pressure 0..1.
+    pub pressure: f32,
+    /// Timbre as a bipolar amount -1..1; exactly 0.0 at the neutral 0.5.
+    pub tone: f32,
+}
+
+impl Vx {
+    /// Gain multiplier from pressure.
+    #[inline]
+    pub(crate) fn gain(&self) -> f32 {
+        1.0 + PRESSURE_GAIN * self.pressure
+    }
+
+    /// Cutoff offset from pressure, in octaves.
+    #[inline]
+    pub(crate) fn octaves(&self) -> f32 {
+        PRESSURE_OCTAVES * self.pressure
+    }
+
+    /// Cutoff offset from pressure and timbre together, in octaves.
+    #[inline]
+    pub(crate) fn cutoff_oct(&self) -> f32 {
+        self.octaves() + TIMBRE_OCTAVES * self.tone
+    }
+
+    /// Multiplier for a brightness-like frequency: `2^(tone * octaves)`,
+    /// exactly 1.0 at neutral timbre.
+    #[inline]
+    pub(crate) fn tone_ratio(&self, octaves: f32) -> f32 {
+        if self.tone == 0.0 {
+            1.0
+        } else {
+            (self.tone * octaves * std::f32::consts::LN_2).exp()
+        }
+    }
+
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Life {
+    /// Not yet claimed by a NoteOn: a snapshot that arrived before its note,
+    /// or one for a voice that was already sounding.
+    Pending,
+    Held,
+    Released,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Scoped {
+    id: u32,
+    life: Life,
+    stamp: u32,
+    pitch_t: f32,
+    pitch: f32,
+    ratio: f32,
+    press_t: f32,
+    press: f32,
+    tone_t: f32,
+    tone: f32,
+}
+
+impl Scoped {
+    const EMPTY: Scoped = Scoped {
+        id: 0,
+        life: Life::Pending,
+        stamp: 0,
+        pitch_t: 0.0,
+        pitch: 0.0,
+        ratio: 1.0,
+        press_t: 0.0,
+        press: 0.0,
+        tone_t: 0.0,
+        tone: 0.0,
+    };
+
+    fn snap(&mut self) {
+        self.pitch = self.pitch_t;
+        self.press = self.press_t;
+        self.tone = self.tone_t;
+        self.ratio = if self.pitch == 0.0 { 1.0 } else { st_ratio(self.pitch) };
+    }
+
+    fn settled(&self) -> bool {
+        self.pitch == self.pitch_t && self.press == self.press_t && self.tone == self.tone_t
+    }
+}
+
+/// Transient pitch bend, aftertouch and timbre for one instrument.
 ///
 /// Nothing here is saved and nothing retriggers a note. Values are smoothed
 /// by [`Expression::tick`], which each synth calls from its own control
@@ -426,9 +569,17 @@ pub(crate) const PRESSURE_OCTAVES: f32 = 0.75;
 /// zero bend every accessor returns exactly the neutral value (1.0 gain, 0.0
 /// octaves, 0.0 semitones), so the baseline sound is unchanged.
 ///
-/// Pressure mapping: channel pressure `c` and the pressure `k` of a voice's
-/// key combine as `p = 1 - (1 - c)(1 - k)`; gain is `1 + 0.6 p`, and filtered
-/// instruments also open the cutoff by `0.75 p` octaves.
+/// Two layers:
+/// - Shared (legacy MIDI): one bend, channel pressure and per-key pressure.
+///   Channel pressure `c` and key pressure `k` combine as
+///   `p = 1 - (1 - c)(1 - k)`.
+/// - Per note: a snapshot keyed by runtime voice ID (MPE member channels and
+///   recorded pattern curves). It replaces the shared values for that voice,
+///   so a recorded take never adds a wheel's leftover position twice, and
+///   two voices on the same key move independently.
+///
+/// Gain is `1 + 0.6 p`; filtered instruments also open the cutoff by
+/// `0.75 p` octaves, and timbre moves it by up to two octaves either way.
 pub(crate) struct Expression {
     bend_t: f32,
     bend: f32,
@@ -442,6 +593,12 @@ pub(crate) struct Expression {
     /// Keys with a nonzero target or value.
     live: u128,
     k: f32,
+    scoped: [Scoped; SCOPED],
+    /// Entries in use, packed at the front of `scoped`.
+    n: usize,
+    /// Some entry has not reached its target.
+    scoped_moving: bool,
+    clock: u32,
 }
 
 impl Expression {
@@ -457,6 +614,10 @@ impl Expression {
             moving: 0,
             live: 0,
             k: 0.5,
+            scoped: [Scoped::EMPTY; SCOPED],
+            n: 0,
+            scoped_moving: false,
+            clock: 0,
         }
     }
 
@@ -484,7 +645,7 @@ impl Expression {
         self.live |= 1u128 << i;
     }
 
-    fn clear_key(&mut self, key: u8) {
+    pub(crate) fn clear_key(&mut self, key: u8) {
         let i = key.min(127) as usize;
         self.key_t[i] = 0.0;
         self.key[i] = 0.0;
@@ -492,12 +653,134 @@ impl Expression {
         self.live &= !(1u128 << i);
     }
 
-    /// Back to centre and zero pressure at once.
+    /// Back to centre and zero pressure at once, and every per-note
+    /// snapshot ends (panic, device reset).
     pub(crate) fn reset(&mut self) {
-        *self = Expression {
-            k: self.k,
-            ..Expression::new()
+        self.reset_shared();
+        self.n = 0;
+        self.scoped_moving = false;
+    }
+
+    /// The shared (legacy MIDI) bend and pressure snap to neutral. Per-note
+    /// snapshots are untouched, so a recorded curve keeps playing.
+    pub(crate) fn reset_shared(&mut self) {
+        self.bend_t = 0.0;
+        self.bend = 0.0;
+        self.ratio = 1.0;
+        self.chan_t = 0.0;
+        self.chan = 0.0;
+        self.key_t = [0.0; 128];
+        self.key = [0.0; 128];
+        self.moving = 0;
+        self.live = 0;
+    }
+
+    fn find(&self, id: u32) -> Option<usize> {
+        self.scoped[..self.n].iter().position(|e| e.id == id)
+    }
+
+    /// Index for a new entry, evicting the least useful one when full.
+    fn slot_for(&mut self) -> usize {
+        if self.n < SCOPED {
+            self.n += 1;
+            return self.n - 1;
+        }
+        let rank = |e: &Scoped| match e.life {
+            Life::Released => 0u8,
+            Life::Pending => 1,
+            Life::Held => 2,
         };
+        let mut best = 0;
+        for i in 1..SCOPED {
+            let (a, b) = (&self.scoped[i], &self.scoped[best]);
+            let older = a.stamp.wrapping_sub(self.clock) < b.stamp.wrapping_sub(self.clock);
+            if rank(a) < rank(b) || (rank(a) == rank(b) && older) {
+                best = i;
+            }
+        }
+        best
+    }
+
+    fn remove(&mut self, i: usize) {
+        self.n -= 1;
+        self.scoped[i] = self.scoped[self.n];
+    }
+
+    /// Sets the per-note snapshot of voice `id`. Pitch is the full note
+    /// displacement in semitones, pressure and timbre are 0..1.
+    pub(crate) fn set_voice(&mut self, id: u32, pitch: f32, pressure: f32, timbre: f32) {
+        let i = match self.find(id) {
+            Some(i) => i,
+            None => {
+                let i = self.slot_for();
+                // A voice that is already sounding glides from where the
+                // shared state had it rather than jumping.
+                self.scoped[i] = Scoped {
+                    id,
+                    life: Life::Pending,
+                    stamp: 0,
+                    pitch_t: 0.0,
+                    pitch: self.bend,
+                    ratio: self.ratio,
+                    press_t: 0.0,
+                    press: self.chan,
+                    tone_t: 0.0,
+                    tone: 0.0,
+                };
+                i
+            }
+        };
+        self.clock = self.clock.wrapping_add(1);
+        let e = &mut self.scoped[i];
+        e.stamp = self.clock;
+        e.pitch_t = if pitch.is_finite() {
+            pitch.clamp(-NOTE_BEND_MAX, NOTE_BEND_MAX)
+        } else {
+            0.0
+        };
+        e.press_t = unit(pressure);
+        e.tone_t = if timbre.is_finite() {
+            (timbre.clamp(0.0, 1.0) - 0.5) * 2.0
+        } else {
+            0.0
+        };
+        if e.life == Life::Released {
+            // A later note reusing this ID announced itself early.
+            e.life = Life::Pending;
+        }
+        if !e.settled() {
+            self.scoped_moving = true;
+        }
+    }
+
+    /// A snapshot planned for the note about to start as `id`.
+    pub(crate) fn prime(&mut self, id: u32, pitch: f32, pressure: f32, timbre: f32) {
+        if let Some(i) = self.find(id) {
+            self.scoped[i].life = Life::Pending;
+        }
+        self.set_voice(id, pitch, pressure, timbre);
+    }
+
+    /// A note starts as `id`. A snapshot that arrived first becomes its
+    /// starting state; one left by an earlier note with the same ID is stale.
+    pub(crate) fn claim(&mut self, id: u32) {
+        let Some(i) = self.find(id) else {
+            return;
+        };
+        if self.scoped[i].life == Life::Pending {
+            let e = &mut self.scoped[i];
+            e.life = Life::Held;
+            e.snap();
+        } else {
+            self.remove(i);
+        }
+    }
+
+    /// The note started as `id` was released; its tail keeps its snapshot.
+    pub(crate) fn release(&mut self, id: u32) {
+        if let Some(i) = self.find(id) {
+            self.scoped[i].life = Life::Released;
+        }
     }
 
     /// Moves every value towards its target; call once per control interval.
@@ -526,21 +809,49 @@ impl Expression {
                 }
             }
         }
+        if self.scoped_moving {
+            let mut any = false;
+            for e in &mut self.scoped[..self.n] {
+                if e.pitch != e.pitch_t {
+                    e.pitch = approach(e.pitch, e.pitch_t, self.k);
+                    e.ratio = if e.pitch == 0.0 { 1.0 } else { st_ratio(e.pitch) };
+                }
+                e.press = approach(e.press, e.press_t, self.k);
+                e.tone = approach(e.tone, e.tone_t, self.k);
+                any |= !e.settled();
+            }
+            self.scoped_moving = any;
+        }
     }
 
-    /// Smoothed pitch displacement in semitones.
+    /// The expression for the voice started as `id` on `key`.
+    #[inline]
+    pub(crate) fn voice(&self, id: u32, key: u8) -> Vx {
+        if self.n > 0
+            && let Some(e) = self.scoped[..self.n].iter().find(|e| e.id == id)
+        {
+            return Vx {
+                bend: e.pitch,
+                ratio: e.ratio,
+                pressure: e.press,
+                tone: e.tone,
+            };
+        }
+        Vx {
+            bend: self.bend,
+            ratio: self.ratio,
+            pressure: self.pressure(key),
+            tone: 0.0,
+        }
+    }
+
+    /// Smoothed shared pitch displacement in semitones.
     #[inline]
     pub(crate) fn bend_st(&self) -> f32 {
         self.bend
     }
 
-    /// `2^(bend/12)`; exactly 1.0 when centred.
-    #[inline]
-    pub(crate) fn bend_ratio(&self) -> f32 {
-        self.ratio
-    }
-
-    /// Combined pressure 0..1 for a voice sounding `key`.
+    /// Combined shared pressure 0..1 for a voice sounding `key`.
     #[inline]
     pub(crate) fn pressure(&self, key: u8) -> f32 {
         let k = if self.live == 0 {
@@ -549,18 +860,6 @@ impl Expression {
             self.key[key.min(127) as usize]
         };
         self.chan + k - self.chan * k
-    }
-
-    /// Gain multiplier for a voice sounding `key`.
-    #[inline]
-    pub(crate) fn gain(&self, key: u8) -> f32 {
-        1.0 + PRESSURE_GAIN * self.pressure(key)
-    }
-
-    /// Cutoff offset in octaves for a voice sounding `key`.
-    #[inline]
-    pub(crate) fn octaves(&self, key: u8) -> f32 {
-        PRESSURE_OCTAVES * self.pressure(key)
     }
 }
 
@@ -592,4 +891,63 @@ pub(crate) fn safe_bend(key: f32, bend: f32, max_hz: f32) -> f32 {
     }
     let top = 69.0 + 12.0 * (max_hz / 440.0).log2();
     bend.min((top - key).max(0.0))
+}
+
+/// Per-voice brightness from timbre for voices without their own filter: a
+/// first-order shelf pivoting at 1.2 kHz, up to 9 dB of treble cut or boost.
+///
+/// The low-pass state always runs, so engaging the shelf mid-note never
+/// steps the output. At neutral timbre the input passes through bit-exact.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Tilt {
+    a: f32,
+    z: [f32; 2],
+    hi: f32,
+}
+
+impl Tilt {
+    pub(crate) const fn new() -> Tilt {
+        Tilt {
+            a: 0.15,
+            z: [0.0; 2],
+            hi: 1.0,
+        }
+    }
+
+    pub(crate) fn prepare(&mut self, sample_rate: f32) {
+        self.a = 1.0 - (-std::f32::consts::TAU * 1_200.0 / sample_rate).exp();
+    }
+
+    pub(crate) fn reset(&mut self) {
+        self.z = [0.0; 2];
+        self.hi = 1.0;
+    }
+
+    /// Sets the shelf from a voice's timbre.
+    #[inline]
+    pub(crate) fn set(&mut self, x: &Vx) {
+        self.hi = x.tone_ratio(1.5);
+    }
+
+    #[inline]
+    pub(crate) fn tick_mono(&mut self, x: f32) -> f32 {
+        self.z[0] += self.a * (x - self.z[0]);
+        if self.hi == 1.0 {
+            return x;
+        }
+        self.z[0] + self.hi * (x - self.z[0])
+    }
+
+    #[inline]
+    pub(crate) fn tick(&mut self, l: f32, r: f32) -> (f32, f32) {
+        self.z[0] += self.a * (l - self.z[0]);
+        self.z[1] += self.a * (r - self.z[1]);
+        if self.hi == 1.0 {
+            return (l, r);
+        }
+        (
+            self.z[0] + self.hi * (l - self.z[0]),
+            self.z[1] + self.hi * (r - self.z[1]),
+        )
+    }
 }

@@ -31,7 +31,7 @@ use peel_dsp::voice::{StealPolicy, VoiceState};
 use peel_dsp::{Device, DeviceDescriptor, DeviceKind, ParamId, Preset, ProcessContext};
 
 use crate::common::{
-    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, lerp, ramp_coef,
+    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, Tilt, lerp, ramp_coef,
 };
 
 const TONE: ParamId = 1;
@@ -594,6 +594,10 @@ struct GrandVoice {
     key: u8,
     /// Aftertouch gain, 1.0 when nothing is pressed.
     xgain: f32,
+    /// Runtime voice ID, for per-note expression.
+    id: u32,
+    /// Brightness from timbre.
+    tilt: Tilt,
     /// Pitch ratio the resonator coefficients currently express.
     ratio: f32,
     /// Mode angle and twice the pole radius, kept so a live bend can
@@ -652,6 +656,8 @@ impl GrandVoice {
             fade: Fade::new(),
             key: 60,
             xgain: 1.0,
+            id: 0,
+            tilt: Tilt::new(),
             ratio: 1.0,
             ang: [[0.0; LANES]; CHUNKS],
             two_r: [[0.0; LANES]; CHUNKS],
@@ -905,6 +911,8 @@ impl GrandVoice {
         self.af_coef = (-sig_s * inv_sr).exp();
 
         self.lp_primed = false;
+        self.tilt.prepare(sr);
+        self.tilt.reset();
         self.lp_l.reset();
         self.lp_r.reset();
         self.lp_l.set_cutoff(18_000.0, sr);
@@ -1063,6 +1071,7 @@ impl GrandVoice {
             l = self.lp_l.low(l);
             r = self.lp_r.low(r);
         }
+        (l, r) = self.tilt.tick(l, r);
         let g = self.dmp * self.fade.tick() * self.xgain;
         l *= g;
         r *= g;
@@ -1303,10 +1312,11 @@ impl Grand {
         let sr = self.sr;
         self.expr.tick();
         let ex = &self.expr;
-        let ratio = ex.bend_ratio();
         for v in self.pool.voices.iter_mut().filter(|v| v.active) {
-            v.xgain = ex.gain(v.key);
-            v.retune(ratio);
+            let x = ex.voice(v.id, v.key);
+            v.xgain = x.gain();
+            v.retune(x.ratio);
+            v.tilt.set(&x);
             v.control(sr);
         }
         self.pool.sync();
@@ -1421,11 +1431,13 @@ impl Synth for Grand {
         self.notes = self.notes.wrapping_add(1);
         let set = self.set;
         let seed = self.notes;
-        let (ratio, xgain) = (self.expr.bend_ratio(), self.expr.gain(key));
+        let x = self.expr.voice(id, key);
         let v = &mut self.pool.voices[slot];
         v.start(&set, key, velocity, seed);
-        v.xgain = xgain;
-        v.retune(ratio);
+        v.id = id;
+        v.xgain = x.gain();
+        v.retune(x.ratio);
+        v.tilt.set(&x);
         self.body_live = true;
         self.idle = 0;
         if self.pedal {

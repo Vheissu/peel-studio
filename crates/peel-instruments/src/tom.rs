@@ -14,8 +14,8 @@ use peel_dsp::voice::StealPolicy;
 use peel_dsp::{Device, DeviceDescriptor, DeviceKind, ParamId, Preset, ProcessContext};
 
 use crate::common::{
-    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, drive_curve, key_offset,
-    lerp, ramp_coef, shape, st_ratio, vel_gain,
+    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, TIMBRE_OCTAVES,
+    drive_curve, key_offset, lerp, ramp_coef, shape, st_ratio, vel_gain,
 };
 
 const PITCH: ParamId = 1;
@@ -281,6 +281,8 @@ struct TomVoice {
     xgain: f32,
     /// Pitch bend ratio, 1.0 when centred.
     bend: f32,
+    /// Tone filter multiplier from timbre, 1.0 at neutral.
+    tone_r: f32,
 }
 
 impl TomVoice {
@@ -311,6 +313,7 @@ impl TomVoice {
             fade: Fade::new(),
             xgain: 1.0,
             bend: 1.0,
+            tone_r: 1.0,
         }
     }
 
@@ -426,7 +429,7 @@ impl Tom {
         self.drive_mix = (drive * 5.0).min(1.0);
         self.level_gain = db_to_gain(self.level.get()) * 0.66;
         for v in self.pool.voices.iter_mut().filter(|v| v.active) {
-            v.lp.set_cutoff(self.tone_hz * v.bright, self.sr);
+            v.lp.set_cutoff(self.tone_hz * v.bright * v.tone_r, self.sr);
         }
     }
 
@@ -438,10 +441,11 @@ impl Tom {
         self.derive();
         self.expr.tick();
         let ex = &self.expr;
-        let ratio = ex.bend_ratio();
-        self.pool.for_active(|v, key| {
-            v.xgain = ex.gain(key);
-            v.bend = ratio;
+        self.pool.for_active_id(|v, key, id| {
+            let x = ex.voice(id, key);
+            v.xgain = x.gain();
+            v.bend = x.ratio;
+            v.tone_r = x.tone_ratio(TIMBRE_OCTAVES);
         });
     }
 }
@@ -486,12 +490,12 @@ impl Synth for Tom {
         let f0 = (self.pitch * ratio).clamp(20.0, 0.2 * sr);
         let drop = st_ratio(self.sweep * lerp(0.8, 1.0, velocity)) - 1.0;
         let tone = self.tone_hz;
-        let xgain0 = self.expr.gain(key);
-        let bend0 = self.expr.bend_ratio();
+        let x = self.expr.voice(id, key);
         let v = &mut self.pool.voices[slot];
         v.active = true;
-        v.xgain = xgain0;
-        v.bend = bend0;
+        v.xgain = x.gain();
+        v.bend = x.ratio;
+        v.tone_r = x.tone_ratio(TIMBRE_OCTAVES);
         for i in 0..3 {
             v.amp[i].set_t60(self.decay * [1.0, 0.55, 0.4][i], sr);
             v.amp[i].trigger(1.0, 0.000_4, sr);
@@ -518,9 +522,10 @@ impl Synth for Tom {
         v.stick_band.reset();
         v.stick_env = 1.0;
         v.stick_coef = (-1.0 / (0.003 * sr)).exp();
-        v.stick_gain = self.stick * 0.9 * lerp(0.4, 1.0, velocity);
+        // Timbre also sets how hard the stick lands.
+        v.stick_gain = self.stick * 0.9 * lerp(0.4, 1.0, velocity) * v.tone_r.sqrt();
         v.bright = lerp(0.35, 1.0, velocity.sqrt());
-        v.lp.set_cutoff(tone * v.bright, sr);
+        v.lp.set_cutoff(tone * v.bright * v.tone_r, sr);
         v.lp.reset();
         v.gain = vel_gain(velocity, self.vel_sens);
         v.fade.reset();

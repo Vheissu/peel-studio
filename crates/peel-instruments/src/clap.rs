@@ -13,8 +13,8 @@ use peel_dsp::voice::StealPolicy;
 use peel_dsp::{Device, DeviceDescriptor, DeviceKind, ParamId, Preset, ProcessContext};
 
 use crate::common::{
-    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, drive_curve, key_offset,
-    lerp, ramp_coef, shape, st_ratio, vel_gain,
+    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, TIMBRE_OCTAVES, Vx,
+    drive_curve, key_offset, lerp, ramp_coef, shape, st_ratio, vel_gain,
 };
 
 const TONE: ParamId = 1;
@@ -296,11 +296,28 @@ struct ClapVoice {
     fade: Fade,
     /// Aftertouch gain, 1.0 when nothing is pressed.
     xgain: f32,
+    /// Timbre the burst and tail bands are tuned for, their centre and Q.
+    tone: f32,
+    center: f32,
+    q: f32,
     jitter: Noise,
     sr: f32,
 }
 
 impl ClapVoice {
+    /// Timbre moves the burst and tail bands by up to two octaves.
+    fn set_tone(&mut self, x: &Vx) {
+        if x.tone != self.tone {
+            self.tone = x.tone;
+            let (sr, q) = (self.sr, self.q);
+            let c = (self.center * x.tone_ratio(TIMBRE_OCTAVES)).min(0.4 * sr);
+            self.burst_l.set_q(c, q, sr);
+            self.burst_r.set_q(c, q, sr);
+            self.tail_l.set_q(c * 0.85, 0.7, sr);
+            self.tail_r.set_q(c * 0.85, 0.7, sr);
+        }
+    }
+
     fn new() -> ClapVoice {
         ClapVoice {
             active: false,
@@ -331,6 +348,9 @@ impl ClapVoice {
             gain: 1.0,
             fade: Fade::new(),
             xgain: 1.0,
+            tone: 0.0,
+            center: 1_000.0,
+            q: 1.0,
             jitter: Noise::new(3),
             sr: 48_000.0,
         }
@@ -459,7 +479,11 @@ impl Clap {
         self.derive();
         self.expr.tick();
         let ex = &self.expr;
-        self.pool.for_active(|v, key| v.xgain = ex.gain(key));
+        self.pool.for_active_id(|v, key, id| {
+            let x = ex.voice(id, key);
+            v.xgain = x.gain();
+            v.set_tone(&x);
+        });
     }
 }
 
@@ -505,11 +529,15 @@ impl Synth for Clap {
         let center = (self.tone * ratio * lerp(0.85, 1.0, velocity)).min(0.4 * sr);
         let q = 0.6 + 3.2 * self.focus;
         let hits = self.hits;
-        let xgain0 = self.expr.gain(key);
+        // Filtered noise has no pitch to bend; pressure and timbre apply.
+        let x = self.expr.voice(id, key);
         let v = &mut self.pool.voices[slot];
         v.active = true;
-        v.xgain = xgain0;
+        v.xgain = x.gain();
         v.sr = sr;
+        v.center = center;
+        v.q = q;
+        v.tone = 0.0;
         v.common.reseed(hits.wrapping_mul(3));
         v.noise_l.reseed(hits.wrapping_mul(3).wrapping_add(1));
         v.noise_r.reseed(hits.wrapping_mul(3).wrapping_add(2));
@@ -523,6 +551,7 @@ impl Synth for Clap {
         v.air_r.set_q(air_hz, 0.8, sr);
         v.air_l.reset();
         v.air_r.reset();
+        v.set_tone(&x);
         v.air_gain = self.air * 0.6 * lerp(0.3, 1.0, velocity);
         v.mix_common = (1.0 - self.width).sqrt();
         v.mix_side = self.width.sqrt();

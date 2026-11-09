@@ -21,6 +21,29 @@
 //! | `peel.strings.zither` | Zither | Strings | Paired acoustic strings with coupling and body |
 //! | `peel.synth.cross` | Cross | Synth | Cross FM, oscillator sync and ring modulation |
 //!
+//! ## Per-note expression
+//!
+//! `EventKind::VoiceExpression` gives one runtime voice its own pitch
+//! (semitones, ±120), pressure and timbre (CC74, neutral 0.5). It replaces
+//! the instrument-wide bend and aftertouch for that voice only, so MPE
+//! members and recorded pattern curves move each note on its own, even two
+//! notes on the same key. A snapshot sent before or with its NoteOn starts
+//! the note there. Pressure raises level (and opens filters) everywhere.
+//! Timbre moves brightness:
+//!
+//! - filter cutoff: Poly, Bass, Cross, Sax (±2 octaves);
+//! - tone filter and attack: Kick (beater click), Tom (stick), Snare (wire
+//!   band), Hat (bright band), Clap (burst band);
+//! - string loss: Guitar, Zither; mallet hardness and mode tilt: Mallet;
+//! - a ±9 dB treble shelf: Grand, Tine, Sampler, Violin.
+//!
+//! Limits: Hat and Clap have no pitch to bend. Bass, Sax (mono) and Poly in
+//! Mono/Legato play the expression of the note on top of their key stack.
+//! Zither re-strikes the key's own string, so same-key notes share it.
+//! Extreme bends stay finite: oscillators and resonators clamp below
+//! Nyquist, waveguides clamp their loop lengths and silence strings out of
+//! range, and the sampler caps its playback rate.
+//!
 //! Each instrument is a [`common::Synth`] wrapped in a shared adapter that
 //! implements `Device`: parameters are stored and clamped once, events split
 //! the block at their sample offsets, and output is kept finite. Voices are

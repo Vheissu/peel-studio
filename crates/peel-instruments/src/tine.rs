@@ -43,7 +43,8 @@ use peel_dsp::voice::StealPolicy;
 use peel_dsp::{Device, DeviceDescriptor, DeviceKind, ParamId, Preset, ProcessContext};
 
 use crate::common::{
-    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, lerp, ramp_coef, vel_gain,
+    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, Tilt, lerp,
+    ramp_coef, vel_gain,
 };
 
 const BELL: ParamId = 3;
@@ -490,6 +491,10 @@ struct TineVoice {
     key: u8,
     /// Aftertouch gain, 1.0 when nothing is pressed.
     xgain: f32,
+    /// Runtime voice ID, for per-note expression.
+    id: u32,
+    /// Brightness from timbre.
+    tilt: Tilt,
     /// Played mode angles and the pitch ratio currently applied to them.
     w0: [f64; MODES],
     ratio: f32,
@@ -527,6 +532,8 @@ impl TineVoice {
             fade: Fade::new(),
             key: 60,
             xgain: 1.0,
+            id: 0,
+            tilt: Tilt::new(),
             w0: [0.0; MODES],
             ratio: 1.0,
         }
@@ -590,6 +597,7 @@ impl TineVoice {
         {
             self.active = false;
         }
+        let y = self.tilt.tick_mono(y);
         (y * g * self.pan_l, y * g * self.pan_r)
     }
 }
@@ -786,10 +794,11 @@ impl Tine {
         self.derive();
         self.expr.tick();
         let ex = &self.expr;
-        let ratio = ex.bend_ratio();
         for v in self.pool.voices.iter_mut().filter(|v| v.active) {
-            v.xgain = ex.gain(v.key);
-            v.retune(ratio);
+            let x = ex.voice(v.id, v.key);
+            v.xgain = x.gain();
+            v.retune(x.ratio);
+            v.tilt.set(&x);
         }
         self.pool.sync();
         // With nothing sounding, let the output stage settle to exact zero.
@@ -928,7 +937,8 @@ impl Synth for Tine {
         let t60s = [t60, t60 * 0.8, ping_t60, ping_t60 * 0.25];
 
         let sr64 = sr as f64;
-        let (bend_ratio, xgain) = (self.expr.bend_ratio(), self.expr.gain(key));
+        let x = self.expr.voice(id, key);
+        let (bend_ratio, xgain) = (x.ratio, x.gain());
         let v = &mut self.pool.voices[slot];
         v.active = true;
         for k in 0..MODES {
@@ -946,6 +956,9 @@ impl Synth for Tine {
         v.key = key;
         v.ratio = 1.0;
         v.xgain = xgain;
+        v.id = id;
+        v.tilt.prepare(sr);
+        v.tilt.reset();
 
         // Normalize the fundamental's pickup output to a fixed RMS so the
         // loudness follows velocity while the bark only changes color.
@@ -988,6 +1001,7 @@ impl Synth for Tine {
         v.pan_r = pr;
         v.fade.reset();
         v.retune(bend_ratio);
+        v.tilt.set(&x);
     }
 
     fn note_off(&mut self, _key: u8, _velocity: f32, id: u32) {
