@@ -341,6 +341,21 @@ impl Studio {
                 self.session.arm_lane(lane, true);
             }
         }
+        // `PEEL_HIDE=browser,inspector,editor` and `PEEL_HELP=1` set pane
+        // choices for screenshots (not saved: screenshots skip prefs).
+        if let Ok(list) = std::env::var("PEEL_HIDE") {
+            for pane in list.split(',') {
+                match pane.trim() {
+                    "browser" => self.prefs.show_browser = false,
+                    "inspector" => self.prefs.set_inspector(false),
+                    "editor" => self.prefs.show_editor = false,
+                    _ => {}
+                }
+            }
+        }
+        if std::env::var_os("PEEL_HELP").is_some() {
+            self.prefs.show_help = true;
+        }
         if let Ok(language) = std::env::var("PEEL_SCRIPTS") {
             self.scripts.open_requested = true;
             // A language name selects that action for screenshots.

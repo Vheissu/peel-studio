@@ -2075,3 +2075,33 @@ fn small_windows_keep_the_top_bar_and_panes_inside() {
     let lanes = h.rect(W::new("pl-snap"));
     assert!(lanes.x > 0.0 && lanes.right() < 1024.0);
 }
+
+#[test]
+fn open_requests_and_script_panel_changes_apply_on_the_next_frame() {
+    let mut h = Harness::new();
+    h.studio.scripts = crate::scripts::Scripts::with_dir(temp_scripts_dir("scripts-request"));
+    // `PEEL_SCRIPTS` sets this flag; it must still show the column.
+    h.studio.scripts.open_requested = true;
+    h.frames(2);
+    assert!(h.studio.prefs.show_scripts && !h.studio.prefs.show_inspector);
+    h.rect(W::new("scripts-run"));
+    // A script hiding panes through `ui.set` changes the very next frame.
+    let st = &mut h.studio;
+    crate::script_host::execute(
+        &mut st.session,
+        &mut st.ws,
+        &mut st.prefs,
+        &mut peel_mcp::Control::default(),
+        "ui.set",
+        serde_json::json!({
+            "panels": {"browser": false, "scripts": false, "inspector": false, "editor": false}
+        }),
+    )
+    .unwrap();
+    h.frames(2);
+    assert!(h.ui.widget_rect(W::new("browser-search")).is_none());
+    assert!(h.ui.widget_rect(W::new("scripts-run")).is_none());
+    assert!(h.ui.widget_rect(W::new("inspector-hide")).is_none());
+    assert!(h.ui.widget_rect(W::new("rack-len-plus")).is_none());
+    h.rect(W::new(("dock-tab", "Channels")));
+}

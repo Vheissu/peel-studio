@@ -18,6 +18,7 @@ brightest things on screen.
 | `panel_alt` | `#20262F` | Editor canvases inside a pane |
 | `raised` | `#252D38` | Selected rows, active tabs, step cells |
 | `control` | `#2B3441` | Buttons and knob bodies |
+| `well` | `#171B22` | Recessed tray behind a group of quiet controls |
 | `text` | `#F1F4F8` | Primary text |
 | `text_dim` | `#ACB7C7` | Secondary text |
 | `text_faint` | `#7D8899` | Labels and hints |
@@ -56,7 +57,68 @@ tabular figures so numbers do not jitter while they change.
 4 px base unit; groups of 8, 12, 16 and 24. Corner radius 4 px for small
 controls, 6 px for buttons and rows, 8 px for panes. Panes sit on the
 background with a 6 px gutter. Nothing is nested more than one surface
-deep.
+deep. Pane headers are 38 px, rails 40 px wide, the top bar 44 px and the
+status bar 24 px.
+
+## Layout
+
+```
+top bar:  project · View · undo redo | [playback well] [time well] | meter · open save · Export
+          rail | browser | playlist             | right column | rail
+               |         | dock (editor tabs)   |              |
+status:   notices                                  device · MIDI · settings
+```
+
+- The playlist always shows and takes whatever the panes leave.
+- The left rail picks the browser tab; clicking the showing tab hides
+  the browser. The right rail switches the right column between the
+  Inspector and Scripts (never both) and holds the usage-hints toggle
+  and keyboard shortcuts. Rails sit on `bg`, so they read as navigation;
+  the selected entry gets a 2 px accent bar on the edge facing its pane.
+- The dock collapses to its 38 px tab header, so every editor stays one
+  click away. Its tabs keep their labels while the editor's tools fit
+  beside them, otherwise all four become icons together.
+- The pattern picker sits in the dock header beside the Channels and
+  Piano roll editors, the work it targets.
+- Side panes cap themselves at about a quarter (browser) and a third
+  (right column) of narrow windows without losing the user's size.
+- The top bar measures itself and sheds, in order: the load figure,
+  rewind and fast-forward, the meter, the Export label, the clock, the
+  project title and finally the View label.
+
+## Visibility
+
+The View menu, rails, pane headers and shortcuts (Cmd/Ctrl + Opt/Alt +
+B, I, E; F8 for Scripts; F6, F7, F9, F10 reveal their editor) all change
+the same `Prefs` flags that scripts read and set with `ui.get`/`ui.set`:
+`show_browser`, `show_inspector`, `show_scripts`, `show_editor`,
+`show_help`. Pane sizes, tabs, the master meter and status details are
+saved next to them and survive opening other projects. Reset layout in
+the View menu restores the defaults.
+
+## Controls
+
+| Tier | Look | Used for |
+| --- | --- | --- |
+| Primary | `accent` fill, `text_on_accent` | Export, Run. One per region. |
+| Secondary | `control` fill | Dialog buttons, dropdown values in property rows |
+| Quiet | no fill until hovered; tinted when on | Toolbars, rails, transport, pane headers |
+
+Related quiet controls share a `well` with 1 px `line_strong` dividers
+between groups (transport, time, editing tools, pattern length). A tool
+that is one of a set (Draw, Select, Erase) shows the selection the way
+the segmented control does. Tabs are text with a 2 px accent underline.
+Property rows put a 72 px caption label left of the value. LEDs are flat
+dots without a halo.
+
+## Help
+
+Usage hints are optional and off by default. With hints on they show as
+caption text; with hints off an info mark stands in, carrying the text
+as its tooltip and accessible description. Warnings (Python's file
+access, missing devices, audio errors) are not hints and always show.
+Empty states are one quiet line at the top of the pane, never a large
+centered icon.
 
 ## Icons
 
