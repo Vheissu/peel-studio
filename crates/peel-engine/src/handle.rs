@@ -286,6 +286,9 @@ impl EngineHandle {
         if !requests.is_empty() && !matches!(self.backend, Backend::Cpal(_)) {
             return Err("Secondary outputs need a running primary audio output. Choose a real output device first.".into());
         }
+        if self.outputs.update_in_place(requests) {
+            return Ok(self.outputs.infos());
+        }
         let (streams, taps) = crate::output::OutputStreams::prepare(requests, self.sample_rate)?;
         self.send(EngineCommand::SetOutputRoutes(taps))
             .map_err(|_| "Audio queue is busy; try changing outputs again".to_string())?;

@@ -69,12 +69,15 @@ impl OutputChannels {
 pub enum OutputSource {
     Master,
     TrackMeter(u16),
+    /// Configured source was deleted or is temporarily unavailable.
+    Disabled,
 }
 impl OutputSource {
     fn encode(self) -> u32 {
         match self {
             Self::Master => MASTER,
             Self::TrackMeter(m) => u32::from(m),
+            Self::Disabled => DISABLED,
         }
     }
 }
@@ -99,7 +102,11 @@ pub struct OutputRouteInfo {
     /// Frames dropped because the queue was full or too far behind.
     pub overruns: u64,
     pub buffered_frames: usize,
+    /// Estimated FIFO delay plus reported output lead (or one callback).
     pub latency_ms: f32,
+    /// FIFO delay only; its current fill already includes the prefill.
+    pub buffered_latency_ms: f32,
+    pub output_latency_ms: f32,
     pub clock_correction_ppm: f32,
 }
 
@@ -109,6 +116,8 @@ struct Stats {
     overruns: AtomicU64,
     buffered: AtomicU32,
     correction: AtomicU32,
+    callback_frames: AtomicU32,
+    output_lead_ns: AtomicU64,
 }
 impl Default for Stats {
     fn default() -> Self {
@@ -118,13 +127,68 @@ impl Default for Stats {
             overruns: AtomicU64::new(0),
             buffered: AtomicU32::new(0),
             correction: AtomicU32::new(0),
+            callback_frames: AtomicU32::new(0),
+            output_lead_ns: AtomicU64::new(0),
         }
     }
 }
 
+/// Source identity and epoch share one atomic: an overlapping old-source
+/// producer can only publish frames tagged with the old epoch.
+struct RouteControl {
+    source: AtomicU64,
+    gain: AtomicU32,
+}
+impl RouteControl {
+    fn new(source: OutputSource, gain_db: f32, muted: bool) -> Self {
+        Self {
+            source: AtomicU64::new(u64::from(source.encode())),
+            gain: AtomicU32::new(
+                if muted {
+                    0.0_f32
+                } else {
+                    10.0_f32.powf(gain_db / 20.0)
+                }
+                .to_bits(),
+            ),
+        }
+    }
+    fn set_source(&self, source: Option<OutputSource>) {
+        let wanted = source.map_or(DISABLED, OutputSource::encode);
+        let old = self.source.load(Ordering::Relaxed);
+        if old as u32 != wanted {
+            let epoch = ((old >> 32) as u32).wrapping_add(1);
+            self.source.store(
+                (u64::from(epoch) << 32) | u64::from(wanted),
+                Ordering::Release,
+            );
+        }
+    }
+    fn levels(&self, gain_db: f32, muted: bool) {
+        self.gain.store(
+            if muted {
+                0.0_f32
+            } else {
+                10.0_f32.powf(gain_db / 20.0)
+            }
+            .to_bits(),
+            Ordering::Relaxed,
+        );
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Frame {
+    epoch: u32,
+    samples: [f32; 2],
+}
+impl From<[f32; 2]> for Frame {
+    fn from(samples: [f32; 2]) -> Self {
+        Self { epoch: 0, samples }
+    }
+}
 struct Tap {
-    source: Arc<AtomicU32>,
-    producer: Producer<[f32; 2]>,
+    control: Arc<RouteControl>,
+    producer: Producer<Frame>,
     stats: Arc<Stats>,
 }
 
@@ -137,12 +201,21 @@ impl OutputTaps {
     pub(crate) fn capture(&mut self, source: OutputSource, left: &[f32], right: &[f32]) {
         let source = source.encode();
         for tap in &mut self.taps {
-            if tap.source.load(Ordering::Relaxed) != source {
+            let identity = tap.control.source.load(Ordering::Acquire);
+            if identity as u32 != source {
                 continue;
             }
+            let epoch = (identity >> 32) as u32;
             for (&l, &r) in left.iter().zip(right) {
                 let clean = |v: f32| if v.is_finite() { v } else { 0.0 };
-                if tap.producer.push([clean(l), clean(r)]).is_err() {
+                if tap
+                    .producer
+                    .push(Frame {
+                        epoch,
+                        samples: [clean(l), clean(r)],
+                    })
+                    .is_err()
+                {
                     tap.stats.overruns.fetch_add(1, Ordering::Relaxed);
                 }
             }
@@ -151,11 +224,20 @@ impl OutputTaps {
     pub(crate) fn silence(&mut self, source: OutputSource, frames: usize) {
         let source = source.encode();
         for tap in &mut self.taps {
-            if tap.source.load(Ordering::Relaxed) != source {
+            let identity = tap.control.source.load(Ordering::Acquire);
+            if identity as u32 != source {
                 continue;
             }
+            let epoch = (identity >> 32) as u32;
             for _ in 0..frames {
-                if tap.producer.push([0.0; 2]).is_err() {
+                if tap
+                    .producer
+                    .push(Frame {
+                        epoch,
+                        samples: [0.0; 2],
+                    })
+                    .is_err()
+                {
                     tap.stats.overruns.fetch_add(1, Ordering::Relaxed);
                 }
             }
@@ -169,8 +251,9 @@ pub(crate) struct OutputStreams {
     routes: Vec<RouteStream>,
 }
 struct RouteStream {
-    _stream: cpal::Stream,
-    source: Arc<AtomicU32>,
+    _stream: Option<cpal::Stream>,
+    control: Arc<RouteControl>,
+    requested_device: String,
     stats: Arc<Stats>,
     device: String,
     sample_rate: u32,
@@ -188,16 +271,22 @@ impl OutputStreams {
         for request in requests {
             let (tx, rx) = RingBuffer::new(CAPACITY);
             let stats = Arc::new(Stats::default());
-            let source = Arc::new(AtomicU32::new(request.source.encode()));
-            let (stream, name, destination_rate) = open(request, rate, rx, stats.clone())?;
+            let control = Arc::new(RouteControl::new(
+                request.source,
+                request.gain_db,
+                request.muted,
+            ));
+            let (stream, name, destination_rate) =
+                open(request, rate, rx, stats.clone(), control.clone())?;
             // A prepared stream consumes only silence until the engine installs
             // the taps. Failed preparation therefore leaves all current feeds intact.
             stream
                 .play()
                 .map_err(|e| format!("Could not start secondary output {name}: {e}"))?;
             routes.push(RouteStream {
-                _stream: stream,
-                source: source.clone(),
+                _stream: Some(stream),
+                control: control.clone(),
+                requested_device: request.device.clone(),
                 stats: stats.clone(),
                 device: name,
                 sample_rate: destination_rate,
@@ -205,7 +294,7 @@ impl OutputStreams {
                 channels: request.channels,
             });
             taps.push(Tap {
-                source,
+                control,
                 producer: tx,
                 stats,
             });
@@ -229,12 +318,27 @@ impl OutputStreams {
         }
         Ok(())
     }
+    /// Levels and source can change without reopening hardware or replacing
+    /// the tap set. Only device/channel topology requires new streams.
+    pub(crate) fn update_in_place(&self, requests: &[OutputRouteRequest]) -> bool {
+        if requests.len() != self.routes.len()
+            || !self.routes.iter().zip(requests).all(|(route, request)| {
+                route.requested_device == request.device
+                    && route.channels == request.channels
+                    && route.stats.healthy.load(Ordering::Relaxed)
+            })
+        {
+            return false;
+        }
+        for (route, request) in self.routes.iter().zip(requests) {
+            route.control.levels(request.gain_db, request.muted);
+            route.control.set_source(Some(request.source));
+        }
+        true
+    }
     pub(crate) fn set_source(&self, index: usize, source: Option<OutputSource>) {
         if let Some(route) = self.routes.get(index) {
-            route.source.store(
-                source.map_or(DISABLED, OutputSource::encode),
-                Ordering::Relaxed,
-            );
+            route.control.set_source(source);
         }
     }
     pub(crate) fn infos(&self) -> Vec<OutputRouteInfo> {
@@ -242,6 +346,15 @@ impl OutputStreams {
             .iter()
             .map(|r| {
                 let buffered = r.stats.buffered.load(Ordering::Relaxed) as usize;
+                let buffered_latency_ms = buffered as f32 / r.source_rate.max(1.0) * 1000.0;
+                let reported_ns = r.stats.output_lead_ns.load(Ordering::Relaxed);
+                let output_latency_ms = if reported_ns > 0 {
+                    reported_ns as f32 / 1_000_000.0
+                } else {
+                    r.stats.callback_frames.load(Ordering::Relaxed) as f32
+                        / r.sample_rate.max(1) as f32
+                        * 1000.0
+                };
                 OutputRouteInfo {
                     device: r.device.clone(),
                     sample_rate: r.sample_rate,
@@ -250,7 +363,9 @@ impl OutputStreams {
                     underruns: r.stats.underruns.load(Ordering::Relaxed),
                     overruns: r.stats.overruns.load(Ordering::Relaxed),
                     buffered_frames: buffered,
-                    latency_ms: buffered as f32 / r.source_rate.max(1.0) * 1000.0,
+                    latency_ms: buffered_latency_ms + output_latency_ms,
+                    buffered_latency_ms,
+                    output_latency_ms,
                     clock_correction_ppm: f32::from_bits(
                         r.stats.correction.load(Ordering::Relaxed),
                     ) * 1_000_000.0,
@@ -261,54 +376,113 @@ impl OutputStreams {
 }
 
 struct Reader {
-    consumer: Consumer<[f32; 2]>,
+    consumer: Consumer<Frame>,
     stats: Arc<Stats>,
+    control: Arc<RouteControl>,
+    identity: u64,
     source_per_output: f64,
     correction: f64,
     phase: f64,
     a: [f32; 2],
     b: [f32; 2],
+    pending: Option<Frame>,
     ready: bool,
     target: usize,
     gain: f32,
-    target_gain: f32,
     gain_step: f32,
+    fade_samples: u32,
+    fade_remaining: u32,
+    fade_start: [f32; 2],
+    last: [f32; 2],
 }
 impl Reader {
     fn new(
-        consumer: Consumer<[f32; 2]>,
+        consumer: Consumer<Frame>,
         stats: Arc<Stats>,
+        control: Arc<RouteControl>,
         source_rate: f32,
         dest_rate: u32,
-        gain_db: f32,
-        muted: bool,
     ) -> Self {
         let target = (source_rate * 0.025).round() as usize;
+        let identity = control.source.load(Ordering::Acquire);
         Self {
             consumer,
             stats,
+            control,
+            identity,
             source_per_output: f64::from(source_rate) / f64::from(dest_rate.max(1)),
             correction: 0.0,
             phase: 0.0,
             a: [0.0; 2],
             b: [0.0; 2],
+            pending: None,
             ready: false,
             target: target.clamp(TARGET / 2, CAPACITY / 4),
             gain: 0.0,
-            target_gain: if muted {
-                0.0
-            } else {
-                10.0_f32.powf(gain_db / 20.0)
-            },
             gain_step: 1.0 / (dest_rate as f32 * 0.01).max(1.0),
+            fade_samples: (dest_rate / 200).max(1),
+            fade_remaining: 0,
+            fade_start: [0.0; 2],
+            last: [0.0; 2],
+        }
+    }
+    fn pop_current(&mut self) -> Option<[f32; 2]> {
+        let epoch = (self.identity >> 32) as u32;
+        if let Some(frame) = self.pending.take()
+            && frame.epoch == epoch
+        {
+            return Some(frame.samples);
+        }
+        // At most the FIFO's fixed capacity can be discarded, even when a
+        // source changes while the primary callback is still writing.
+        for _ in 0..CAPACITY {
+            let frame = self.consumer.pop().ok()?;
+            if frame.epoch == epoch {
+                return Some(frame.samples);
+            }
+        }
+        None
+    }
+    fn discard_old_epoch(&mut self) {
+        let epoch = (self.identity >> 32) as u32;
+        if self.pending.is_some_and(|frame| frame.epoch == epoch) {
+            return;
+        }
+        self.pending = None;
+        for _ in 0..CAPACITY {
+            let Ok(frame) = self.consumer.pop() else {
+                return;
+            };
+            if frame.epoch == epoch {
+                self.pending = Some(frame);
+                return;
+            }
         }
     }
     fn begin(&mut self) {
-        let available = self.consumer.slots();
-        // A suspended callback must resume near the live edge rather than
-        // playing an old cue half a second late. The work remains bounded.
-        if available > self.target * 4 {
+        let identity = self.control.source.load(Ordering::Acquire);
+        if identity != self.identity {
+            self.identity = identity;
+            self.fade_start = self.last;
+            self.fade_remaining = self.fade_samples;
+            self.ready = false;
+            self.phase = 0.0;
+            self.a = [0.0; 2];
+            self.b = [0.0; 2];
+            self.pending = None;
+            self.gain = 0.0;
+            self.correction = 0.0;
+        }
+        if !self.ready {
+            self.discard_old_epoch();
+        }
+        let enabled = self.identity as u32 != DISABLED;
+        let available = self.consumer.slots() + usize::from(self.pending.is_some());
+        // Leave slack at the maximum target too: a full 16k queue must
+        // resume at the live edge rather than keep old audio indefinitely.
+        if available > (self.target * 4).min(CAPACITY - 1) {
             let discard = available.saturating_sub(self.target * 2);
+            self.pending = None;
             for _ in 0..discard {
                 let _ = self.consumer.pop();
             }
@@ -316,35 +490,49 @@ impl Reader {
                 .overruns
                 .fetch_add(discard as u64, Ordering::Relaxed);
             self.ready = false;
+            self.gain = 0.0;
         }
-        let available = self.consumer.slots();
+        let available = self.consumer.slots() + usize::from(self.pending.is_some());
         self.stats
             .buffered
             .store(available as u32, Ordering::Relaxed);
-        if !self.ready && available >= self.target {
-            self.a = self.consumer.pop().unwrap_or([0.0; 2]);
-            self.b = self.consumer.pop().unwrap_or([0.0; 2]);
+        if enabled
+            && !self.ready
+            && self.fade_remaining == 0
+            && available >= self.target
+            && let Some(a) = self.pop_current()
+            && let Some(b) = self.pop_current()
+        {
+            self.a = a;
+            self.b = b;
             self.phase = 0.0;
             self.ready = true;
         }
-        // PI-like slow integral correction follows clock error, with a small
-        // proportional term restoring the target fill. Bound to +/-1%.
         let error = (available as f64 - self.target as f64) / self.target as f64;
-        self.correction = (self.correction + error * 0.000002).clamp(-0.01, 0.01);
+        if enabled {
+            self.correction = (self.correction + error * 0.000002).clamp(-0.01, 0.01);
+        }
         self.stats
             .correction
             .store((self.correction as f32).to_bits(), Ordering::Relaxed);
     }
     fn next(&mut self) -> [f32; 2] {
-        if !self.ready {
-            return [0.0; 2];
+        if self.fade_remaining > 0 {
+            let scale = self.fade_remaining as f32 / self.fade_samples as f32;
+            self.fade_remaining -= 1;
+            self.last = [self.fade_start[0] * scale, self.fade_start[1] * scale];
+            return self.last;
+        }
+        if !self.ready || self.identity as u32 == DISABLED {
+            self.last = [0.0; 2];
+            return self.last;
         }
         let mut out = [0.0; 2];
         for (i, v) in out.iter_mut().enumerate() {
             *v = self.a[i] + (self.b[i] - self.a[i]) * self.phase as f32;
         }
-        let delta = (self.target_gain - self.gain).clamp(-self.gain_step, self.gain_step);
-        self.gain += delta;
+        let target = f32::from_bits(self.control.gain.load(Ordering::Relaxed));
+        self.gain += (target - self.gain).clamp(-self.gain_step, self.gain_step);
         for v in &mut out {
             *v *= self.gain;
         }
@@ -355,18 +543,21 @@ impl Reader {
         while self.phase >= 1.0 {
             self.phase -= 1.0;
             self.a = self.b;
-            match self.consumer.pop() {
-                Ok(frame) => self.b = frame,
-                Err(_) => {
+            match self.pop_current() {
+                Some(frame) => self.b = frame,
+                None => {
                     self.ready = false;
                     self.a = [0.0; 2];
                     self.b = [0.0; 2];
                     self.gain = 0.0;
-                    self.stats.underruns.fetch_add(1, Ordering::Relaxed);
+                    if self.control.source.load(Ordering::Acquire) == self.identity {
+                        self.stats.underruns.fetch_add(1, Ordering::Relaxed);
+                    }
                     break;
                 }
             }
         }
+        self.last = out;
         out
     }
     fn write<T: SizedSample + FromSample<f32>>(
@@ -375,6 +566,9 @@ impl Reader {
         channels: usize,
         map: OutputChannels,
     ) {
+        self.stats
+            .callback_frames
+            .store((out.len() / channels.max(1)) as u32, Ordering::Relaxed);
         self.begin();
         for frame in out.chunks_exact_mut(channels.max(1)) {
             let sample = self.next();
@@ -411,8 +605,9 @@ pub(crate) fn write_frame<T: Sample + FromSample<f32>>(
 fn open(
     request: &OutputRouteRequest,
     source_rate: f32,
-    consumer: Consumer<[f32; 2]>,
+    consumer: Consumer<Frame>,
     stats: Arc<Stats>,
+    control: Arc<RouteControl>,
 ) -> Result<(cpal::Stream, String, u32), String> {
     let host = cpal::default_host();
     let device = crate::handle::find_output_device(&host, &request.device).ok_or_else(|| {
@@ -447,14 +642,7 @@ fn open(
     request.channels.validate(config.channels)?;
     let channels = config.channels as usize;
     let map = request.channels;
-    let mut reader = Reader::new(
-        consumer,
-        stats.clone(),
-        source_rate,
-        rate,
-        request.gain_db,
-        request.muted,
-    );
+    let mut reader = Reader::new(consumer, stats.clone(), control, source_rate, rate);
     let on_error = move |_err: cpal::Error| {
         stats.healthy.store(false, Ordering::Relaxed);
     };
@@ -462,7 +650,20 @@ fn open(
         ($t:ty) => {
             device.build_output_stream(
                 config,
-                move |data: &mut [$t], _| crate::rt::guard(|| reader.write(data, channels, map)),
+                move |data: &mut [$t], info| {
+                    crate::rt::guard(|| {
+                        let timing = info.timestamp();
+                        reader.stats.output_lead_ns.store(
+                            timing
+                                .playback
+                                .saturating_duration_since(timing.callback)
+                                .as_nanos()
+                                .min(u128::from(u64::MAX)) as u64,
+                            Ordering::Relaxed,
+                        );
+                        reader.write(data, channels, map)
+                    })
+                },
                 on_error,
                 None,
             )
@@ -564,7 +765,7 @@ mod tests {
             (OutputSource::Master, master_tx),
         ] {
             taps.push(Tap {
-                source: Arc::new(AtomicU32::new(source.encode())),
+                control: Arc::new(RouteControl::new(source, 0.0, false)),
                 producer,
                 stats: Arc::new(Stats::default()),
             });
@@ -575,8 +776,8 @@ mod tests {
         let (mut l, mut r) = ([0.0; 256], [0.0; 256]);
         crate::rt::guard(|| engine.process(&mut l, &mut r));
         for _ in 0..256 {
-            assert_eq!(track_rx.pop().unwrap(), [0.5, 0.25]);
-            assert_eq!(master_rx.pop().unwrap(), [0.125, 0.0625]);
+            assert_eq!(track_rx.pop().unwrap().samples, [0.5, 0.25]);
+            assert_eq!(master_rx.pop().unwrap().samples, [0.125, 0.0625]);
         }
         assert_eq!(l, [0.125; 256]);
         engine.handle_command(EngineCommand::SetTrackMute {
@@ -592,8 +793,8 @@ mod tests {
             }
         }
         crate::rt::guard(|| engine.process(&mut l, &mut r));
-        assert_eq!(track_rx.pop().unwrap(), [0.0; 2]);
-        assert_eq!(master_rx.pop().unwrap(), [0.0; 2]);
+        assert_eq!(track_rx.pop().unwrap().samples, [0.0; 2]);
+        assert_eq!(master_rx.pop().unwrap().samples, [0.0; 2]);
     }
 
     #[test]
@@ -613,7 +814,7 @@ mod tests {
         let stats = Arc::new(Stats::default());
         let mut taps = OutputTaps {
             taps: vec![Tap {
-                source: Arc::new(AtomicU32::new(OutputSource::TrackMeter(7).encode())),
+                control: Arc::new(RouteControl::new(OutputSource::TrackMeter(7), 0.0, false)),
                 producer: tx,
                 stats,
             }],
@@ -621,21 +822,166 @@ mod tests {
         taps.capture(OutputSource::Master, &[1.0], &[1.0]);
         assert!(rx.pop().is_err());
         taps.capture(OutputSource::TrackMeter(7), &[0.25], &[-0.5]);
-        assert_eq!(rx.pop().unwrap(), [0.25, -0.5]);
+        assert_eq!(rx.pop().unwrap().samples, [0.25, -0.5]);
         taps.silence(OutputSource::TrackMeter(7), 2);
-        assert_eq!(rx.pop().unwrap(), [0.0; 2]);
-        assert_eq!(rx.pop().unwrap(), [0.0; 2]);
+        assert_eq!(rx.pop().unwrap().samples, [0.0; 2]);
+        assert_eq!(rx.pop().unwrap().samples, [0.0; 2]);
     }
+    fn simulated_route() -> (OutputStreams, Producer<Frame>, Reader, Arc<RouteControl>) {
+        let (tx, rx) = RingBuffer::new(CAPACITY);
+        let stats = Arc::new(Stats::default());
+        let control = Arc::new(RouteControl::new(OutputSource::Master, 0.0, false));
+        let reader = Reader::new(rx, stats.clone(), control.clone(), 48_000.0, 48_000);
+        let streams = OutputStreams {
+            routes: vec![RouteStream {
+                _stream: None,
+                control: control.clone(),
+                requested_device: "simulated".into(),
+                stats,
+                device: "simulated".into(),
+                sample_rate: 48_000,
+                source_rate: 48_000.0,
+                channels: OutputChannels::default(),
+            }],
+        };
+        (streams, tx, reader, control)
+    }
+    #[test]
+    fn live_levels_preserve_stream_and_tap_identity_and_ramp_without_faults() {
+        let (streams, mut tx, mut reader, control) = simulated_route();
+        let mut out = [0.0_f32; 960];
+        for _ in 0..reader.target {
+            tx.push([0.25, 0.25].into()).unwrap();
+        }
+        crate::rt::guard(|| reader.write(&mut out, 2, OutputChannels::default()));
+        let identity = control.source.load(Ordering::Relaxed);
+        let request = OutputRouteRequest {
+            source: OutputSource::Master,
+            device: "simulated".into(),
+            channels: OutputChannels::default(),
+            gain_db: -6.0,
+            muted: false,
+        };
+        assert!(streams.update_in_place(std::slice::from_ref(&request)));
+        assert!(Arc::ptr_eq(&streams.routes[0].control, &reader.control));
+        assert_eq!(control.source.load(Ordering::Relaxed), identity);
+        assert!(reader.ready, "the live reader was not reset");
+        for _ in 0..480 {
+            tx.push([0.25, 0.25].into()).unwrap();
+        }
+        crate::rt::guard(|| reader.write(&mut out, 2, OutputChannels::default()));
+        assert!((out[958] - 0.25 * 10.0_f32.powf(-6.0 / 20.0)).abs() < 0.002);
+        assert!(out.windows(2).all(|pair| (pair[1] - pair[0]).abs() < 0.001));
+        let muted = OutputRouteRequest {
+            muted: true,
+            ..request.clone()
+        };
+        assert!(streams.update_in_place(&[muted]));
+        for _ in 0..480 {
+            tx.push([0.25, 0.25].into()).unwrap();
+        }
+        crate::rt::guard(|| reader.write(&mut out, 2, OutputChannels::default()));
+        assert_eq!(out[958], 0.0);
+        assert_eq!(control.source.load(Ordering::Relaxed), identity);
+        assert_eq!(reader.stats.underruns.load(Ordering::Relaxed), 0);
+        let changed = OutputRouteRequest {
+            channels: OutputChannels::Stereo(2, 3),
+            ..request
+        };
+        assert!(
+            !streams.update_in_place(&[changed]),
+            "only topology changes need new hardware"
+        );
+    }
+    #[test]
+    fn source_epochs_flush_stale_audio_and_disable_fades_without_an_underrun() {
+        let (_streams, mut tx, mut reader, control) = simulated_route();
+        let mut out = [0.0_f32; 960];
+        for _ in 0..reader.target {
+            tx.push([0.5, 0.5].into()).unwrap();
+        }
+        reader.write(&mut out, 2, OutputChannels::default());
+        let last = out[958];
+        assert!(last > 0.49);
+        control.set_source(None);
+        crate::rt::guard(|| reader.write(&mut out, 2, OutputChannels::default()));
+        assert_eq!(out[0], last);
+        assert!(
+            out.as_chunks::<2>()
+                .0
+                .windows(2)
+                .all(|pair| pair[1][0] <= pair[0][0] && (pair[1][0] - pair[0][0]).abs() < 0.003)
+        );
+        assert_eq!(out[958], 0.0);
+        assert_eq!(reader.consumer.slots(), 0, "old FIFO is discarded");
+        assert_eq!(reader.stats.underruns.load(Ordering::Relaxed), 0);
+        control.set_source(Some(OutputSource::TrackMeter(7)));
+        let epoch = (control.source.load(Ordering::Relaxed) >> 32) as u32;
+        // Model the previous producer completing an overlapping old block.
+        for _ in 0..200 {
+            tx.push(Frame {
+                epoch: 0,
+                samples: [0.9; 2],
+            })
+            .unwrap();
+        }
+        for _ in 0..reader.target {
+            tx.push(Frame {
+                epoch,
+                samples: [-0.5; 2],
+            })
+            .unwrap();
+        }
+        crate::rt::guard(|| reader.write(&mut out, 2, OutputChannels::default()));
+        assert!(
+            out.iter().all(|v| *v == 0.0),
+            "switch fades/reprimes before the new source"
+        );
+        crate::rt::guard(|| reader.write(&mut out, 2, OutputChannels::default()));
+        assert!(
+            out.iter().all(|v| *v <= 0.0),
+            "no stale positive old-source samples"
+        );
+        assert!(out.iter().any(|v| *v < -0.4));
+        assert_eq!(reader.stats.underruns.load(Ordering::Relaxed), 0);
+    }
+    #[test]
+    fn route_latency_separates_buffered_audio_from_reported_device_delay() {
+        let (streams, _tx, _reader, _control) = simulated_route();
+        let stats = &streams.routes[0].stats;
+        stats.buffered.store(1200, Ordering::Relaxed);
+        stats.callback_frames.store(480, Ordering::Relaxed);
+        let info = &streams.infos()[0];
+        assert_eq!(info.buffered_latency_ms, 25.0);
+        assert_eq!(info.output_latency_ms, 10.0);
+        assert_eq!(
+            info.latency_ms, 35.0,
+            "prefill is already in actual FIFO fill"
+        );
+        stats.output_lead_ns.store(15_000_000, Ordering::Relaxed);
+        assert_eq!(
+            streams.infos()[0].latency_ms,
+            40.0,
+            "reported device lead takes precedence"
+        );
+    }
+
     #[test]
     fn clock_mismatch_stays_bounded_and_an_empty_queue_is_silent() {
         let (mut tx, rx) = RingBuffer::new(CAPACITY);
         let stats = Arc::new(Stats::default());
-        let mut reader = Reader::new(rx, stats.clone(), 48_000.0, 44_100, 0.0, false);
+        let mut reader = Reader::new(
+            rx,
+            stats.clone(),
+            Arc::new(RouteControl::new(OutputSource::Master, 0.0, false)),
+            48_000.0,
+            44_100,
+        );
         let mut out = [0.0_f32; 882];
         reader.write(&mut out, 2, OutputChannels::default());
         assert!(out.iter().all(|v| *v == 0.0));
         for _ in 0..reader.target {
-            tx.push([0.25, -0.25]).unwrap();
+            tx.push([0.25, -0.25].into()).unwrap();
         }
         // 48 kHz producer vs a 44.1 kHz consumer running 300 ppm slow.
         let mut frac = 0.0;
@@ -644,7 +990,7 @@ mod tests {
             let n = frac as usize;
             frac -= n as f64;
             for _ in 0..n {
-                tx.push([0.25, -0.25]).unwrap();
+                tx.push([0.25, -0.25].into()).unwrap();
             }
             crate::rt::guard(|| reader.write(&mut out, 2, OutputChannels::default()));
             assert!(out.iter().all(|v| v.is_finite()));

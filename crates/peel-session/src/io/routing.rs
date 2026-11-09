@@ -31,7 +31,10 @@ pub struct OutputRouteStatus {
     pub underruns: u64,
     pub overruns: u64,
     pub buffered_frames: usize,
+    /// Approximate FIFO plus output-device delay, not phase alignment.
     pub latency_ms: f32,
+    pub buffered_latency_ms: f32,
+    pub output_latency_ms: f32,
     pub clock_correction_ppm: f32,
 }
 
@@ -55,10 +58,15 @@ impl Session {
         }
         // Validate the whole request before opening a device or editing state.
         for (index, route) in routes.iter().enumerate() {
-            if route
-                .track
-                .is_some_and(|id| self.project().mixer.track(id).is_none())
-            {
+            if route.track.is_some_and(|id| {
+                self.project().mixer.track(id).is_none()
+                    && !self
+                        .io
+                        .output_routes
+                        .routes
+                        .iter()
+                        .any(|old| old.track == Some(id))
+            }) {
                 return Err(format!(
                     "Output route {} references a missing mixer track",
                     index + 1
@@ -81,18 +89,7 @@ impl Session {
             }
         }
         self.sync();
-        let requests: Vec<_> = routes
-            .iter()
-            .map(|r| OutputRouteRequest {
-                source: r.track.map_or(OutputSource::Master, |id| {
-                    OutputSource::TrackMeter(self.meters[&id])
-                }),
-                device: r.device.clone(),
-                channels: r.channels,
-                gain_db: r.gain_db,
-                muted: r.muted,
-            })
-            .collect();
+        let requests = self.output_route_requests(&routes, false)?;
         self.engine.set_output_routes(&requests)?;
         for (index, route) in routes.iter_mut().enumerate() {
             if route.name.trim().is_empty() {
@@ -108,24 +105,64 @@ impl Session {
     }
 
     pub fn output_route_status(&self) -> Vec<OutputRouteStatus> {
-        self.engine
-            .output_route_info()
-            .into_iter()
-            .zip(&self.io.output_routes.routes)
-            .map(|(info, route)| OutputRouteStatus {
-                name: route.name.clone(),
-                device: info.device,
-                sample_rate: info.sample_rate,
-                channels: info.channels,
-                healthy: info.healthy
-                    && route
-                        .track
-                        .is_none_or(|id| self.project().mixer.track(id).is_some()),
-                underruns: info.underruns,
-                overruns: info.overruns,
-                buffered_frames: info.buffered_frames,
-                latency_ms: info.latency_ms,
-                clock_correction_ppm: info.clock_correction_ppm,
+        let infos = self.engine.output_route_info();
+        self.io
+            .output_routes
+            .routes
+            .iter()
+            .enumerate()
+            .map(|(index, route)| {
+                let info = infos.get(index);
+                OutputRouteStatus {
+                    name: route.name.clone(),
+                    device: info.map_or_else(|| route.device.clone(), |i| i.device.clone()),
+                    sample_rate: info.map_or(0, |i| i.sample_rate),
+                    channels: route.channels,
+                    healthy: info.is_some_and(|i| i.healthy)
+                        && route.track.is_none_or(|id| {
+                            self.project().mixer.track(id).is_some()
+                                && self.meters.contains_key(&id)
+                        }),
+                    underruns: info.map_or(0, |i| i.underruns),
+                    overruns: info.map_or(0, |i| i.overruns),
+                    buffered_frames: info.map_or(0, |i| i.buffered_frames),
+                    latency_ms: info.map_or(0.0, |i| i.latency_ms),
+                    buffered_latency_ms: info.map_or(0.0, |i| i.buffered_latency_ms),
+                    output_latency_ms: info.map_or(0.0, |i| i.output_latency_ms),
+                    clock_correction_ppm: info.map_or(0.0, |i| i.clock_correction_ppm),
+                }
+            })
+            .collect()
+    }
+
+    fn output_route_requests(
+        &self,
+        routes: &[OutputRoute],
+        reopening: bool,
+    ) -> Result<Vec<OutputRouteRequest>, String> {
+        routes
+            .iter()
+            .map(|route| {
+                let source = match route.track {
+                    None => OutputSource::Master,
+                    Some(id) if self.project().mixer.track(id).is_none() => OutputSource::Disabled,
+                    Some(id) => match self.meters.get(&id).copied() {
+                        Some(meter) => OutputSource::TrackMeter(meter),
+                        None if reopening => OutputSource::Disabled,
+                        None => {
+                            return Err(
+                                "Output source mixer track exceeds available meter capacity".into(),
+                            );
+                        }
+                    },
+                };
+                Ok(OutputRouteRequest {
+                    source,
+                    device: route.device.clone(),
+                    channels: route.channels,
+                    gain_db: route.gain_db,
+                    muted: route.muted,
+                })
             })
             .collect()
     }
@@ -168,9 +205,13 @@ impl Session {
         }
         if !self.io.output_routes.routes.is_empty() {
             let routes = self.io.output_routes.routes.clone();
-            if let Err(error) = self.configure_output_routes(routes) {
+            let result = self
+                .output_route_requests(&routes, true)
+                .and_then(|requests| self.engine.set_output_routes(&requests));
+            if let Err(error) = result {
                 self.notify(format!("Secondary outputs need attention: {error}"), true);
             }
+            self.refresh_output_route_sources();
         }
     }
 }
@@ -237,6 +278,52 @@ mod tests {
         assert_eq!(s.primary_output_channels(), OutputChannels::Mono(1));
         s.configure_output_routes(vec![]).unwrap();
     }
+    #[test]
+    fn reopening_disables_only_deleted_sources_and_undo_recovers_them() {
+        let mut s = Session::new_silent(crate::template::empty());
+        let mut bus = s.project().mixer.tracks[0].clone();
+        bus.id = Id::new();
+        bus.name = "Cue bus".into();
+        bus.output = Some(s.project().mixer.tracks[0].id);
+        let bus_id = bus.id;
+        s.doc.edit("Add bus", |p| p.mixer.tracks.push(bus));
+        s.tick();
+        let mut cue = route();
+        cue.track = Some(bus_id);
+        let mut master = route();
+        master.device = "Other simulated device".into();
+        s.io.output_routes.routes = vec![cue, master];
+        let requests = s.output_route_requests(s.output_routes(), true).unwrap();
+        assert!(matches!(requests[0].source, OutputSource::TrackMeter(_)));
+        assert_eq!(requests[1].source, OutputSource::Master);
+        s.doc
+            .edit("Delete bus", |p| p.mixer.tracks.retain(|t| t.id != bus_id));
+        s.tick();
+        let requests = s.output_route_requests(s.output_routes(), true).unwrap();
+        assert_eq!(requests[0].source, OutputSource::Disabled);
+        assert_eq!(requests[1].source, OutputSource::Master);
+        // A failed hardware reopen still leaves configured routes visible.
+        s.reopen_output_routes();
+        assert_eq!(s.output_route_status().len(), 2);
+        assert!(!s.output_route_status()[0].healthy);
+        s.doc.undo();
+        s.tick();
+        assert!(matches!(
+            s.output_route_requests(s.output_routes(), true).unwrap()[0].source,
+            OutputSource::TrackMeter(_)
+        ));
+        s.meters.remove(&bus_id);
+        assert!(
+            s.output_route_requests(s.output_routes(), false)
+                .unwrap_err()
+                .contains("meter capacity")
+        );
+        assert_eq!(
+            s.output_route_requests(s.output_routes(), true).unwrap()[0].source,
+            OutputSource::Disabled
+        );
+    }
+
     #[test]
     fn physical_channel_overlap_and_route_serialization() {
         assert!(channels_overlap(
