@@ -2747,3 +2747,207 @@ fn violin_vibrato_moves_pitch_and_level_like_a_player() {
     println!("vibrato extent {cents} cents");
     assert!(cents > 15.0 && cents < 90.0, "{cents}");
 }
+
+// ------------------------------------------------------- sax realism
+
+fn sax_note(key: u8, vel: f32, params: &[(&str, f32)], total: usize) -> Vec<f32> {
+    let mut d = fresh("peel.wind.sax");
+    set(d.as_mut(), "vibrato.depth", 0.0);
+    for (k, v) in params {
+        set(d.as_mut(), k, *v);
+    }
+    render(d.as_mut(), &[note_on(0, key, vel, 1)], total, 256).0
+}
+
+/// Energy in partials 3..=10 relative to the fundamental, in dB.
+fn sax_upper_partials_db(buf: &[f32], f0: f32) -> f32 {
+    let base = tone_level(buf, f0);
+    let upper: f32 = (3..=10)
+        .map(|k| tone_level(buf, f0 * k as f32).powi(2))
+        .sum();
+    10.0 * (upper.max(1e-20) / base.powi(2)).log10()
+}
+
+#[test]
+fn sax_brightness_rises_with_breath_pressure() {
+    // Soft notes are dark and nearly a sine; loud ones are buzzy.
+    for key in [52u8, 62, 72] {
+        let f0 = 440.0 * 2f32.powf((key as f32 - 69.0) / 12.0);
+        let tone = |vel: f32| {
+            let l = sax_note(key, vel, &[("out.velocity", 1.0)], 36_000);
+            sax_upper_partials_db(&l[14_400..], f0)
+        };
+        let (soft, mid, loud) = (tone(0.2), tone(0.55), tone(1.0));
+        println!("key {key}: upper partials {soft:.1} / {mid:.1} / {loud:.1} dB");
+        let limit = if key < 60 { -9.0 } else { -15.0 };
+        assert!(soft < limit, "key {key}: soft note too bright ({soft} dB)");
+        assert!(loud > soft + 5.0, "key {key}: {soft} -> {loud} dB");
+        assert!(mid > soft && mid < loud, "key {key}: not monotonic");
+    }
+}
+
+#[test]
+fn sax_pitch_does_not_depend_on_dynamics() {
+    // The bore length is trimmed against the sounding period, so blowing
+    // harder does not detune the note.
+    for key in [45u8, 55, 66, 77, 86] {
+        let want = 440.0 * 2f32.powf((key as f32 - 69.0) / 12.0);
+        for vel in [0.15f32, 0.5, 1.0] {
+            let l = sax_note(key, vel, &[("out.velocity", 1.0)], 36_000);
+            let got = detect_pitch(&l[14_400..], SR);
+            let cents = 1200.0 * (got / want).log2();
+            assert!(cents.abs() < 8.0, "key {key} vel {vel}: {cents} cents");
+        }
+    }
+}
+
+#[test]
+fn sax_speaks_quickly_and_stays_on_the_fundamental() {
+    for key in [48u8, 60, 72, 84] {
+        let l = sax_note(key, 0.8, &[("breath.attack", 0.03)], 30_000);
+        let steady = rms(&l[20_000..30_000]);
+        // Full level within about 120 ms of the note on.
+        let early = rms(&l[5_760..8_000]);
+        assert!(
+            early > 0.7 * steady,
+            "key {key}: slow onset {early} vs {steady}"
+        );
+        // It never starts on an overtone: the fundamental dominates
+        // the lowest octave.
+        let f0 = 440.0 * 2f32.powf((key as f32 - 69.0) / 12.0);
+        let w = &l[4_800..9_600];
+        assert!(
+            tone_level(w, f0) > 2.0 * tone_level(w, f0 * 0.5),
+            "key {key}"
+        );
+    }
+}
+
+#[test]
+fn sax_breath_noise_rides_on_the_tone() {
+    // Turbulence follows the waveform, so the noise floor between harmonics
+    // collapses when the tone stops.
+    let mut d = fresh("peel.wind.sax");
+    set(d.as_mut(), "vibrato.depth", 0.0);
+    set(d.as_mut(), "breath.noise", 0.5);
+    let ev = [note_on(0, 62, 0.8, 1), note_off(30_000, 62, 1)];
+    let (l, _) = render(d.as_mut(), &ev, 48_000, 256);
+    let f0 = 293.66;
+    let gap = |w: &[f32]| tone_level(w, f0 * 6.5) + tone_level(w, f0 * 9.5);
+    let during = gap(&l[12_000..28_000]);
+    assert!(during > 1e-5, "no noise between harmonics: {during}");
+    assert!(rms(&l[46_000..]) < 1e-4, "tail should be silent");
+}
+
+#[test]
+fn sax_notes_start_and_end_without_clicks() {
+    for name in ["Alto", "House Sax", "Growl", "Breathy"] {
+        let mut d = sax_with_preset(name);
+        let ev = [note_on(1_000, 64, 0.9, 1), note_off(30_000, 64, 1)];
+        let (l, _) = render(d.as_mut(), &ev, 48_000, 256);
+        let pk = peak(&l);
+        let step = l
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0, f32::max);
+        assert!(step < 0.45 * pk, "{name}: sample jump {step} vs peak {pk}");
+        let tail = &l[30_000..];
+        let end_step = tail
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0, f32::max);
+        assert!(end_step < 0.4 * pk, "{name}: release click {end_step}");
+    }
+}
+
+#[test]
+fn sax_vibrato_moves_pitch_and_level_together() {
+    let mut d = fresh("peel.wind.sax");
+    set(d.as_mut(), "vibrato.depth", 40.0);
+    set(d.as_mut(), "vibrato.delay", 0.0);
+    set(d.as_mut(), "breath.scoop", 0.0);
+    let (l, _) = render(d.as_mut(), &[note_on(0, 64, 0.8, 1)], 48_000 * 3, 256);
+    let levels: Vec<f32> = (48_000..48_000 * 3 - 2_400)
+        .step_by(1_200)
+        .map(|s| 20.0 * rms(&l[s..s + 2_400]).log10())
+        .collect();
+    let hi = levels.iter().cloned().fold(f32::MIN, f32::max);
+    let lo = levels.iter().cloned().fold(f32::MAX, f32::min);
+    println!("vibrato level swing {:.1} dB", hi - lo);
+    assert!(hi - lo > 1.5, "no jaw-vibrato level swing: {}", hi - lo);
+    assert!(hi - lo < 12.0, "level swing too large: {}", hi - lo);
+}
+
+#[test]
+fn sax_high_notes_stay_clean() {
+    // Aliased partials would land between the harmonics.
+    for key in [84u8, 90, 96] {
+        let l = sax_note(
+            key,
+            1.0,
+            &[("tone.bright", 1.0), ("tone.edge", 1.0)],
+            30_000,
+        );
+        let w = &l[12_000..28_000];
+        let f0 = 440.0 * 2f32.powf((key as f32 - 69.0) / 12.0);
+        let harm = tone_level(w, f0);
+        let mut worst = 0.0f32;
+        let mut k = 2.5f32;
+        while f0 * k < 20_000.0 {
+            worst = worst.max(tone_level(w, f0 * k));
+            k += 1.0;
+        }
+        println!(
+            "key {key}: strongest inter-harmonic {:.1} dB",
+            20.0 * (worst / harm).log10()
+        );
+        assert!(
+            worst < 0.08 * harm,
+            "key {key}: inharmonic energy {worst} vs {harm}"
+        );
+    }
+}
+
+#[test]
+fn sax_new_presets_exist_and_are_distinct() {
+    let names: Vec<&str> = peel_instruments::presets("peel.wind.sax")
+        .iter()
+        .map(|p| p.name)
+        .collect();
+    for want in [
+        "Alto",
+        "Tenor",
+        "Soprano",
+        "Breathy",
+        "Growl",
+        "Section",
+        "Smooth Alto",
+        "House Sax",
+    ] {
+        assert!(names.contains(&want), "missing preset {want}");
+    }
+    let tone = |name: &str| {
+        let mut d = sax_with_preset(name);
+        let (l, _) = render(d.as_mut(), &[note_on(0, 64, 0.8, 1)], 36_000, 256);
+        brightness(&l[14_400..])
+    };
+    assert!(
+        tone("House Sax") > tone("Smooth Alto") * 1.15,
+        "House Sax should be brighter"
+    );
+}
+
+#[test]
+fn sax_poly_chord_is_fast_and_does_not_clip() {
+    let mut d = fresh("peel.wind.sax");
+    set(d.as_mut(), "voice.mode", 1.0);
+    let mut ev = Vec::new();
+    for (i, k) in [57u8, 61, 64, 68].iter().enumerate() {
+        ev.push(note_on(i * 5, *k, 1.0, i as u32 + 1));
+    }
+    let t = std::time::Instant::now();
+    let (l, _) = render(d.as_mut(), &ev, 48_000 * 4, 512);
+    let elapsed = t.elapsed().as_secs_f32();
+    assert!(all_finite(&l) && peak(&l) < 1.2, "peak {}", peak(&l));
+    assert!(elapsed < 1.0, "4 s of a 4-voice chord took {elapsed} s");
+}
