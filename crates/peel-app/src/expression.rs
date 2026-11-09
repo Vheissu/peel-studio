@@ -39,6 +39,7 @@ type Sender = fn(&mut Session, f32) -> bool;
 
 impl Axis {
     /// A return to rest is waiting for the live queue.
+    #[cfg(test)]
     pub fn neutral_due(&self) -> bool {
         self.neutral_due
     }
