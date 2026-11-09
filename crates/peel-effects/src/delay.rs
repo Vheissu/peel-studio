@@ -353,7 +353,16 @@ impl Delay {
             s.get(id) * 0.001 * self.sample_rate
         };
         let margin = self.mod_samples + 4.0;
-        samples.clamp(2.0 + self.mod_samples, (self.max_delay - margin).max(8.0))
+        let samples = samples.clamp(2.0 + self.mod_samples, (self.max_delay - margin).max(8.0));
+        // With no modulation a whole-sample time reads the line exactly. A
+        // fractional read low-passes the signal a little, and in the feedback
+        // loop that darkens every repeat (about 0.7 dB per repeat at 10 kHz),
+        // while the timing error is at most half a sample.
+        if self.mod_samples <= 0.0 {
+            samples.round()
+        } else {
+            samples
+        }
     }
 
     /// Reads channel `ch`'s line at its current time plus `modulation`.
@@ -825,5 +834,26 @@ mod tests {
             d.process(&ctx, &[], &mut l, &mut r);
         }
         assert!(d.is_silent());
+    }
+
+    #[test]
+    fn repeats_keep_their_brightness_at_fractional_times() {
+        // 333.37 ms is not a whole number of samples. A fractional read would
+        // smear every repeat through an interpolation low-pass, so the sharp
+        // click would shrink with each pass; a whole-sample read keeps it.
+        let mut d = free_delay(333.37, 333.37, 0.8, MODE_STEREO);
+        let (l, _) = run_impulse(&mut d, (SR * 2.0) as usize);
+        let step = (0.33337 * SR).round() as usize;
+        let click = |k: usize| {
+            l[k * step - 2..=k * step + 2]
+                .iter()
+                .fold(0.0f32, |m, v| m.max(v.abs()))
+        };
+        let want = 0.8f32.powi(4);
+        assert!(
+            (click(5) / want - 1.0).abs() < 0.02,
+            "repeat 5 click {} vs {want}",
+            click(5)
+        );
     }
 }
