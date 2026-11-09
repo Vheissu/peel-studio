@@ -247,7 +247,7 @@ pub static DESC: DeviceDescriptor = DeviceDescriptor {
     params: &PARAMS,
 };
 
-pub static PRESETS: [Preset; 6] = [
+pub static PRESETS: [Preset; 10] = [
     Preset {
         name: "Sub",
         params: &[
@@ -369,6 +369,74 @@ pub static PRESETS: [Preset; 6] = [
             ("filter.accent", 0.7),
             ("amp.sustain", 0.9),
             ("amp.release", 0.12),
+        ],
+    },
+    Preset {
+        name: "808",
+        params: &[
+            ("osc.wave", 3.0),
+            ("osc.sub", 0.0),
+            ("voice.mode", 2.0),
+            ("voice.glide", 0.12),
+            ("filter.cutoff", 2400.0),
+            ("filter.env_amount", 0.0),
+            ("filter.drive", 0.35),
+            ("amp.decay", 1.6),
+            ("amp.sustain", 0.0),
+            ("amp.release", 0.3),
+        ],
+    },
+    Preset {
+        name: "Fingered",
+        params: &[
+            ("osc.wave", 2.0),
+            ("osc2.level", 0.35),
+            ("osc2.detune", 0.0),
+            ("osc.sub", 0.25),
+            ("voice.mode", 0.0),
+            ("filter.cutoff", 700.0),
+            ("filter.resonance", 0.1),
+            ("filter.env_amount", 1.6),
+            ("filter.decay", 0.25),
+            ("filter.key_track", 0.5),
+            ("amp.attack", 0.003),
+            ("amp.decay", 0.9),
+            ("amp.sustain", 0.45),
+            ("amp.release", 0.12),
+        ],
+    },
+    Preset {
+        name: "Synthwave",
+        params: &[
+            ("osc.wave", 0.0),
+            ("osc2.level", 0.5),
+            ("osc2.detune", 8.0),
+            ("osc.sub", 0.35),
+            ("voice.mode", 0.0),
+            ("filter.cutoff", 420.0),
+            ("filter.resonance", 0.3),
+            ("filter.env_amount", 2.8),
+            ("filter.decay", 0.18),
+            ("filter.drive", 0.3),
+            ("amp.decay", 0.3),
+            ("amp.sustain", 0.5),
+            ("amp.release", 0.08),
+        ],
+    },
+    Preset {
+        name: "Wide Reese",
+        params: &[
+            ("osc.wave", 0.0),
+            ("osc2.level", 1.0),
+            ("osc2.detune", 22.0),
+            ("osc.sub", 0.45),
+            ("voice.mode", 1.0),
+            ("voice.glide", 0.05),
+            ("filter.cutoff", 1100.0),
+            ("filter.resonance", 0.25),
+            ("filter.env_amount", 0.3),
+            ("filter.drive", 0.6),
+            ("amp.release", 0.2),
         ],
     },
 ];
