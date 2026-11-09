@@ -1419,3 +1419,214 @@ fn violin_phrase_analysis() {
     );
     assert!(all_finite(&l) && w(28, 30) > 0.5 * w(1, 2) && w(28, 30) < 2.0 * w(1, 2));
 }
+
+// ------------------------------------------------- violin realism (bow, body)
+
+fn violin_dry(key: u8, vel: f32, secs: f32, params: &[(&str, f32)]) -> (Vec<f32>, Vec<f32>) {
+    let mut d = fresh("peel.strings.violin");
+    set(d.as_mut(), "vibrato.depth", 0.0);
+    set(d.as_mut(), "vibrato.variation", 0.0);
+    for (k, v) in params {
+        set(d.as_mut(), k, *v);
+    }
+    violin_note(d.as_mut(), key, vel, secs)
+}
+
+#[test]
+fn violin_bow_makes_helmholtz_motion() {
+    // A flat body and a quiet bow: harmonics fall like a sawtooth, 1/n, so the
+    // 2nd is about -6 dB and the 3rd about -9.5 dB under the fundamental.
+    let flat = [
+        ("body.resonance", 0.0),
+        ("body.brightness", 1.0),
+        ("bow.noise", 0.0),
+    ];
+    for key in [60u8, 69, 76] {
+        let (l, _) = violin_dry(key, 0.7, 2.0, &flat);
+        let f0 = 440.0 * 2f32.powf((key as f32 - 69.0) / 12.0);
+        let s = &l[SR as usize..SR as usize + 36_000];
+        let near = |f: f32| {
+            (-12..=12)
+                .map(|i| tone_level(s, f * (1.0 + i as f32 * 0.0012)))
+                .fold(0.0f32, f32::max)
+        };
+        let h1 = near(f0);
+        let r2 = 20.0 * (near(2.0 * f0) / h1).log10();
+        let r3 = 20.0 * (near(3.0 * f0) / h1).log10();
+        println!("key {key}: h2 {r2:.1} dB h3 {r3:.1} dB");
+        assert!((-9.5..-2.5).contains(&r2), "key {key}: h2 {r2}");
+        assert!((-14.0..-5.0).contains(&r3), "key {key}: h3 {r3}");
+    }
+}
+
+#[test]
+fn violin_bow_force_has_a_playable_window() {
+    // Far too much force chokes the string (Schelleng's upper limit) while the
+    // default does not: more force must not simply mean more level.
+    let level = |p: f32| {
+        let (l, _) = violin_dry(69, 0.7, 2.0, &[("bow.pressure", p), ("bow.noise", 0.0)]);
+        rms(&l[SR as usize..SR as usize * 2])
+    };
+    let mid = level(0.5);
+    assert!(mid > 0.01, "mid pressure sounds: {mid}");
+    for p in [0.0f32, 0.3, 0.8, 1.0] {
+        let v = level(p);
+        assert!(v.is_finite() && v > 0.2 * mid, "pressure {p}: {v} vs {mid}");
+    }
+}
+
+#[test]
+fn violin_body_follows_the_register() {
+    // Low notes get a bigger body: with register scaling the C2 fundamental
+    // region is emphasised relative to the unscaled violin body.
+    let low = |reg: f32| {
+        let (l, _) = violin_dry(36, 0.8, 2.0, &[("body.register", reg)]);
+        let s = &l[SR as usize..SR as usize * 2];
+        let f0 = 65.41;
+        let fund = tone_level(s, f0).max(tone_level(s, f0 * 2.0));
+        fund / rms(s)
+    };
+    let (scaled, plain) = (low(1.0), low(0.0));
+    println!("low register fundamental share: {scaled} vs {plain}");
+    assert!(scaled > 1.5 * plain, "{scaled} vs {plain}");
+}
+
+#[test]
+fn violin_low_notes_hold_pitch() {
+    for key in [36u8, 43, 48] {
+        let (l, _) = violin_dry(key, 0.8, 2.0, &[]);
+        let want = 440.0 * 2f32.powf((key as f32 - 69.0) / 12.0);
+        let got = detect_pitch(&l[SR as usize..], SR);
+        let cents = 1200.0 * (got / want).log2();
+        assert!(cents.abs() < 25.0, "key {key}: {got} Hz vs {want} Hz");
+    }
+}
+
+#[test]
+fn violin_section_players_differ_in_timing_tuning_and_pan() {
+    let render_with = |ens: f32| {
+        let mut d = fresh("peel.strings.violin");
+        set(d.as_mut(), "voice.ensemble", ens);
+        set(d.as_mut(), "voice.width", 1.0);
+        set(d.as_mut(), "bow.attack", 0.02);
+        violin_note(d.as_mut(), 69, 0.8, 2.0)
+    };
+    let (sl, _) = render_with(0.0);
+    let (el, er) = render_with(1.0);
+    // Players enter spread over tens of ms, so the section's attack is slower.
+    let rise = |b: &[f32]| {
+        let w = rms_windows(b, 48);
+        let top = w.iter().cloned().fold(0.0f32, f32::max);
+        w.iter().position(|v| *v > 0.5 * top).unwrap_or(0)
+    };
+    let early = |b: &[f32]| rms(&b[..720]);
+    println!("rise {} vs {}", rise(&el), rise(&sl));
+    assert!(early(&el) < early(&sl) || rise(&el) > rise(&sl));
+    // Tuning offsets spread the fundamental: energy beside 440 Hz.
+    let side = |b: &[f32]| {
+        let s = &b[SR as usize..SR as usize * 2];
+        (tone_level(s, 440.0 * 1.003) + tone_level(s, 440.0 * 0.997)) / tone_level(s, 440.0)
+    };
+    assert!(
+        side(&el) > 1.5 * side(&sl),
+        "{} vs {}",
+        side(&el),
+        side(&sl)
+    );
+    // And the players sit at different places in the stereo field.
+    let corr = {
+        let s = &el[SR as usize..SR as usize * 2];
+        let r = &er[SR as usize..SR as usize * 2];
+        let (mut ab, mut aa, mut bb) = (0.0f64, 0.0f64, 0.0f64);
+        for (x, y) in s.iter().zip(r) {
+            ab += (*x * *y) as f64;
+            aa += (*x * *x) as f64;
+            bb += (*y * *y) as f64;
+        }
+        ab / (aa * bb).sqrt()
+    };
+    assert!(corr < 0.9, "channel correlation {corr}");
+}
+
+#[test]
+fn violin_room_adds_a_tail_that_then_ends() {
+    let mut d = fresh("peel.strings.violin");
+    set(d.as_mut(), "voice.room", 1.0);
+    set(d.as_mut(), "bow.release", 0.03);
+    let ev = [note_on(0, 69, 0.8, 1), note_off(48_000, 69, 1)];
+    let (l, r) = render(d.as_mut(), &ev, 48_000 * 6, 256);
+    let tail = rms(&l[48_000 + 9_600..48_000 + 14_400]);
+    assert!(tail > 1.0e-4, "room tail {tail}");
+    assert!(all_finite(&l) && all_finite(&r));
+    assert!(d.is_silent());
+    assert_eq!(peak(&l[48_000 * 5..]).max(peak(&r[48_000 * 5..])), 0.0);
+}
+
+#[test]
+fn violin_pizzicato_has_a_fast_then_slow_decay() {
+    let mut d = fresh("peel.strings.violin");
+    set(d.as_mut(), "bow.style", 1.0);
+    let (l, _) = violin_note(d.as_mut(), 69, 0.8, 3.0);
+    let pk = peak(&l);
+    let early = rms(&l[480..2_400]);
+    let mid = rms(&l[14_400..19_200]);
+    let late = rms(&l[48_000..52_800]);
+    println!("pizz peak {pk} early {early} mid {mid} late {late}");
+    assert!(pk > 0.1 && pk < 1.0);
+    assert!(mid < 0.3 * early, "fast body decay");
+    assert!(late > 0.003 * early, "the second polarisation rings on");
+    assert!(late < mid);
+}
+
+#[test]
+fn violin_tremolo_modulates_at_the_set_rate() {
+    let mut d = fresh("peel.strings.violin");
+    set(d.as_mut(), "trem.depth", 1.0);
+    set(d.as_mut(), "trem.rate", 8.0);
+    set(d.as_mut(), "vibrato.depth", 0.0);
+    set(d.as_mut(), "bow.pressure", 0.5);
+    let (l, _) = violin_note(d.as_mut(), 69, 0.8, 3.0);
+    let w = rms_windows(&l[SR as usize / 2..], 480);
+    let mean = w.iter().sum::<f32>() / w.len() as f32;
+    let mut best = (0.0f32, 0.0f32);
+    for k in 20..200 {
+        let f = k as f32 * 0.1;
+        let (mut re, mut im) = (0.0f32, 0.0f32);
+        for (i, v) in w.iter().enumerate() {
+            let ph = std::f32::consts::TAU * f * i as f32 * 0.01;
+            re += (v - mean) * ph.cos();
+            im += (v - mean) * ph.sin();
+        }
+        let m = re.hypot(im);
+        if m > best.0 {
+            best = (m, f);
+        }
+    }
+    println!("tremolo envelope peak at {} Hz", best.1);
+    assert!(best.1 > 5.5 && best.1 < 11.0, "{}", best.1);
+}
+
+#[test]
+fn violin_vibrato_moves_pitch_and_level_like_a_player() {
+    let mut d = fresh("peel.strings.violin");
+    let (l, _) = violin_note(d.as_mut(), 69, 0.7, 4.0);
+    // Pitch swing of the 3rd partial over 20 ms hops.
+    let track: Vec<f32> = (0..140)
+        .map(|i| {
+            let s = &l[SR as usize + i * 960..SR as usize + i * 960 + 3_840];
+            (-30..=30)
+                .map(|j| {
+                    let f = 1320.0 * 2f32.powf(j as f32 / 12.0 / 12.0);
+                    (tone_level(s, f), f)
+                })
+                .fold((0.0f32, 0.0f32), |a, b| if b.0 > a.0 { b } else { a })
+                .1
+        })
+        .collect();
+    let (lo, hi) = track
+        .iter()
+        .fold((f32::MAX, 0.0f32), |a, v| (a.0.min(*v), a.1.max(*v)));
+    let cents = 1200.0 * (hi / lo).log2();
+    println!("vibrato extent {cents} cents");
+    assert!(cents > 15.0 && cents < 90.0, "{cents}");
+}
