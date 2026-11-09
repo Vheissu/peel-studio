@@ -3,8 +3,8 @@ mod common;
 use common::*;
 use peel_dsp::{Device, DeviceDescriptor, DeviceEvent, EventKind, ParamId, ProcessContext};
 use peel_engine::{
-    ChannelRoute, EngineCommand as Cmd, ExpressionNote, ExpressionState, OfflineEngine, RenderPlan,
-    SeqEvent, SeqKind,
+    ChannelRoute, EngineCommand as Cmd, ExpressionNote, ExpressionState, NoteIdentity,
+    OfflineEngine, RenderPlan, SeqEvent, SeqKind, SourceNote,
 };
 
 const BEAT: usize = 24_000;
@@ -16,10 +16,12 @@ struct Voice {
     pressure: f32,
     timbre: f32,
     remaining: Option<usize>,
+    age: usize,
 }
 struct Probe {
     voices: [Option<Voice>; 8],
     release: usize,
+    attack: usize,
 }
 impl Device for Probe {
     fn descriptor(&self) -> &'static DeviceDescriptor {
@@ -61,6 +63,7 @@ impl Device for Probe {
                                 pressure: 0.0,
                                 timbre: 0.5,
                                 remaining: None,
+                                age: 0,
                             });
                         }
                     }
@@ -77,6 +80,7 @@ impl Device for Probe {
                                 pressure,
                                 timbre,
                                 remaining: v.remaining,
+                                age: v.age,
                             };
                         }
                     }
@@ -100,10 +104,21 @@ impl Device for Probe {
                 .voices
                 .iter()
                 .flatten()
-                .map(|v| (1.0 + v.pitch / 120.0 + v.pressure + v.timbre) * 0.1)
+                .map(|v| {
+                    (1.0 + v.pitch / 120.0 + v.pressure + v.timbre)
+                        * 0.1
+                        * if self.attack == 0 {
+                            1.0
+                        } else {
+                            v.age.min(self.attack) as f32 / self.attack as f32
+                        }
+                })
                 .sum();
             *r = *l;
             for slot in &mut self.voices {
+                if let Some(v) = slot.as_mut() {
+                    v.age = v.age.saturating_add(1);
+                }
                 if let Some(remaining) = slot.as_mut().and_then(|v| v.remaining.as_mut()) {
                     *remaining -= 1;
                     if *remaining == 0 {
@@ -184,6 +199,20 @@ fn curved_plan() -> RenderPlan {
             },
         ],
     }];
+    p.note_identities = vec![SourceNote {
+        voice: 1,
+        identity: NoteIdentity {
+            note: 11,
+            instance: 0,
+            iteration: 0,
+        },
+    }];
+    p.note_identity_index = p
+        .note_identities
+        .iter()
+        .map(|n| (n.identity, n.voice))
+        .collect();
+
     p
 }
 fn engine(p: RenderPlan) -> OfflineEngine {
@@ -193,6 +222,7 @@ fn engine(p: RenderPlan) -> OfflineEngine {
         device: Box::new(Probe {
             voices: [None; 8],
             release: 0,
+            attack: 0,
         }),
     });
     e.try_set_plan(Box::new(p)).unwrap();
@@ -231,6 +261,7 @@ fn a_refused_last_expression_point_recovers_when_the_next_chunk_has_room() {
         device: Box::new(Probe {
             voices: [None; 8],
             release: 0,
+            attack: 0,
         }),
     });
     e.try_set_plan(Box::new(curved_plan())).unwrap();
@@ -302,6 +333,101 @@ fn seeking_pausing_and_plan_edits_chase_the_current_note_expression() {
 }
 
 #[test]
+fn inserting_and_deleting_an_earlier_same_key_note_keeps_the_original_voice_curve() {
+    let mut original = curved_plan();
+    original.sequence[0].beat = 0.25;
+    original.sequence[1].beat = 0.25;
+    original.expression_notes[0].start_beat = 0.25;
+    original.expression_notes[0].points[0].beat = 0.25;
+    let mut e = engine(original.clone());
+    e.send(Cmd::InstallDevice {
+        slot: 0,
+        device: Box::new(Probe {
+            voices: [None; 8],
+            release: 0,
+            attack: 64,
+        }),
+    });
+    e.send(Cmd::Play);
+    let (before, _) = render_blocks(&mut e, BEAT + BEAT / 4, 137);
+    assert_value(*before.last().unwrap(), 0.29);
+
+    let mut edited = original.clone();
+    for event in &mut edited.sequence {
+        match &mut event.kind {
+            SeqKind::NoteOn { voice, .. }
+            | SeqKind::NoteOff { voice, .. }
+            | SeqKind::Expression { voice, .. } => *voice = 2,
+        }
+    }
+    edited.expression_notes[0].voice = 2;
+    edited.sequence.extend([
+        SeqEvent {
+            beat: 0.0,
+            channel: 0,
+            order: 1,
+            kind: SeqKind::NoteOn {
+                key: 60,
+                velocity: 1.0,
+                voice: 1,
+            },
+        },
+        snapshot(0.0, 1, -12.0, 0.2, 0.0),
+        SeqEvent {
+            beat: 2.0,
+            channel: 0,
+            order: 0,
+            kind: SeqKind::NoteOff {
+                key: 60,
+                velocity: 0.0,
+                voice: 1,
+            },
+        },
+    ]);
+    edited
+        .sequence
+        .sort_by(|a, b| a.beat.total_cmp(&b.beat).then(a.order.cmp(&b.order)));
+    let mut earlier = edited.expression_notes[0].clone();
+    earlier.voice = 1;
+    earlier.start_beat = 0.0;
+    earlier.points = vec![ExpressionState {
+        beat: 0.0,
+        pitch: -12.0,
+        pressure: 0.2,
+        timbre: 0.0,
+    }];
+    edited.expression_notes.insert(0, earlier);
+    edited.note_identities = vec![
+        SourceNote {
+            voice: 1,
+            identity: NoteIdentity {
+                note: 2,
+                instance: 0,
+                iteration: 0,
+            },
+        },
+        SourceNote {
+            voice: 2,
+            identity: original.note_identities[0].identity,
+        },
+    ];
+    edited.note_identity_index = edited
+        .note_identities
+        .iter()
+        .map(|n| (n.identity, n.voice))
+        .collect();
+    edited.note_identity_index.sort_by_key(|(id, _)| *id);
+    e.try_set_plan(Box::new(edited)).unwrap();
+    let (inserted, _) = render_blocks(&mut e, 128, 37);
+    assert_value(inserted[0], 0.29); // the original envelope and curve keep sounding
+    assert_value(inserted[127], 0.4);
+    e.try_set_plan(Box::new(original)).unwrap();
+    let (removed, _) = render_blocks(&mut e, 128, 37);
+    assert_value(removed[0], 0.29);
+    assert!(removed.iter().all(|&v| (v - 0.29).abs() < 1e-6));
+}
+
+#[test]
 fn a_loop_start_inside_a_note_chases_expression_every_wrap() {
     let mut p = curved_plan();
     p.loop_range = Some((0.5, 1.5));
@@ -352,6 +478,13 @@ fn same_key_voices_keep_independent_recorded_expression() {
         timbre: 0.0,
     }];
     p.expression_notes.push(second);
+    let identity = NoteIdentity {
+        note: 22,
+        instance: 0,
+        iteration: 0,
+    };
+    p.note_identities.push(SourceNote { voice: 2, identity });
+    p.note_identity_index.push((identity, 2));
     let mut e = engine(p);
     e.send(Cmd::Seek { beat: 1.25 });
     e.send(Cmd::Play);
@@ -388,6 +521,7 @@ fn loop_articulations_do_not_retarget_the_previous_release_tail() {
         device: Box::new(Probe {
             voices: [None; 8],
             release: 16,
+            attack: 0,
         }),
     });
     e.send(Cmd::Play);
@@ -430,6 +564,7 @@ fn expression_playback_seek_loop_and_plan_chase_never_allocate_or_free() {
         device: Box::new(Probe {
             voices: [None; 8],
             release: 0,
+            attack: 0,
         }),
     });
     e.handle_command(make(p));

@@ -782,6 +782,7 @@ impl Engine {
         }
         let old_channels = self.plan.channels.len();
         let old_tracks = self.plan.tracks.len();
+        self.remap_source_identities(&new);
         let old = std::mem::replace(&mut self.plan, new);
         // Indices that disappear forget their smoothing state, so a later
         // plan reusing them starts at its own gain instead of ramping from
@@ -814,6 +815,29 @@ impl Engine {
         }
         self.retirer.retire(Retired::Plan(old));
         true
+    }
+
+    /// Match a still-sounding note by musical identity before event-order ids
+    /// change. The two prepared indexes keep this O(active voices * log notes).
+    fn remap_source_identities(&mut self, new: &RenderPlan) {
+        let old = &self.plan;
+        if old.note_identities.is_empty() && new.note_identities.is_empty() {
+            return;
+        }
+        for note in self.active.as_mut_slice().iter_mut().filter(|n| !n.live) {
+            note.source_voice = old
+                .note_identities
+                .binary_search_by_key(&note.source_voice, |n| n.voice)
+                .ok()
+                .and_then(|i| {
+                    let identity = old.note_identities[i].identity;
+                    new.note_identity_index
+                        .binary_search_by_key(&identity, |(id, _)| *id)
+                        .ok()
+                        .map(|i| new.note_identity_index[i].1)
+                })
+                .unwrap_or(crate::LIVE_TARGET_NONE);
+        }
     }
 
     fn transfer_restarts(&mut self) {
@@ -1807,17 +1831,7 @@ fn stage_off(
 ) {
     if let OffResult::Evicted(EventKind::NoteOn { voice, .. }) = stage.push_off(slot, offset, kind)
     {
-        if voice >= LIVE_VOICE_BASE {
-            active.remove_live_voice(slot as u32, voice);
-        } else {
-            if let Some(index) = active
-                .as_mut_slice()
-                .iter()
-                .position(|n| !n.live && n.slot == slot as u32 && n.voice == voice)
-            {
-                active.swap_remove(index);
-            }
-        }
+        active.remove_runtime_voice(slot as u32, voice);
         telemetry.dropped_notes.fetch_add(1, Ordering::Relaxed);
     }
 }

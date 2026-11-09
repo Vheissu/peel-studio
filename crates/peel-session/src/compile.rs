@@ -12,8 +12,8 @@ use peel_document::{Clip, ClipContent, Id, Pattern, Project, Time};
 use peel_dsp::SampleBuffer;
 use peel_dsp::util::db_to_gain;
 use peel_engine::{
-    AudioRegion, ChannelRoute, ExpressionNote, ExpressionState, RenderPlan, SeqEvent, SeqKind,
-    Slot, TrackRoute,
+    AudioRegion, ChannelRoute, ExpressionNote, ExpressionState, NoteIdentity, RenderPlan, SeqEvent,
+    SeqKind, Slot, SourceNote, TrackRoute,
 };
 use peel_time::TempoMap;
 
@@ -147,6 +147,7 @@ pub fn compile(p: &Project, ctx: &CompileContext) -> (RenderPlan, PlanIndex) {
     // ---- sequence ----
     let mut seq = Vec::new();
     let mut expression_notes = Vec::new();
+    let mut note_identities = Vec::new();
     let mut audio = Vec::new();
     let mut automation = Vec::new();
     let mut voice: u32 = 1;
@@ -162,9 +163,11 @@ pub fn compile(p: &Project, ctx: &CompileContext) -> (RenderPlan, PlanIndex) {
                     pt.length,
                     &index,
                     0,
+                    0,
                     &mut voice,
                     &mut seq,
                     &mut expression_notes,
+                    &mut note_identities,
                 );
             }
             (len.as_f64(), Some((0.0, len.as_f64())))
@@ -193,9 +196,11 @@ pub fn compile(p: &Project, ctx: &CompileContext) -> (RenderPlan, PlanIndex) {
                                 clip.length,
                                 &index,
                                 salt,
+                                clip.id.as_u128(),
                                 &mut voice,
                                 &mut seq,
                                 &mut expression_notes,
+                                &mut note_identities,
                             );
                         }
                     }
@@ -224,11 +229,18 @@ pub fn compile(p: &Project, ctx: &CompileContext) -> (RenderPlan, PlanIndex) {
     };
     seq.sort_by(|a: &SeqEvent, b: &SeqEvent| a.beat.total_cmp(&b.beat).then(a.order.cmp(&b.order)));
 
+    let mut note_identity_index: Vec<_> = note_identities
+        .iter()
+        .map(|n: &SourceNote| (n.identity, n.voice))
+        .collect();
+    note_identity_index.sort_unstable_by_key(|(identity, _)| *identity);
     let plan = RenderPlan {
         revision: p.revision,
         tempo,
         sequence: seq,
         expression_notes,
+        note_identities,
+        note_identity_index,
         length_beats: length,
         loop_range,
         channels,
@@ -362,9 +374,11 @@ fn realize(
     length: Time,
     index: &PlanIndex,
     salt: u64,
+    instance: u128,
     voice: &mut u32,
     out: &mut Vec<SeqEvent>,
     expressed: &mut Vec<ExpressionNote>,
+    identities: &mut Vec<SourceNote>,
 ) {
     let l = pt.length;
     if !l.is_positive() || !length.is_positive() {
@@ -421,6 +435,14 @@ fn realize(
             }
             let v = *voice;
             *voice += 1;
+            identities.push(SourceNote {
+                voice: v,
+                identity: NoteIdentity {
+                    note: n.id.as_u128(),
+                    instance,
+                    iteration: k as u64,
+                },
+            });
             out.push(SeqEvent {
                 beat: on.as_f64() + sw,
                 channel: ch,
@@ -504,6 +526,8 @@ fn realize(
 pub fn same_structure(a: &RenderPlan, b: &RenderPlan) -> bool {
     a.sequence == b.sequence
         && a.expression_notes == b.expression_notes
+        && a.note_identities == b.note_identities
+        && a.note_identity_index == b.note_identity_index
         && a.audio == b.audio
         && a.automation == b.automation
         && a.tempo == b.tempo
@@ -1361,9 +1385,12 @@ mod tests {
         });
         pt.notes.push(second);
         let lane = p.arrangement().tracks[0].id;
-        p.arrangement_mut().clips = (0..2)
-            .map(|_| Clip {
-                id: Id::new(),
+        let clip_ids = [Id::from_u128(1), Id::from_u128(1 << 64)];
+        assert_eq!(clip_ids[0].short(), clip_ids[1].short());
+        p.arrangement_mut().clips = clip_ids
+            .into_iter()
+            .map(|id| Clip {
+                id,
                 track: lane,
                 start: Time::ZERO,
                 length: Time::beats(4),
@@ -1386,6 +1413,15 @@ mod tests {
         let voices: std::collections::HashSet<_> =
             plan.expression_notes.iter().map(|n| n.voice).collect();
         assert_eq!(voices.len(), 4);
+        let identities: std::collections::BTreeSet<_> =
+            plan.note_identities.iter().map(|n| n.identity).collect();
+        assert_eq!(
+            identities.len(),
+            4,
+            "full clip UUIDs keep even colliding short hashes independent"
+        );
+        assert_eq!(plan.note_identity_index.len(), 4);
+        assert!(plan.note_identity_index.windows(2).all(|w| w[0].0 < w[1].0));
         assert!(
             plan.expression_notes
                 .windows(2)

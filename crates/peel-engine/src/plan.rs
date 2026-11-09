@@ -27,6 +27,10 @@ pub struct RenderPlan {
     pub sequence: Vec<SeqEvent>,
     /// Curved notes with prepared state for seeks and plan changes. Sorted by voice.
     pub expression_notes: Vec<ExpressionNote>,
+    /// Compiled source ids, sorted by voice, for matching notes across edits.
+    pub note_identities: Vec<SourceNote>,
+    /// The reverse index, prepared on the control thread and sorted by identity.
+    pub note_identity_index: Vec<(NoteIdentity, u32)>,
     /// Musical end of the material (quarter notes). Song mode stops (or
     /// keeps running silently) after it; pattern mode loops at it.
     pub length_beats: f64,
@@ -56,6 +60,8 @@ impl RenderPlan {
             tempo: TempoMap::constant(120.0),
             sequence: Vec::new(),
             expression_notes: Vec::new(),
+            note_identities: Vec::new(),
+            note_identity_index: Vec::new(),
             length_beats: 4.0,
             loop_range: Some((0.0, 4.0)),
             channels: Vec::new(),
@@ -153,6 +159,21 @@ pub enum SeqKind {
         pressure: f32,
         timbre: f32,
     },
+}
+
+/// Exact source-note identity independent of a plan's event ordering.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct NoteIdentity {
+    pub note: u128,
+    pub instance: u128,
+    pub iteration: u64,
+}
+
+/// One realized note's stable identity and its compact id in this plan.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SourceNote {
+    pub voice: u32,
+    pub identity: NoteIdentity,
 }
 
 /// Expression snapshot at an absolute musical position.
