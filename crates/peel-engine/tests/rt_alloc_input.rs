@@ -31,7 +31,7 @@ fn input_capture_and_monitoring_never_allocate_on_the_audio_threads() {
     let telemetry = Arc::new(Telemetry::new());
     let (retire_tx, mut retire_rx) = rtrb::RingBuffer::<Retired>::new(64);
     let mut engine = Engine::new(SR, &config, telemetry.clone(), retire_tx, None);
-    let mut input = engine.open_injected_input(&telemetry, SR as u32, 4);
+    let mut input = engine.open_injected_input(&telemetry, 44_100, 4);
     let shared = engine.input_shared().clone();
 
     // Everything that allocates runs outside the guard, like the control

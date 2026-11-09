@@ -37,7 +37,8 @@
 //! frames, counts an underrun and refills; when the FIFO grows past its
 //! ceiling (one side stalled) the oldest frames are discarded. The FIFO
 //! length is part of the monitoring latency [`InputShared::monitor_stats`]
-//! reports.
+//! reports. Different device sample rates and slow clock drift are corrected
+//! only on this monitor path; the capture ring retains original input frames.
 //!
 //! # Time
 //!
@@ -167,7 +168,7 @@ pub struct MonitorStats {
     pub underruns: u64,
     /// Frames discarded because a side stalled and the FIFO overflowed.
     pub dropped_frames: u64,
-    /// Typical frames waiting in the FIFO (its share of the latency).
+    /// Typical FIFO delay in output-rate frames (its share of the latency).
     pub fifo_frames: f32,
 }
 
@@ -205,6 +206,7 @@ pub struct InputShared {
     start: [AtomicU64; 5],
     // monitoring
     monitor_on: AtomicBool,
+    monitor_generation: AtomicU64,
     monitor_gain: AtomicU32,
     monitor_supported: AtomicBool,
     monitor_underruns: AtomicU64,
@@ -256,6 +258,7 @@ impl InputShared {
             start_ready: AtomicBool::new(false),
             start: zero_u64(),
             monitor_on: AtomicBool::new(false),
+            monitor_generation: AtomicU64::new(0),
             monitor_gain: AtomicU32::new(1.0f32.to_bits()),
             monitor_supported: AtomicBool::new(false),
             monitor_underruns: AtomicU64::new(0),
@@ -527,7 +530,11 @@ impl InputShared {
             1.0
         };
         self.monitor_gain.store(gain.to_bits(), Ordering::Relaxed);
-        self.monitor_on.store(on, Ordering::Relaxed);
+        if self.monitor_on.swap(on, Ordering::SeqCst) && !on {
+            // Even an off/on transition between output callbacks must drop
+            // audio queued before the switch.
+            self.monitor_generation.fetch_add(1, Ordering::Release);
+        }
     }
 
     pub fn monitoring(&self) -> (bool, f32) {
@@ -538,10 +545,14 @@ impl InputShared {
         f32::from_bits(self.monitor_gain.load(Ordering::Relaxed))
     }
 
-    /// Monitoring needs the input and output to run at the same sample rate;
-    /// false when they differ or no input is open.
+    /// True when an open input has a connected monitor FIFO. The output
+    /// resamples it when input and output sample rates differ.
     pub fn monitor_supported(&self) -> bool {
         self.monitor_supported.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn disconnect_monitor(&self) {
+        self.monitor_supported.store(false, Ordering::Relaxed);
     }
 
     pub fn monitor_stats(&self) -> MonitorStats {
@@ -836,6 +847,11 @@ pub struct MonitorReceiver {
     primed: bool,
     gain: f32,
     fill: f32,
+    phase: f64,
+    current: [f32; 2],
+    next: [f32; 2],
+    correction: f64,
+    generation: u64,
 }
 
 /// A monitor FIFO: the producer goes to the input callback, the receiver to
@@ -849,6 +865,11 @@ pub(crate) fn monitor_fifo() -> (Producer<f32>, MonitorReceiver) {
             primed: false,
             gain: 0.0,
             fill: 0.0,
+            phase: 0.0,
+            current: [0.0; 2],
+            next: [0.0; 2],
+            correction: 0.0,
+            generation: 0,
         },
     )
 }
@@ -862,8 +883,8 @@ pub(crate) struct InputParts {
 }
 
 /// Builds the processor for an input at `sample_rate` with `channels`, and
-/// the other ends of its rings. Monitoring is wired only when the input runs
-/// at the engine's `output_rate`.
+/// the other ends of its rings. The monitor FIFO is wired for valid input
+/// and output rates; only its consumer resamples, leaving capture untouched.
 pub(crate) fn new_processor(
     shared: &Arc<InputShared>,
     telemetry: &Arc<Telemetry>,
@@ -872,12 +893,14 @@ pub(crate) fn new_processor(
     output_rate: u32,
 ) -> (InputProcessor, InputParts) {
     let (capture_tx, capture_rx) = capture_ring(sample_rate);
-    let (monitor_tx, monitor_rx) = if sample_rate == output_rate {
-        let (tx, rx) = monitor_fifo();
-        (Some(tx), Some(rx))
-    } else {
-        (None, None)
-    };
+    let ratio = f64::from(sample_rate) / f64::from(output_rate.max(1));
+    let (monitor_tx, monitor_rx) =
+        if sample_rate > 0 && output_rate > 0 && (1.0 / 64.0..=64.0).contains(&ratio) {
+            let (tx, rx) = monitor_fifo();
+            (Some(tx), Some(rx))
+        } else {
+            (None, None)
+        };
     let processor = InputProcessor::new(
         shared.clone(),
         telemetry.clone(),
@@ -904,34 +927,58 @@ pub(crate) fn capture_ring(sample_rate: u32) -> (Producer<f32>, Consumer<f32>) {
 }
 
 impl MonitorReceiver {
-    /// Adds the monitored input to `out_l`/`out_r`. Realtime-safe.
+    fn pop_frame(&mut self) -> Option<[f32; 2]> {
+        if self.rx.slots() < 2 {
+            return None;
+        }
+        Some([self.rx.pop().ok()?, self.rx.pop().ok()?])
+    }
+
+    fn reset(&mut self) {
+        let slots = self.rx.slots();
+        if slots > 0
+            && let Ok(chunk) = self.rx.read_chunk(slots)
+        {
+            chunk.commit_all();
+        }
+        self.primed = false;
+        self.gain = 0.0;
+        self.fill = 0.0;
+        self.phase = 0.0;
+        self.current = [0.0; 2];
+        self.next = [0.0; 2];
+        self.correction = 0.0;
+    }
+
+    /// Adds live input after resampling to the output device clock. All work
+    /// is bounded by the callback size and the fixed FIFO capacity.
     pub(crate) fn mix_into(&mut self, shared: &InputShared, out_l: &mut [f32], out_r: &mut [f32]) {
         let frames = out_l.len().min(out_r.len());
         if frames == 0 {
             return;
         }
-        let slots = self.rx.slots();
-        if !shared.monitor_on.load(Ordering::Relaxed) {
-            // Off: throw away whatever is queued so switching on later starts
-            // from live audio, and fade in from silence.
-            if slots > 0
-                && let Ok(chunk) = self.rx.read_chunk(slots)
-            {
-                chunk.commit_all();
-            }
-            self.primed = false;
-            self.gain = 0.0;
-            self.fill = 0.0;
+        let generation = shared.monitor_generation.load(Ordering::Acquire);
+        if generation != self.generation {
+            self.reset();
+            self.generation = generation;
+        }
+        if !shared.monitor_on.load(Ordering::Relaxed)
+            || !shared.is_open()
+            || !shared.monitor_supported()
+        {
+            self.reset();
             shared.monitor_fill.store(0, Ordering::Relaxed);
             return;
         }
-
-        let mut avail = slots / 2;
+        let in_rate = f64::from(shared.sample_rate.load(Ordering::Relaxed).max(1));
+        let out_rate = f64::from(shared.out_rate.load(Ordering::Relaxed).max(1));
+        let ratio = (in_rate / out_rate).clamp(1.0 / 64.0, 64.0);
         let in_block = shared.in_block.load(Ordering::Relaxed) as usize;
-        let prefill = (frames + in_block).min(MONITOR_FIFO_FRAMES / 2);
-        let ceiling = prefill + 2 * frames.max(in_block);
+        let output_in_frames = (frames as f64 * ratio).ceil() as usize;
+        let prefill = (output_in_frames + in_block).clamp(2, MONITOR_FIFO_FRAMES / 2);
+        let ceiling = (prefill + 2 * output_in_frames.max(in_block)).min(MONITOR_FIFO_FRAMES);
+        let mut avail = self.rx.slots() / 2;
         if avail > ceiling {
-            // One side stalled and the FIFO filled up: keep only the newest.
             let drop = avail - prefill;
             if let Ok(chunk) = self.rx.read_chunk(drop * 2) {
                 chunk.commit_all();
@@ -940,37 +987,59 @@ impl MonitorReceiver {
                 .monitor_dropped
                 .fetch_add(drop as u64, Ordering::Relaxed);
             avail = prefill;
+            self.primed = false;
+            self.phase = 0.0;
+            self.gain = 0.0;
+            self.correction = 0.0;
         }
         if !self.primed && avail >= prefill {
+            self.current = self.pop_frame().unwrap_or([0.0; 2]);
+            self.next = self.pop_frame().unwrap_or([0.0; 2]);
+            self.phase = 0.0;
             self.primed = true;
         }
-        self.fill += (avail as f32 - self.fill) * 0.05;
+        self.fill += (avail as f32 / ratio as f32 - self.fill) * 0.05;
         shared
             .monitor_fill
             .store(self.fill.to_bits(), Ordering::Relaxed);
-
-        let target = shared.monitor_gain();
-        let take = if self.primed { avail.min(frames) } else { 0 };
-        if self.primed && take < frames {
-            shared.monitor_underruns.fetch_add(1, Ordering::Relaxed);
-            self.primed = false;
+        if !self.primed {
+            return;
         }
-        if take > 0
-            && let Ok(chunk) = self.rx.read_chunk(take * 2)
-        {
-            let (a, b) = chunk.as_slices();
-            let step = (target - self.gain) / frames as f32;
-            let mut gain = self.gain;
-            let mut i = 0;
-            for part in [a, b] {
-                for pair in part.as_chunks::<2>().0 {
-                    out_l[i] += pair[0] * gain;
-                    out_r[i] += pair[1] * gain;
-                    gain += step;
-                    i += 1;
+
+        // At a stable callback cadence the queue before rendering holds the
+        // prefill. Integrate slow fill error to follow separate interface clocks,
+        // with a small proportional correction; both are tightly bounded.
+        let error = (avail as f64 - prefill as f64) / prefill as f64;
+        let elapsed = frames as f64 / out_rate;
+        self.correction = (self.correction + error * elapsed * 0.0002).clamp(-0.01, 0.01);
+        let step = ratio * (1.0 + self.correction + error.clamp(-1.0, 1.0) * 0.002);
+        let target = shared.monitor_gain();
+        let gain_step = (target - self.gain) / frames as f32;
+        for i in 0..frames {
+            let frac = self.phase as f32;
+            out_l[i] += (self.current[0] + (self.next[0] - self.current[0]) * frac) * self.gain;
+            out_r[i] += (self.current[1] + (self.next[1] - self.current[1]) * frac) * self.gain;
+            self.gain += gain_step;
+            self.phase += step;
+            while self.phase >= 1.0 {
+                self.phase -= 1.0;
+                self.current = self.next;
+                match self.pop_frame() {
+                    Some(frame) => self.next = frame,
+                    None => {
+                        // Leave the remaining output samples unchanged (silence
+                        // on this route), then rebuild a live prefill.
+                        self.primed = false;
+                        self.gain = 0.0;
+                        self.phase = 0.0;
+                        self.current = [0.0; 2];
+                        self.next = [0.0; 2];
+                        self.correction = 0.0;
+                        shared.monitor_underruns.fetch_add(1, Ordering::Relaxed);
+                        return;
+                    }
                 }
             }
-            chunk.commit_all();
         }
         self.gain = target;
     }

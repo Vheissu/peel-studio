@@ -252,7 +252,7 @@ impl Engine {
     /// Connects an input that no device feeds and returns the injector that
     /// feeds it, for engines driven directly (tests, tools). With a device
     /// engine use [`EngineHandle::open_injected_input`](crate::EngineHandle::open_injected_input).
-    /// Monitoring works when `sample_rate` equals the engine's.
+    /// Monitoring resamples this input to the engine's output clock.
     pub fn open_injected_input(
         &mut self,
         telemetry: &Arc<Telemetry>,

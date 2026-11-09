@@ -344,9 +344,9 @@ impl EngineHandle {
     /// arming a track). `request.device` of `None` is the system default
     /// input ([`InputRequest::from_config`] takes it from
     /// [`EngineConfig::input_device`]). The stream opens at the output's sample rate when the device can, which is what
-    /// software monitoring needs; otherwise at the device's own rate (a take
-    /// is then recorded at that rate and monitoring is unavailable, see
-    /// [`InputShared::monitor_supported`]).
+    /// software monitoring prefers; otherwise it uses the device's own rate.
+    /// Takes retain that input rate, while monitoring resamples to the output
+    /// clock without changing capture frames.
     ///
     /// The device must exist: a missing one is an error, never a silent
     /// substitution. Errors carry a message that says what to do next.
@@ -398,8 +398,14 @@ impl EngineHandle {
         self.input
             .shared
             .attach(parts.sample_rate, parts.channels, parts.capture, supported);
-        // A full queue only loses monitoring, never recording.
-        let _ = self.send(EngineCommand::SetInputMonitor(parts.monitor.map(Box::new)));
+        // A full queue only loses monitoring, never recording. Do not claim
+        // the new FIFO is connected (or play an older input's queue).
+        if self
+            .send(EngineCommand::SetInputMonitor(parts.monitor.map(Box::new)))
+            .is_err()
+        {
+            self.input.shared.disconnect_monitor();
+        }
     }
 
     /// Stops and closes the input. Safe to call when none is open.

@@ -107,8 +107,7 @@ pub struct MonitorStatus {
     pub on: bool,
     /// Linear gain.
     pub gain: f32,
-    /// Monitoring can run now (an input is open and shares the output's
-    /// sample rate).
+    /// Monitoring can run now (an input is open with a connected monitor FIFO).
     pub available: bool,
     /// What to do when it cannot.
     pub unavailable_reason: Option<String>,
@@ -541,11 +540,7 @@ impl Session {
         let reason = if !shared.is_open() {
             Some("No audio input is open. Choose an input to monitor it.".to_string())
         } else if !shared.monitor_supported() {
-            Some(format!(
-                "Monitoring needs the input and the output at one sample rate ({} Hz in, {} Hz out). Set the interface to the same rate, or monitor in hardware.",
-                shared.input_sample_rate(),
-                out_rate.round() as u32
-            ))
+            Some("Input monitoring is not connected. Reopen the input device or monitor in hardware.".to_string())
         } else {
             None
         };

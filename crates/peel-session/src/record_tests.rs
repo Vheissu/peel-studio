@@ -626,18 +626,37 @@ fn monitoring_is_off_by_default_and_explains_when_it_cannot_run() {
     assert!(status.on && status.available);
     assert!(status.latency_ms >= 0.0);
 
-    // An input at another rate than the output cannot be monitored in
-    // software; recording it is unaffected.
+    // Another input clock is resampled only for software monitoring.
     let _slow = s.open_injected_input(44_100, 1);
     let status = s.monitor_status();
-    assert!(!status.available);
-    let why = status.unavailable_reason.unwrap();
-    assert!(why.contains("44100") && why.contains("48000"), "{why}");
+    assert!(status.available);
+    assert!(status.unavailable_reason.is_none());
     s.set_monitoring(true, 1.0);
-    assert!(s.notice().is_some_and(|n| n.error));
 
     s.close_input();
     assert!(!s.monitor_status().available);
+}
+
+#[test]
+fn cross_rate_monitoring_leaves_the_recorded_wav_at_its_original_rate_and_samples() {
+    let dir = Scratch::new();
+    let (mut s, _previous, lane) = rig(&dir);
+    let mut input = s.open_injected_input(44_100, 1);
+    s.set_monitoring(true, 0.5);
+    s.arm_lane(lane, true);
+    s.tick();
+    s.start_recording().unwrap();
+    wait(&mut s, "transport", transport_running);
+    let signal = ramp(4410);
+    feed(&mut input, &signal);
+    assert_eq!(s.stop_recording().len(), 1);
+    let asset = &s.project().assets[0];
+    assert_eq!(
+        (asset.sample_rate, asset.frames, asset.channels),
+        (44_100, 4410, 1)
+    );
+    let file = decode_file(&asset.path).unwrap();
+    assert_eq!(file.left(), &signal[..]);
 }
 
 #[test]

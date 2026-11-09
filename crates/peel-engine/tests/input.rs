@@ -107,18 +107,96 @@ fn closing_the_monitor_connection_stops_the_sound() {
 }
 
 #[test]
-fn an_input_at_another_rate_records_but_cannot_be_monitored() {
+fn another_input_rate_is_monitored_at_the_right_pitch_and_captured_unchanged() {
+    let mut rig = rig();
+    let mut input = rig.engine.open_injected_input(&rig.telemetry, 44_100, 4);
+    let shared = rig.engine.input_shared().clone();
+    assert!(shared.monitor_supported());
+    shared.set_channels(InputChannels::Stereo(2, 3));
+    shared.set_monitoring(true, 1.0);
+    rig.engine.handle_command(EngineCommand::Play);
+    render(&mut rig.engine, 256);
+    assert!(shared.arm_capture());
+    let mut sample = 0usize;
+    let mut fractional = 0.0;
+    let mut raw = [0.0_f32; 2048];
+    let mut raw_frames = 0;
+    let mut output = Vec::new();
+    let (mut left, mut right) = ([0.0_f32; 480], [0.0_f32; 480]);
+    // Twenty seconds, with the input clock 300 ppm faster than the output.
+    for callback in 0..2000 {
+        fractional += 441.0 * 1.0003;
+        let frames = fractional as usize;
+        fractional -= frames as f64;
+        let mut source = Vec::with_capacity(frames * 4);
+        for i in 0..frames {
+            let sine = (std::f32::consts::TAU * 1000.0 * (sample + i) as f32 / 44_100.0).sin();
+            source.extend_from_slice(&[0.9, -0.9, 0.4 * sine, -0.2 * sine]);
+        }
+        input.push(&source);
+        let got = shared.drain_capture(&mut raw);
+        assert_eq!(got, frames * 2, "capture keeps input-clock frames");
+        for (captured, original) in raw[..got]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .zip(source.as_chunks::<4>().0)
+        {
+            assert_eq!(captured, &original[2..4], "capture is never resampled");
+        }
+        raw_frames += got / 2;
+        sample += frames;
+        left.fill(0.0);
+        right.fill(0.0);
+        rig.engine.process(&mut left, &mut right);
+        if callback > 50 {
+            assert!(
+                left.iter()
+                    .zip(right)
+                    .all(|(l, r)| (*l + r * 2.0).abs() < 1e-5),
+                "stereo mapping and polarity are retained"
+            );
+            output.extend_from_slice(&left);
+        }
+    }
+    assert_eq!(shared.input_sample_rate(), 44_100);
+    assert_eq!(shared.captured_frames() as usize, raw_frames);
+    assert_eq!(shared.dropped_frames(), 0);
+    assert_eq!(shared.monitor_stats().underruns, 0);
+    assert_eq!(shared.monitor_stats().dropped_frames, 0);
+    let crossings = output
+        .windows(2)
+        .filter(|pair| pair[0] <= 0.0 && pair[1] > 0.0)
+        .count();
+    let hz = crossings as f64 * 48_000.0 / output.len() as f64;
+    assert!(
+        (hz - 1000.3).abs() < 2.0,
+        "resampling preserves tone pitch: {hz} Hz"
+    );
+    assert!(output.iter().any(|v| *v > 0.35));
+    assert!(
+        shared.monitor_stats().fifo_frames < 2400.0,
+        "latency remains bounded"
+    );
+}
+
+#[test]
+fn switching_monitoring_off_and_on_between_callbacks_drops_old_audio() {
     let mut rig = rig();
     let mut input = rig.engine.open_injected_input(&rig.telemetry, 44_100, 1);
     let shared = rig.engine.input_shared().clone();
-    assert!(shared.is_open());
-    assert_eq!(shared.input_sample_rate(), 44_100);
-    assert!(!shared.monitor_supported());
+    shared.set_monitoring(true, 1.0);
+    for _ in 0..4 {
+        input.push(&[0.9_f32; 441]);
+    }
+    // Output never observes the off state. Generation tracking must still
+    // discard these old input frames before the next monitored callback.
+    shared.set_monitoring(false, 1.0);
     shared.set_monitoring(true, 1.0);
     for _ in 0..8 {
-        input.push(&[0.4f32; 256]);
-        let (l, _) = render(&mut rig.engine, 256);
-        assert!(l.iter().all(|x| *x == 0.0));
+        input.push(&[0.0_f32; 441]);
+        let (left, right) = render(&mut rig.engine, 480);
+        assert!(left.iter().chain(&right).all(|v| *v == 0.0));
     }
 }
 
@@ -183,7 +261,7 @@ fn the_handle_opens_an_injected_input_closes_it_and_reports_it() {
     // Reopening replaces it; stopping the audio closes it.
     let _again = h.open_injected_input(44_100, 1);
     assert_eq!(h.input().input_sample_rate(), 44_100);
-    assert!(!h.input().monitor_supported());
+    assert!(h.input().monitor_supported());
     h.stop_audio();
     assert!(!h.input().is_open());
     assert!(h.input_info().is_none());

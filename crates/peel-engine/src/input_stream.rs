@@ -25,7 +25,8 @@ pub struct InputRequest {
     /// never silently come from a different microphone).
     pub device: Option<String>,
     /// Preferred sample rate. The engine's output rate is tried first when
-    /// this is `None`, so monitoring works; the device's own rate otherwise.
+    /// this is `None`; the device's own rate otherwise. Monitoring resamples
+    /// when its rate differs from the output.
     pub sample_rate: Option<u32>,
     /// Preferred device buffer in frames.
     pub buffer_frames: Option<u32>,
