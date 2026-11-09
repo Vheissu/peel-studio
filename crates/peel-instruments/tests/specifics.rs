@@ -5,6 +5,7 @@ mod common;
 use std::sync::Arc;
 
 use common::*;
+use peel_dsp::biquad::{Biquad, Coeffs, butterworth};
 use peel_dsp::device::apply_defaults;
 use peel_dsp::{Device, DeviceEvent, EventKind, ProcessContext, SampleBuffer};
 
@@ -1165,7 +1166,18 @@ fn guitar_notes_are_in_tune() {
         for gain in [0.1f32, 0.9] {
             let mut d = fresh("peel.guitar.electric");
             set(d.as_mut(), "amp.gain", gain);
-            let (l, _) = render(d.as_mut(), &[note_on(0, key, 0.8, 1)], 40_000, 256);
+            let (mut l, _) = render(d.as_mut(), &[note_on(0, key, 0.8, 1)], 40_000, 256);
+            // The string has realistic stiffness, so its upper partials are
+            // sharp and the raw autocorrelation pitch drifts sharp. Pitch is
+            // heard from the low partials: look at those.
+            let mut sec = [Coeffs::IDENTITY; 4];
+            butterworth(false, 4, SR, hz * 3.0, &mut sec);
+            for c in &sec[..2] {
+                let mut bq = Biquad::new(*c);
+                for v in l.iter_mut() {
+                    *v = bq.process(*v);
+                }
+            }
             let f = autocorr_pitch(&l[6_000..30_000], hz);
             let cents = 1200.0 * (f / hz).log2();
             assert!(
@@ -1418,4 +1430,253 @@ fn violin_phrase_analysis() {
         w(28, 30)
     );
     assert!(all_finite(&l) && w(28, 30) > 0.5 * w(1, 2) && w(28, 30) < 2.0 * w(1, 2));
+}
+
+// ------------------------------------------------- guitar realism pass
+
+fn guitar_with(params: &[(&str, f32)]) -> Box<dyn Device> {
+    let mut d = fresh("peel.guitar.electric");
+    for (k, v) in params {
+        set(d.as_mut(), k, *v);
+    }
+    d
+}
+
+/// Frequency of the spectral peak near `expect` (within +-60 cents), with
+/// parabolic refinement.
+fn peak_hz(buf: &[f32], expect: f32) -> f32 {
+    let step = 1.0005f32;
+    let n = 120i32;
+    let lv: Vec<f32> = (0..=2 * n)
+        .map(|i| tone_level(buf, expect * step.powi(i - n)))
+        .collect();
+    let mut best = 1;
+    for i in 1..lv.len() - 1 {
+        if lv[i] > lv[best] {
+            best = i;
+        }
+    }
+    let (a, b, c) = (lv[best - 1], lv[best], lv[best + 1]);
+    let frac = 0.5 * (a - c) / (a - 2.0 * b + c);
+    expect * step.powf(best as f32 - n as f32 + frac)
+}
+
+#[test]
+fn guitar_direct_output_is_in_tune_across_the_neck() {
+    // The fractional delay is exact at the fundamental, so even the highest
+    // notes stay in tune (the loss, stiffness and fractional filters are all
+    // phase-compensated).
+    for key in [36u8, 45, 57, 69, 76, 81, 88] {
+        let hz = 440.0 * 2f32.powf((key as f32 - 69.0) / 12.0);
+        let mut d = guitar_with(&[("out.direct", 1.0), ("string.noise", 0.0)]);
+        let (l, _) = render(d.as_mut(), &[note_on(0, key, 0.8, 1)], 48_000, 256);
+        let f = peak_hz(&l[12_000..44_000], hz);
+        let cents = 1200.0 * (f / hz).log2();
+        assert!(cents.abs() < 4.0, "key {key}: {f} Hz, {cents} cents");
+    }
+}
+
+#[test]
+fn guitar_strings_are_stiff_and_low_strings_stiffer() {
+    // Partial n of a stiff string sits at n f0 sqrt(1 + B n^2). Real low E
+    // strings are about +10..+30 cents sharp at the 10th partial, plain
+    // strings far less.
+    let sharp = |key: u8, n: f32| {
+        let hz = 440.0 * 2f32.powf((key as f32 - 69.0) / 12.0);
+        let mut d = guitar_with(&[
+            ("out.direct", 1.0),
+            ("string.noise", 0.0),
+            ("string.brightness", 0.9),
+        ]);
+        let (l, _) = render(d.as_mut(), &[note_on(0, key, 0.9, 1)], 60_000, 256);
+        let f = peak_hz(&l[6_000..54_000], hz * n);
+        1200.0 * (f / (hz * n)).log2()
+    };
+    let low = sharp(40, 10.0);
+    let plain = sharp(64, 8.0);
+    assert!((6.0..45.0).contains(&low), "E2 partial 10: {low} cents");
+    assert!(plain < low * 0.7 && plain < 15.0, "E4 partial 8: {plain}");
+}
+
+#[test]
+fn guitar_chord_notes_are_staggered_like_a_strum() {
+    let chord = [note_on(0, 40, 0.8, 1), note_on(0, 64, 0.8, 2)];
+    let single = [note_on(0, 40, 0.8, 1)];
+    let run = |strum: f32, ev: &[Timed]| {
+        let mut d = guitar_with(&[("string.strum", strum), ("string.noise", 0.0)]);
+        render(d.as_mut(), ev, 4_800, 256).0
+    };
+    let lone = run(20.0, &single);
+    let strummed = run(20.0, &chord);
+    let tight = run(0.0, &chord);
+    // The second string starts at least 15 ms (0.75 of 20 ms) late.
+    let early: f32 = (0..700)
+        .map(|i| (strummed[i] - lone[i]).abs())
+        .fold(0.0, f32::max);
+    assert!(
+        early < 1.0e-3 * peak(&lone[..700]).max(1.0),
+        "early {early}"
+    );
+    let late: f32 = (1_800..4_000)
+        .map(|i| (strummed[i] - lone[i]).abs())
+        .fold(0.0, f32::max);
+    assert!(late > 0.05, "second string never arrives ({late})");
+    // With no stagger both notes start together.
+    let together: f32 = (0..700)
+        .map(|i| (tight[i] - lone[i]).abs())
+        .fold(0.0, f32::max);
+    assert!(together > 0.03, "unstaggered chord equals one note");
+}
+
+#[test]
+fn guitar_legato_continues_the_string_and_glides() {
+    let mut d = guitar_with(&[
+        ("out.direct", 1.0),
+        ("string.legato", 1.0),
+        ("string.glide", 120.0),
+        ("string.noise", 0.0),
+    ]);
+    let ev = [
+        note_on(0, 57, 0.8, 1),
+        note_on(24_000, 62, 0.8, 2),
+        note_off(24_800, 57, 1),
+        note_off(80_000, 62, 2),
+    ];
+    let (l, _) = render(d.as_mut(), &ev, 84_000, 256);
+    let a = 220.0;
+    let b = 293.665;
+    let before = autocorr_pitch(&l[14_000..23_000], a);
+    assert!((before / a - 1.0).abs() < 0.01, "before {before}");
+    // Mid-glide the pitch is between the two notes.
+    let mid = detect_pitch(&l[26_400..29_000], SR);
+    assert!(mid > a * 1.03 && mid < b * 0.99, "mid-glide {mid}");
+    let after = autocorr_pitch(&l[50_000..60_000], b);
+    assert!((after / b - 1.0).abs() < 0.01, "after {after}");
+    // Only one string: the old pitch is gone, and there is no fresh pluck.
+    let w = &l[50_000..60_000];
+    assert!(tone_level(w, a) < 0.1 * tone_level(w, b));
+    assert!(rms(&l[24_200..26_000]) < 2.5 * rms(&l[22_000..23_800]));
+    assert!(rms(&l[50_000..60_000]) > 0.01, "string died");
+}
+
+#[test]
+fn guitar_ghost_notes_are_short_and_noisy() {
+    let decay = |vel: f32| {
+        let mut d = guitar_with(&[]);
+        let (l, _) = render(d.as_mut(), &[note_on(0, 52, vel, 1)], 24_000, 256);
+        rms(&l[9_600..12_000]) / rms(&l[1_000..3_400])
+    };
+    let ghost = decay(0.1);
+    let normal = decay(0.8);
+    assert!(ghost < normal * 0.3, "ghost {ghost}, normal {normal}");
+}
+
+#[test]
+fn guitar_palm_mute_has_a_low_thump() {
+    let low_share = |palm: f32| {
+        let mut d = guitar_with(&[("out.direct", 1.0), ("string.palm_mute", palm)]);
+        let (l, _) = render(d.as_mut(), &[note_on(0, 52, 0.9, 1)], 4_000, 256);
+        let seg = &l[0..1_200];
+        let fund = tone_level(seg, 164.8);
+        let top = (1..8)
+            .map(|k| tone_level(seg, 164.8 * k as f32 * 3.0))
+            .sum::<f32>();
+        fund / top.max(1e-9)
+    };
+    assert!(low_share(0.9) > low_share(0.0));
+}
+
+#[test]
+fn guitar_cabinet_choice_and_tone_shape_the_sound() {
+    let render_cab = |cab: f32, tone: f32| {
+        let mut d = guitar_with(&[
+            ("amp.gain", 0.6),
+            ("cab.type", cab),
+            ("cab.tone", tone),
+            ("string.noise", 0.0),
+        ]);
+        render(d.as_mut(), &[note_on(0, 52, 0.9, 1)], 16_000, 256).0
+    };
+    let open = render_cab(0.0, 5_200.0);
+    let closed = render_cab(2.0, 5_200.0);
+    let diff: f32 = open.iter().zip(&closed).map(|(a, b)| (a - b).powi(2)).sum();
+    let tot: f32 = open.iter().map(|a| a * a).sum();
+    assert!(diff > 0.05 * tot, "cabinets sound the same");
+    let dark = render_cab(2.0, 3_000.0);
+    let bright = render_cab(2.0, 8_000.0);
+    assert!(brightness(&dark[2_000..12_000]) < brightness(&bright[2_000..12_000]));
+    // The cabinet rolls off steeply: little above 8 kHz.
+    let hi =
+        tone_level(&closed[2_000..14_000], 9_000.0) + tone_level(&closed[2_000..14_000], 10_500.0);
+    let mid =
+        tone_level(&closed[2_000..14_000], 2_000.0) + tone_level(&closed[2_000..14_000], 3_000.0);
+    assert!(hi < 0.02 * mid.max(1e-9), "hi {hi} mid {mid}");
+}
+
+#[test]
+fn guitar_extreme_keys_and_sample_rates_stay_finite() {
+    for sr in [44_100.0f32, 96_000.0, 192_000.0] {
+        for key in [0u8, 10, 28, 88, 110, 127] {
+            let mut d = peel_instruments::create("peel.guitar.electric").unwrap();
+            d.prepare(sr, 256);
+            apply_defaults(d.as_mut());
+            set(d.as_mut(), "amp.gain", 1.0);
+            set(d.as_mut(), "string.legato", 1.0);
+            let mut ctx = ProcessContext::new(sr);
+            ctx.playing = true;
+            let on = [DeviceEvent {
+                offset: 0,
+                kind: EventKind::NoteOn {
+                    key,
+                    velocity: 1.0,
+                    voice: 1,
+                },
+            }];
+            let mut l = vec![0.0f32; 256];
+            let mut r = vec![0.0f32; 256];
+            d.process(&ctx, &on, &mut l, &mut r);
+            let mut pk = peak(&l);
+            for _ in 0..80 {
+                d.process(&ctx, &[], &mut l, &mut r);
+                assert!(all_finite(&l) && all_finite(&r), "sr {sr} key {key}");
+                pk = pk.max(peak(&l));
+            }
+            assert!(pk < 2.0, "sr {sr} key {key}: peak {pk}");
+        }
+    }
+}
+
+#[test]
+fn guitar_has_the_new_presets_and_they_differ() {
+    let names: Vec<_> = peel_instruments::presets("peel.guitar.electric")
+        .iter()
+        .map(|p| p.name)
+        .collect();
+    for want in [
+        "Clean",
+        "Crunch",
+        "Lead",
+        "Palm Mute",
+        "Funk",
+        "Blues",
+        "Muted Pluck",
+        "Chorus Clean",
+        "High Gain",
+    ] {
+        assert!(names.contains(&want), "missing preset {want}");
+    }
+    let hot = |name: &str| {
+        let p = peel_instruments::presets("peel.guitar.electric")
+            .iter()
+            .find(|p| p.name == name)
+            .unwrap();
+        let mut d = fresh("peel.guitar.electric");
+        for (k, v) in p.params {
+            set(d.as_mut(), k, *v);
+        }
+        let (l, _) = render(d.as_mut(), &[note_on(0, 45, 0.9, 1)], 20_000, 256);
+        brightness(&l[2_000..16_000])
+    };
+    // A high-gain patch is much more distorted (more harmonics) than a clean one.
+    assert!(hot("High Gain") > 1.3 * hot("Chorus Clean"));
 }
