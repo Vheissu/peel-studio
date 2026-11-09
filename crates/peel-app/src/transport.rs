@@ -97,8 +97,11 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
     if bar.double_clicked {
         win.toggle_maximized();
     }
+    // The bar is a toolbar surface; a dark seam separates it from the panes.
+    ui.scene.rect(r, 0.0, t.panel);
+    ui.scene.hline(r.x, r.right(), r.bottom() - 0.5, t.bg);
 
-    let mut row = r.shrink2(10.0, 6.0);
+    let mut row = r.shrink2(8.0, 6.0);
     row.cut_left(win.titlebar_inset());
     let title = studio.session.project().meta.title.clone();
     let title_w = ui.measure(&title, t.label).x.min(180.0) + 2.0;
@@ -651,7 +654,7 @@ fn horizontal_meter(ui: &mut Ui, id: W, r: Rect, peaks: (f32, f32)) {
     }
     let rows = r.rows(2, 3.0);
     for (i, row) in rows.iter().enumerate() {
-        ui.scene.rect(*row, 2.0, t.panel);
+        ui.scene.rect(*row, 0.0, t.bg);
         let w = row.w * levels[i];
         if w > 0.5 {
             let fill = row.with_w(w);
@@ -663,7 +666,7 @@ fn horizontal_meter(ui: &mut Ui, id: W, r: Rect, peaks: (f32, f32)) {
                     w: row.w * amber,
                     ..*row
                 },
-                2.0,
+                0.0,
                 t.play,
             );
             ui.scene.rect(
@@ -681,7 +684,7 @@ fn horizontal_meter(ui: &mut Ui, id: W, r: Rect, peaks: (f32, f32)) {
                     w: row.w * (1.0 - red),
                     ..*row
                 },
-                2.0,
+                0.0,
                 t.record,
             );
             ui.scene.pop_clip();
@@ -715,8 +718,8 @@ pub fn pattern_picker(ui: &mut Ui, row: &mut Rect, studio: &mut Studio, width: f
     let mut inner = r.shrink2(if compact { 8.0 } else { 10.0 }, 0.0);
     let sw = inner.cut_left(12.0);
     ui.scene.rect(
-        Rect::from_center(sw.center(), 12.0, 12.0),
-        3.0,
+        Rect::from_center(sw.center(), 10.0, 10.0),
+        1.0,
         col(pat.color),
     );
     let caret = inner.cut_right(if compact { 12.0 } else { 16.0 });

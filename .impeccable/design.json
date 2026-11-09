@@ -1,0 +1,193 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-09T07:28:23.532506+00:00",
+  "title": "Design System: Peel Studio",
+  "extensions": {
+    "source": "Theme::dark() in crates/peel-ui/src/theme.rs; widgets in crates/peel-ui/src/widgets.rs and chrome.rs. Peel Studio is a native Rust/wgpu app: the html/css below are documentation previews only and are not shipped.",
+    "colorMeta": {
+      "accent": {
+        "role": "primary",
+        "displayName": "Amber",
+        "canonical": "#F0A443"
+      },
+      "play": {
+        "role": "secondary",
+        "displayName": "Signal green",
+        "canonical": "#9FD65B"
+      },
+      "record": {
+        "role": "tertiary",
+        "displayName": "Coral",
+        "canonical": "#EE5F5B"
+      },
+      "focus": {
+        "role": "focus",
+        "displayName": "Focus cyan",
+        "canonical": "#6EC4E6"
+      },
+      "warn": {
+        "role": "warning",
+        "displayName": "Warning",
+        "canonical": "#E8C45C"
+      },
+      "bg": {
+        "role": "neutral",
+        "displayName": "Seam",
+        "canonical": "#0F1011"
+      },
+      "well": {
+        "role": "neutral",
+        "displayName": "Well",
+        "canonical": "#151719"
+      },
+      "panel": {
+        "role": "neutral",
+        "displayName": "Panel",
+        "canonical": "#1C1E21"
+      },
+      "panel-alt": {
+        "role": "neutral",
+        "displayName": "Canvas",
+        "canonical": "#23262A"
+      },
+      "raised": {
+        "role": "neutral",
+        "displayName": "Raised",
+        "canonical": "#2A2D32"
+      },
+      "control": {
+        "role": "neutral",
+        "displayName": "Control",
+        "canonical": "#31353B"
+      },
+      "line": {
+        "role": "neutral",
+        "displayName": "Line",
+        "canonical": "#2B2E33"
+      },
+      "line-strong": {
+        "role": "neutral",
+        "displayName": "Strong line",
+        "canonical": "#3A3E44"
+      },
+      "text": {
+        "role": "neutral",
+        "displayName": "Text",
+        "canonical": "#EEEFF0"
+      },
+      "text-dim": {
+        "role": "neutral",
+        "displayName": "Dim text",
+        "canonical": "#ADB1B7"
+      },
+      "text-faint": {
+        "role": "neutral",
+        "displayName": "Faint text",
+        "canonical": "#8C9199"
+      }
+    },
+    "typographyMeta": {
+      "caption": {
+        "displayName": "Caption",
+        "purpose": "Hints, property-row labels, small metadata."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Default UI text and text fields."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Buttons and pane titles."
+      },
+      "heading": {
+        "displayName": "Heading",
+        "purpose": "Sheet and section headings."
+      },
+      "readout": {
+        "displayName": "Readout",
+        "purpose": "Position and tempo, tabular figures."
+      },
+      "readout-small": {
+        "displayName": "Small readout",
+        "purpose": "Levels and numeric fields, tabular figures."
+      }
+    },
+    "shadows": [
+      {
+        "name": "shadow",
+        "value": "rgba(0, 0, 0, 0.5)",
+        "purpose": "Only under floating layers: menus, tooltips, sheets, drag previews."
+      }
+    ],
+    "motion": [
+      {
+        "name": "hover-ease",
+        "value": "exponential approach, rate 18/s (about 60 ms)",
+        "purpose": "Hover and toggle states (Ui::animate_bool)."
+      },
+      {
+        "name": "meter-ballistics",
+        "value": "fast attack, ~20 dB/s release, 1.2 s peak hold",
+        "purpose": "Level meters."
+      }
+    ],
+    "focusRing": {
+      "value": "2px focus outline, 1px outside the control, radius + 1px",
+      "purpose": "Keyboard focus only (focus.rs focus_ring)."
+    }
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Amber fill for the one primary action in a region, such as Export or Run.",
+      "html": "<button class=\"ds-btn-primary\">Export</button>",
+      "css": ".ds-btn-primary { height: 24px; padding: 0; min-width: 80px; background: #F0A443; color: #1E1406; font: 600 13px 'Barlow Semi Condensed', sans-serif; border: none; border-radius: 3px; cursor: pointer; } .ds-btn-primary:hover { background: color-mix(in srgb, #F0A443 92%, white); } .ds-btn-primary:active { background: color-mix(in srgb, #F0A443 88%, black); } .ds-btn-primary:focus-visible { outline: 2px solid #6EC4E6; outline-offset: 1px; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Control fill for dialog buttons and dropdown values in property rows.",
+      "html": "<button class=\"ds-btn\">Cancel</button>",
+      "css": ".ds-btn { height: 24px; padding: 0; min-width: 80px; background: #31353B; color: #EEEFF0; font: 600 13px 'Barlow Semi Condensed', sans-serif; border: none; border-radius: 3px; cursor: pointer; } .ds-btn:hover { background: #3B4047; } .ds-btn:active { background: #464C54; } .ds-btn:focus-visible { outline: 2px solid #6EC4E6; outline-offset: 1px; }"
+    },
+    {
+      "name": "Text Field",
+      "kind": "input",
+      "refersTo": "text-field",
+      "description": "Single-line field on the seam color with a strong line; the stroke turns focus cyan while editing.",
+      "html": "<input class=\"ds-input\" placeholder=\"Search\">",
+      "css": ".ds-input { height: 24px; padding: 0 8px; background: #0F1011; color: #EEEFF0; font: 500 13px 'Barlow Semi Condensed', sans-serif; border: 1px solid #3A3E44; border-radius: 3px; } .ds-input::placeholder { color: #8C9199; } .ds-input:focus { outline: none; border-color: rgba(110, 196, 230, 0.7); }"
+    },
+    {
+      "name": "Pane Tab",
+      "kind": "nav",
+      "refersTo": "tab",
+      "description": "Text tab in a 32px pane header; the selected tab gets a 2px amber underline and widths never change with selection.",
+      "html": "<div class=\"ds-tabs\"><button class=\"ds-tab ds-tab-on\">Channels</button><button class=\"ds-tab\">Piano roll</button><button class=\"ds-tab\">Mixer</button></div>",
+      "css": ".ds-tabs { display: flex; height: 32px; background: #1C1E21; border-bottom: 1px solid #2B2E33; } .ds-tab { padding: 0 10px; background: none; border: none; color: #ADB1B7; font: 600 13px 'Barlow Semi Condensed', sans-serif; box-shadow: inset 0 -2px 0 transparent; cursor: pointer; } .ds-tab:hover { color: #EEEFF0; } .ds-tab-on { color: #EEEFF0; box-shadow: inset 0 -2px 0 #F0A443; } .ds-tab:focus-visible { outline: 2px solid #6EC4E6; outline-offset: -2px; }"
+    }
+  ],
+  "narrative": {
+    "overview": "A pattern-and-playlist DAW workspace in the FL Studio mould: compact toolbars, continuous editing surfaces and color reserved for the music. Peel Studio borrows the hierarchy, not the assets or the gloss. The chrome is neutral graphite and stays quiet. Clips, notes, lit steps, waveforms and the playhead are the brightest things on screen, and a channel's color identifies it everywhere it appears.",
+    "keyCharacteristics": [
+      "Panes meet at a 2px bg seam instead of floating as cards",
+      "Panes, editor canvases and mixer strips are square; controls use 2-3px radii",
+      "Amber for the primary action, playhead and tempo; green for signal",
+      "Channel colors only on musical content, never on chrome",
+      "No decorative gradients or glows; shadows only under floating layers"
+    ],
+    "rules": [],
+    "dos": [
+      "Do take hierarchy from value steps and 1px separators.",
+      "Do keep one primary (amber) button per region."
+    ],
+    "donts": [
+      "Don't nest surfaces more than one deep.",
+      "Don't use focus cyan for text.",
+      "Don't put channel colors on chrome."
+    ]
+  }
+}

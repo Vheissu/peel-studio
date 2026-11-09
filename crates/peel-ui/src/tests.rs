@@ -939,6 +939,34 @@ fn splitters_move_with_the_arrow_keys() {
 }
 
 #[test]
+fn thin_splitters_still_grab_beside_the_seam() {
+    // Panes meet at a 2 px seam; the pointer can grab a few pixels to
+    // either side of it.
+    let mut h = Harness::new();
+    let id = Id::new("split");
+    let draw = |ui: &mut Ui| ui.splitter(id, rect(200.0, 0.0, 2.0, 400.0), true);
+    h.ui.input.pointer = Some(vec2(198.0, 100.0));
+    h.frame(draw);
+    h.ui.input.pressed[0] = true;
+    h.ui.input.down[0] = true;
+    h.frame(draw);
+    h.ui.input.pointer = Some(vec2(208.0, 100.0));
+    h.ui.input.pointer_delta = vec2(10.0, 0.0);
+    assert_eq!(h.frame(draw), 10.0);
+    // Well away from the seam, nothing grabs.
+    h.ui.input.down[0] = false;
+    h.ui.input.released[0] = true;
+    h.frame(draw);
+    h.ui.input.pointer = Some(vec2(190.0, 100.0));
+    h.frame(draw);
+    h.ui.input.pressed[0] = true;
+    h.ui.input.down[0] = true;
+    h.frame(draw);
+    h.ui.input.pointer_delta = vec2(10.0, 0.0);
+    assert_eq!(h.frame(draw), 0.0);
+}
+
+#[test]
 fn focus_requests_from_assistive_technology() {
     let mut h = Harness::new();
     let a = Id::new("a");

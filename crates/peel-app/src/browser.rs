@@ -29,7 +29,7 @@ pub enum BrowserItem {
     },
 }
 
-const ROW_H: f32 = 28.0;
+const ROW_H: f32 = 24.0;
 
 #[derive(Default)]
 struct DirCache {
@@ -82,13 +82,16 @@ fn category_icon(cat: &str) -> &'static str {
 /// Draws the browser. Returns true when the user asked to hide it.
 pub fn draw(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) -> bool {
     let t = ui.theme.clone();
-    ui.scene.rect(r, t.radius_l, t.panel);
+    ui.scene.rect(r, 0.0, t.panel);
     let mut body = r.shrink2(10.0, 0.0);
     // Header: the tab's name (tabs live on the left rail) and Hide.
-    let mut head = body.cut_top(t.header_h).shrink2(0.0, 5.0);
+    let head_full = body.cut_top(t.header_h);
+    ui.scene
+        .hline(r.x, r.right(), head_full.bottom() - 0.5, t.line);
+    let mut head = head_full.shrink2(0.0, 5.0);
     let hide = ui.icon_button(
         W::new("browser-hide"),
-        head.cut_right(28.0),
+        head.cut_right(24.0),
         icons::CARET_DOUBLE_LEFT,
         false,
         None,
@@ -99,9 +102,10 @@ pub fn draw(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) -> bool {
         .iter()
         .find(|(tab, _, _)| *tab == ws.browser_tab)
         .map_or("Browser", |(_, _, label)| *label);
-    ui.text(head, title, t.heading, t.text, Align::Start);
+    ui.text(head, title, t.label, t.text, Align::Start);
     ui.describe_label(W::new("browser-title"), head, title);
-    let search_r = body.cut_top(30.0);
+    body.cut_top(6.0);
+    let search_r = body.cut_top(26.0);
     let placeholder = match ws.browser_tab {
         BrowserTab::Instruments => "Search instruments",
         BrowserTab::Effects => "Search effects",
@@ -114,7 +118,7 @@ pub fn draw(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) -> bool {
         &mut ws.search,
         placeholder,
     );
-    body.cut_top(8.0);
+    body.cut_top(4.0);
     let query = ws.search.to_lowercase();
     match ws.browser_tab {
         BrowserTab::Instruments => devices(ui, body, DeviceKind::Instrument, &query, s, ws),

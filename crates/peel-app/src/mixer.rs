@@ -20,7 +20,8 @@ use crate::util::{
 };
 use crate::workspace::{Focus, MixerSize, Workspace};
 
-const STRIP_GAP: f32 = 6.0;
+/// Strips sit side by side; the dock shows through as a 1 px seam.
+const STRIP_GAP: f32 = 1.0;
 const ROW: f32 = 22.0;
 const SEND_ROW: f32 = 20.0;
 /// Shortest fader the layout aims to keep.
@@ -196,9 +197,9 @@ pub fn toolbar(ui: &mut Ui, tools: Rect, s: &mut Session, ws: &mut Workspace) {
 pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspace) {
     let t = ui.theme.clone();
     toolbar(ui, tools, s, ws);
-    let mut body = r.shrink2(10.0, 0.0);
-    body.cut_top(6.0);
-    body.cut_bottom(6.0);
+    let mut body = r.shrink2(4.0, 0.0);
+    body.cut_top(2.0);
+    body.cut_bottom(4.0);
     let tracks: Vec<MixerTrack> = s.project().mixer.tracks.clone();
     let Some(master) = tracks.first().cloned() else {
         return;
@@ -212,12 +213,12 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
     normal.insert_rows = normal.insert_rows.min(rows_needed.max(2));
     master_plan.insert_rows = master_plan.insert_rows.min(rows_needed.max(2));
 
-    let master_r = body.cut_right(master_plan.width + 10.0);
-    body.cut_right(10.0);
+    let master_r = body.cut_right(master_plan.width + 6.0);
+    body.cut_right(4.0);
     ui.scene.vline(
-        master_r.x - 6.0,
-        master_r.y + 4.0,
-        master_r.bottom() - 4.0,
+        master_r.x - 2.0,
+        master_r.y,
+        master_r.bottom(),
         t.line_strong,
     );
 
@@ -288,7 +289,7 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
 
     strip(
         ui,
-        master_r.shrink2(5.0, 0.0).with_h(strips_h),
+        master_r.shrink2(3.0, 0.0).with_h(strips_h),
         &master,
         true,
         master_plan,
@@ -315,7 +316,7 @@ fn strip(
         ws.focus = Some(Focus::Track(tr.id));
     }
     ui.scene
-        .rect(r, t.radius_m, if selected { t.raised } else { t.panel_alt });
+        .rect(r, 0.0, if selected { t.raised } else { t.panel_alt });
     // Effect drops.
     let is_effect = |i: &BrowserItem| match i {
         BrowserItem::Device(id) | BrowserItem::Preset(id, _) => {
@@ -325,7 +326,7 @@ fn strip(
         _ => false,
     };
     if ui.drop_hover::<BrowserItem>(r).is_some_and(is_effect) {
-        ui.scene.outline(r, t.radius_m, 2.0, t.focus.alpha(0.7));
+        ui.scene.outline(r, 0.0, 2.0, t.focus.alpha(0.7));
         if let Some((item, _)) = ui.take_drop::<BrowserItem>(r) {
             match item {
                 BrowserItem::Device(id) => add_insert(s, tr.id, id),
@@ -341,10 +342,17 @@ fn strip(
 
     let mut col_r = r.shrink2(6.0, 6.0);
     // Cap and name.
-    let cap = col_r.cut_top(4.0);
+    // The channel color runs edge to edge across the top of the strip.
+    col_r.cut_top(3.0);
+    let cap = Rect {
+        x: r.x,
+        y: r.y,
+        w: r.w,
+        h: 3.0,
+    };
     ui.scene
-        .rect(cap, 2.0, if is_master { t.accent } else { c });
-    col_r.cut_top(4.0);
+        .rect(cap, 0.0, if is_master { t.accent } else { c });
+    col_r.cut_top(2.0);
     let name_r = col_r.cut_top(20.0);
     let name = ui.fit_text(&tr.name, t.label, name_r.w);
     ui.text(
@@ -404,7 +412,7 @@ fn strip(
     let mut pan = (tr.pan + 1.0) * 0.5;
     let k = ui.knob(
         W::new(("strip-pan", tr.id)),
-        Rect::from_center(pan_r.center(), 32.0, 32.0),
+        Rect::from_center(pan_r.center(), 28.0, 28.0),
         &mut pan,
         0.5,
         t.text_dim,
@@ -748,7 +756,7 @@ fn inserts(
             x: view.x,
             y: view.y + i as f32 * ROW - off.y,
             w: view.w - bar,
-            h: ROW - 2.0,
+            h: ROW - 1.0,
         };
         if slot_r.bottom() < view.y || slot_r.y > view.bottom() {
             continue;
@@ -765,7 +773,7 @@ fn inserts(
                 );
                 let hot = ui.animate_bool(id, resp.hovered);
                 ui.scene
-                    .rect(slot_r, t.radius_s, t.control.alpha(0.25 + hot * 0.5));
+                    .rect(slot_r, t.radius_s, t.well.mix(t.control, hot));
                 ui.icon(slot_r, icons::PLUS, 11.0, t.text_faint.mix(t.text, hot));
                 ui.focus_ring(id, slot_r, t.radius_s);
                 if resp.clicked {
@@ -814,12 +822,13 @@ fn insert_row(
             .label(format!("{name}, {}", tr.name))
             .value(if dev.bypass { "bypassed" } else { "on" }),
     );
+    // Insert slots are recessed; the open one and the hovered one lift.
     let fill = if open_here {
         t.control_active
     } else if resp.hovered {
-        t.control_hover
-    } else {
         t.control
+    } else {
+        t.well
     };
     ui.scene.rect(slot_r, t.radius_s, fill);
     ui.focus_ring(id, slot_r, t.radius_s);

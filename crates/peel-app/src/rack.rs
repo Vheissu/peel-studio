@@ -13,8 +13,10 @@ use crate::studio::current_pattern;
 use crate::util::{col, db_to_fader, fader_to_db, ink_on};
 use crate::workspace::{DockTab, Focus, Workspace};
 
-const ROW_H: f32 = 34.0;
-const ROW_GAP: f32 = 4.0;
+const ROW_H: f32 = 26.0;
+const ROW_GAP: f32 = 2.0;
+/// Channel volume and pan knobs.
+const KNOB: f32 = 22.0;
 const GRAPH_H: f32 = 64.0;
 const STEP: Time = Time::new_const(1, 4);
 
@@ -60,7 +62,7 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
         }
     }
 
-    let body = r.shrink2(10.0, 4.0);
+    let body = r.shrink2(6.0, 4.0);
     let channels: Vec<Channel> = s.project().channels.clone();
     let graph_h = if ws.rack_graph {
         GRAPH_H + ROW_GAP
@@ -108,18 +110,18 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
     }
 
     // Column layout.
-    let name_w = 132.0;
-    let ctrl_w = 28.0 * 2.0 + 8.0;
-    let lead = 22.0 + 6.0 + name_w + 8.0 + ctrl_w + 12.0;
+    let name_w = 124.0;
+    let ctrl_w = KNOB * 2.0 + 4.0;
+    let lead = 20.0 + 4.0 + name_w + 6.0 + ctrl_w + 10.0;
     let avail = (body.w - lead - 8.0).max(80.0);
     let beats = steps_total.div_ceil(4);
-    let group_gap = 6.0;
-    let step_gap = 3.0;
+    let group_gap = 4.0;
+    let step_gap = 2.0;
     let step_w = ((avail
         - group_gap * (beats as f32 - 1.0)
         - step_gap * (steps_total as f32 - beats as f32))
         / steps_total as f32)
-        .clamp(14.0, 30.0);
+        .clamp(12.0, 26.0);
 
     let playing_step = if s.is_playing() && matches!(s.mode(), PlayMode::Pattern(p) if p == pid) {
         let b = s.position().rem_euclid(pattern.length.as_f64());
@@ -154,12 +156,13 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
             continue;
         }
         if selected {
+            // A flat band behind the whole row, edge to edge.
             ui.scene
-                .rect(row.expand(2.0), t.radius_m, t.raised.alpha(0.55));
+                .rect(row.shrink2(-6.0, -1.0), 0.0, t.raised.alpha(0.6));
         }
         let mut cells = row;
         // Mute LED.
-        let led_r = cells.cut_left(22.0);
+        let led_r = cells.cut_left(20.0);
         let led = ui.led(W::new(("rack-led", ch.id)), led_r, !ch.muted, t.play);
         ui.tooltip(&led, if ch.muted { "Unmute" } else { "Mute" });
         if led.clicked {
@@ -175,12 +178,19 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
                 }
             });
         }
+        cells.cut_left(4.0);
+        channel_button(
+            ui,
+            cells.cut_left(name_w).shrink2(0.0, 1.0),
+            ch,
+            selected,
+            s,
+            ws,
+        );
         cells.cut_left(6.0);
-        channel_button(ui, cells.cut_left(name_w), ch, selected, s, ws);
-        cells.cut_left(8.0);
         // Volume and pan.
         let mut vol = db_to_fader(ch.gain_db);
-        let vr = cells.cut_left(28.0);
+        let vr = Rect::from_center(cells.cut_left(KNOB).center(), KNOB, KNOB);
         let vresp = ui.knob(
             W::new(("rack-vol", ch.id)),
             vr,
@@ -203,11 +213,11 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
                     }
                 });
         }
-        cells.cut_left(8.0);
+        cells.cut_left(4.0);
         let mut pan = (ch.pan + 1.0) * 0.5;
         let presp = ui.knob(
             W::new(("rack-pan", ch.id)),
-            cells.cut_left(28.0),
+            Rect::from_center(cells.cut_left(KNOB).center(), KNOB, KNOB),
             &mut pan,
             0.5,
             t.text_dim,
@@ -226,7 +236,7 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
         if vresp.released || presp.released {
             s.doc.end_gesture();
         }
-        cells.cut_left(12.0);
+        cells.cut_left(10.0);
 
         let notes: Vec<Note> = pattern.notes_for(ch.id).copied().collect();
         let as_steps = notes.iter().all(|n| is_step(n, ch.root_key));
@@ -277,16 +287,17 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
 
     // Add-channel row.
     let add_r = Rect {
-        x: body.x + 28.0,
-        y,
+        x: body.x + 24.0,
+        y: y + 1.0,
         w: name_w,
-        h: ROW_H - 4.0,
+        h: ROW_H - 2.0,
     };
     let add = ui.interact(W::new("rack-add"), add_r);
     let hot = ui.animate_bool(W::new("rack-add-hot"), add.hovered);
-    ui.scene
-        .rect(add_r, t.radius_m, t.raised.alpha(0.3 + hot * 0.5));
-    let mut ar = add_r.shrink2(10.0, 0.0);
+    if hot > 0.0 {
+        ui.scene.rect(add_r, t.radius_s, t.control.alpha(hot));
+    }
+    let mut ar = add_r.shrink2(8.0, 0.0);
     ui.icon(ar.cut_left(16.0), icons::PLUS, 14.0, t.text_dim);
     ar.cut_left(6.0);
     ui.text(ar, "Add", t.label, t.text_dim, Align::Start);
@@ -447,25 +458,25 @@ fn channel_button(
     let base = if selected {
         t.control_hover
     } else {
-        t.raised.mix(t.control, hot)
+        t.control.mix(t.control_hover, hot)
     };
-    ui.scene.rect(r, t.radius_m, base);
+    ui.scene.rect(r, t.radius_s, base);
     let c = col(ch.color);
     let activity = s.take_channel_activity(ch.id);
     let glow = ui.animate(W::new(("rack-act", ch.id)), activity.min(1.0), 10.0);
     ui.scene.rect_ex(
-        Rect { w: 4.0, ..r },
-        [t.radius_m, 0.0, 0.0, t.radius_m],
+        Rect { w: 3.0, ..r },
+        [t.radius_s, 0.0, 0.0, t.radius_s],
         c,
         0.0,
         Color::TRANSPARENT,
     );
     if glow > 0.01 {
-        ui.scene.rect(r, t.radius_m, c.alpha(glow * 0.22));
+        ui.scene.rect(r, t.radius_s, c.alpha(glow * 0.22));
     }
-    let name = ui.fit_text(&ch.name, t.label, r.w - 18.0);
+    let name = ui.fit_text(&ch.name, t.label, r.w - 16.0);
     ui.text(
-        r.shrink2(12.0, 0.0),
+        r.shrink2(10.0, 0.0),
         &name,
         t.label,
         if selected {
@@ -582,9 +593,9 @@ fn step_row(
         }
         let cell = Rect {
             x,
-            y: grid.y + 2.0,
+            y: grid.y + 1.0,
             w: step_w,
-            h: grid.h - 4.0,
+            h: grid.h - 2.0,
         };
         x += step_w;
         if cell.x > grid.right() + 1.0 {
@@ -595,35 +606,28 @@ fn step_row(
         let on = note.is_some();
         let id = W::new(("step", ch.id, i));
         let resp = ui.interact_button(id, cell, &format!("{} step {}", ch.name, i + 1));
+        // Beats alternate between two neutral values so the bar reads in
+        // groups of four.
         let beat_odd = (i / 4) % 2 == 1;
         let off_fill = if beat_odd {
-            t.raised.lighten(0.035)
+            t.control.lighten(0.04)
         } else {
-            t.raised
+            t.control.darken(0.18)
         };
         let hot = resp.hovered as i32 as f32;
         if on {
             let vel = note.map_or(1.0, |n| n.velocity);
-            let fill = c.mix(t.raised, (1.0 - vel) * 0.55);
-            ui.scene.rect(cell, t.radius_s, fill.lighten(hot * 0.08));
-            ui.scene.rect(
-                Rect {
-                    h: 2.0,
-                    ..cell.shrink2(3.0, 0.0)
-                }
-                .translate(vec2(0.0, 3.0)),
-                1.0,
-                Color::WHITE.alpha(0.18),
-            );
+            let fill = c.mix(t.control, (1.0 - vel) * 0.55);
+            ui.scene.rect(cell, t.radius_s, fill.lighten(hot * 0.1));
         } else {
             ui.scene
-                .rect(cell, t.radius_s, off_fill.lighten(hot * 0.05));
+                .rect(cell, t.radius_s, off_fill.lighten(hot * 0.08));
         }
         if playing == Some(i) {
             ui.scene.rect(
                 cell,
                 t.radius_s,
-                Color::WHITE.alpha(if on { 0.28 } else { 0.10 }),
+                Color::WHITE.alpha(if on { 0.30 } else { 0.12 }),
             );
         }
         if resp.hovered {
@@ -706,11 +710,12 @@ fn note_preview(
     ws: &mut Workspace,
 ) {
     let t = ui.theme.clone();
-    let r = grid.shrink2(0.0, 2.0);
+    let r = grid.shrink2(0.0, 1.0);
     let id = W::new(("rack-preview", ch.id));
     let resp = ui.interact(id, r);
     let hot = ui.animate_bool(id, resp.hovered);
-    ui.scene.rect(r, t.radius_s, t.raised.lighten(hot * 0.03));
+    ui.scene
+        .rect(r, t.radius_s, t.well.mix(t.control, hot * 0.4));
     let (lo, hi) = notes
         .iter()
         .fold((127u8, 0u8), |(lo, hi), n| (lo.min(n.key), hi.max(n.key)));
@@ -898,11 +903,11 @@ fn velocity_graph(
 ) {
     let t = ui.theme.clone();
     let c = col(ch.color);
-    ui.scene.rect(row, t.radius_m, t.bg.mix(t.panel, 0.5));
+    ui.scene.rect(row, 0.0, t.well);
     ui.text(
         Rect {
-            x: row.x + 28.0,
-            w: 132.0,
+            x: row.x + 24.0,
+            w: 124.0,
             ..row
         },
         "Velocity",
@@ -932,7 +937,7 @@ fn velocity_graph(
     }
     for (i, cell) in cells.iter().enumerate() {
         let pos = STEP.mul_int(i as i64);
-        ui.scene.rect(*cell, 2.0, t.raised.alpha(0.5));
+        ui.scene.rect(*cell, 0.0, t.control.darken(0.18));
         if let Some(n) = notes.iter().find(|n| n.start == pos) {
             let h = cell.h * n.velocity;
             ui.scene.rect(

@@ -36,10 +36,11 @@ pub struct Studio {
 /// Seconds between autosaves of a changed project.
 const AUTOSAVE_EVERY: f32 = 60.0;
 
-/// Gap between panes.
-pub const GAP: f32 = 6.0;
+/// Seam between panes: thin enough to read as a separator, the splitter
+/// grab zone reaches a little past it.
+pub const GAP: f32 = 2.0;
 /// Top bar and status bar heights.
-pub const TOP_H: f32 = 44.0;
+pub const TOP_H: f32 = 40.0;
 pub const STATUS_H: f32 = 24.0;
 
 impl Studio {
@@ -1267,25 +1268,20 @@ impl Studio {
         area.cut_bottom(GAP);
 
         // Side panes give way on small windows without losing the size the
-        // user chose for larger ones.
+        // user chose for larger ones. The seams are laid out here and their
+        // splitters run after the panes draw, so a seam's grab zone wins
+        // over pane edges (scrollbars, tabs) that reach into it.
         let browser_r = self.prefs.show_browser.then(|| {
             let w = self.ws.browser_w.min((area.w * 0.24).max(200.0));
             let r = area.cut_left(w);
-            let d = ui.splitter(W::new("split-browser"), area.cut_left(GAP), true);
-            if d != 0.0 {
-                self.ws.browser_w = (w + d).clamp(180.0, 420.0);
-            }
-            r
+            (r, area.cut_left(GAP), w)
         });
         let right_r = self.prefs.show_right().then(|| {
             let w = self.ws.inspector_w.min((area.w * 0.3).max(240.0));
             let r = area.cut_right(w);
-            let d = ui.splitter(W::new("split-inspector"), area.cut_right(GAP), true);
-            if d != 0.0 {
-                self.ws.inspector_w = (w - d).clamp(240.0, 480.0);
-            }
-            r
+            (r, area.cut_right(GAP), w)
         });
+        let mut dock_seam = None;
         // An expanded mixer takes the whole area between the panes: the
         // playlist steps aside so strips can use the window's height.
         let mixer_expanded = self.prefs.show_editor
@@ -1299,8 +1295,7 @@ impl Studio {
             let max_dock = (area.h - 160.0).max(180.0);
             self.ws.dock_h = self.ws.dock_h.clamp(180.0, max_dock);
             let r = area.cut_bottom(self.ws.dock_h);
-            let d = ui.splitter(W::new("split-dock"), area.cut_bottom(GAP), false);
-            self.ws.dock_h = (self.ws.dock_h - d).clamp(180.0, max_dock);
+            dock_seam = Some((area.cut_bottom(GAP), max_dock));
             r
         } else {
             // Collapsed: only the header, so every editor stays one click away.
@@ -1310,7 +1305,7 @@ impl Studio {
         };
         let playlist_r = area;
 
-        if let Some(r) = browser_r
+        if let Some((r, _, _)) = browser_r
             && browser::draw(ui, r, &mut self.session, &mut self.ws)
         {
             crate::layout::toggle_browser(self);
@@ -1319,7 +1314,7 @@ impl Studio {
             playlist::draw(ui, playlist_r, &mut self.session, &mut self.ws);
         }
         dock(ui, dock_r, self);
-        if let Some(r) = right_r {
+        if let Some((r, _, _)) = right_r {
             if self.prefs.show_scripts {
                 crate::scripts::column(ui, r, self);
             } else {
@@ -1327,6 +1322,22 @@ impl Studio {
                     crate::layout::toggle_inspector(self);
                 }
             }
+        }
+        if let Some((_, seam, w)) = browser_r {
+            let d = ui.splitter(W::new("split-browser"), seam, true);
+            if d != 0.0 {
+                self.ws.browser_w = (w + d).clamp(180.0, 420.0);
+            }
+        }
+        if let Some((_, seam, w)) = right_r {
+            let d = ui.splitter(W::new("split-inspector"), seam, true);
+            if d != 0.0 {
+                self.ws.inspector_w = (w - d).clamp(240.0, 480.0);
+            }
+        }
+        if let Some((seam, max_dock)) = dock_seam {
+            let d = ui.splitter(W::new("split-dock"), seam, false);
+            self.ws.dock_h = (self.ws.dock_h - d).clamp(180.0, max_dock);
         }
         self.status_bar(ui, status);
         crate::fx_editor::draw(
@@ -1396,13 +1407,18 @@ impl Studio {
 
 fn dock(ui: &mut Ui, r: Rect, studio: &mut Studio) {
     let t = ui.theme.clone();
-    ui.scene.rect(r, t.radius_l, t.panel);
+    ui.scene.rect(r, 0.0, t.panel);
     let mut body = r;
-    let mut head = body.cut_top(t.header_h).shrink2(6.0, 0.0);
+    let head_full = body.cut_top(t.header_h);
+    let mut head = head_full.shrink2(6.0, 0.0);
     let shown = studio.prefs.show_editor;
+    if shown {
+        ui.scene
+            .hline(r.x, r.right(), head_full.bottom() - 0.5, t.line);
+    }
 
     // Collapse / expand at the far right.
-    let toggle_r = head.cut_right(30.0).shrink2(0.0, 6.0);
+    let toggle_r = head.cut_right(28.0).shrink2(0.0, 4.0);
     let toggle = ui.icon_button(
         W::new("dock-toggle"),
         toggle_r,
@@ -1470,7 +1486,7 @@ fn dock(ui: &mut Ui, r: Rect, studio: &mut Studio) {
         return;
     }
     // The pattern being edited sits with the editors that edit it.
-    let mut tools = head.shrink2(0.0, 6.0);
+    let mut tools = head.shrink2(0.0, 4.0);
     if has_picker {
         tools.cut_left(8.0);
         ui.divider_v(tools.cut_left(1.0));

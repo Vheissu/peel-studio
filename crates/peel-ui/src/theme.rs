@@ -1,9 +1,10 @@
 //! Design tokens.
 //!
-//! Reference: an analog mixing console at night. Graphite panels, colored
-//! channel caps, amber VU backlight for the primary action, a coral tally
-//! light for recording, and crisp white legends. Hierarchy comes from value
-//! steps between surfaces rather than borders and shadows; notes,
+//! Reference: a pattern-and-playlist DAW workspace. Neutral graphite
+//! chrome, square continuous editor canvases, warm amber for actions and
+//! the playhead, lime for signal, and channel colors only on musical
+//! content. Panes meet at thin dark seams instead of floating as cards;
+//! hierarchy comes from value steps and 1 px separators. Notes, clips,
 //! waveforms and the playhead stay the brightest things on screen.
 
 use crate::geom::Color;
@@ -69,48 +70,48 @@ pub struct Theme {
 impl Theme {
     pub fn dark() -> Theme {
         Theme {
-            bg: Color::hex(0x14171D),
-            panel: Color::hex(0x1C2129),
-            panel_alt: Color::hex(0x20262F),
-            raised: Color::hex(0x252D38),
-            control: Color::hex(0x2B3441),
-            control_hover: Color::hex(0x333E4D),
-            control_active: Color::hex(0x3B4859),
-            line: Color::hex(0x262D37),
-            line_strong: Color::hex(0x323B48),
-            well: Color::hex(0x171B22),
+            bg: Color::hex(0x0F1011),
+            panel: Color::hex(0x1C1E21),
+            panel_alt: Color::hex(0x23262A),
+            raised: Color::hex(0x2A2D32),
+            control: Color::hex(0x31353B),
+            control_hover: Color::hex(0x3B4047),
+            control_active: Color::hex(0x464C54),
+            line: Color::hex(0x2B2E33),
+            line_strong: Color::hex(0x3A3E44),
+            well: Color::hex(0x151719),
 
-            text: Color::hex(0xF1F4F8),
-            text_dim: Color::hex(0xACB7C7),
-            text_faint: Color::hex(0x7D8899),
-            text_on_accent: Color::hex(0x221808),
+            text: Color::hex(0xEEEFF0),
+            text_dim: Color::hex(0xADB1B7),
+            text_faint: Color::hex(0x8C9199),
+            text_on_accent: Color::hex(0x1E1406),
 
-            accent: Color::hex(0xF2B66D),
-            focus: Color::hex(0x60D6E8),
-            record: Color::hex(0xF07880),
-            play: Color::hex(0x86D49E),
+            accent: Color::hex(0xF0A443),
+            focus: Color::hex(0x6EC4E6),
+            record: Color::hex(0xEE5F5B),
+            play: Color::hex(0x9FD65B),
             warn: Color::hex(0xE8C45C),
             shadow: Color::rgba(0.0, 0.0, 0.0, 0.5),
 
-            grid_bar: Color::rgba(1.0, 1.0, 1.0, 0.11),
-            grid_beat: Color::rgba(1.0, 1.0, 1.0, 0.055),
-            grid_step: Color::rgba(1.0, 1.0, 1.0, 0.025),
-            key_white: Color::hex(0xD9DEE6),
-            key_black: Color::hex(0x2A313B),
+            grid_bar: Color::rgba(1.0, 1.0, 1.0, 0.12),
+            grid_beat: Color::rgba(1.0, 1.0, 1.0, 0.06),
+            grid_step: Color::rgba(1.0, 1.0, 1.0, 0.028),
+            key_white: Color::hex(0xD6D8DB),
+            key_black: Color::hex(0x26282C),
 
-            radius_s: 4.0,
-            radius_m: 6.0,
-            radius_l: 8.0,
-            control_h: 28.0,
-            control_h_compact: 24.0,
-            rail_w: 40.0,
-            header_h: 38.0,
+            radius_s: 2.0,
+            radius_m: 3.0,
+            radius_l: 3.0,
+            control_h: 24.0,
+            control_h_compact: 20.0,
+            rail_w: 36.0,
+            header_h: 32.0,
 
             caption: TextStyle::ui(11.5),
             body: TextStyle::ui(13.0),
             label: TextStyle::ui(13.0).weight(FontWeight::SemiBold),
-            heading: TextStyle::ui(15.0).weight(FontWeight::SemiBold),
-            readout: TextStyle::ui(20.0).weight(FontWeight::SemiBold).tabular(),
+            heading: TextStyle::ui(14.0).weight(FontWeight::SemiBold),
+            readout: TextStyle::ui(19.0).weight(FontWeight::SemiBold).tabular(),
             readout_small: TextStyle::ui(12.0).weight(FontWeight::Medium).tabular(),
         }
     }
