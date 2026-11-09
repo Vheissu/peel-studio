@@ -75,6 +75,17 @@ impl NativeMenu {
     /// check states update in place; a different structure rebuilds it.
     pub(crate) fn sync(&mut self, bar: &MenuBar) {
         if *bar == self.last {
+            // Native check items toggle before the event reaches the app.
+            // A radio-style choice or a blocked command may keep the same
+            // model, so restore its checks even when nothing else changed.
+            for c in bar.commands() {
+                if let Some(Item::Check(item)) = self.items.get(&c.id)
+                    && let Some(on) = c.checked
+                    && item.is_checked() != on
+                {
+                    item.set_checked(on);
+                }
+            }
             return;
         }
         if shape(bar) != shape(&self.last) {

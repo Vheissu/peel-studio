@@ -200,8 +200,8 @@ status:   notices                                  device · MIDI · settings
 ## Menus
 
 File, Edit, View, Transport and Help live in the platform menu bar on
-macOS (with the application and Window menus) and Windows. Linux has no
-menu bar winit can host, so File and Edit sit before the View button and
+macOS (with the application and Window menus). Windows and Linux use an
+in-window strip, so File and Edit sit before the View button and
 Transport and Help after it; a tight bar keeps File only. Menus, their
 shortcuts and the start screen run the same commands (`menus.rs`).
 

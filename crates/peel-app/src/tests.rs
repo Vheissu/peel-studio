@@ -3953,6 +3953,44 @@ mod lifecycle {
     }
 
     #[test]
+    fn the_save_prompt_owns_editor_shortcuts() {
+        let mut h = Harness::new();
+        h.studio.ws.dock = DockTab::PianoRoll;
+        h.studio.ws.roll.selection = h.session().project().patterns[0]
+            .notes
+            .iter()
+            .map(|n| n.id)
+            .collect();
+        edit(&mut h);
+        let before = h.session().project().clone();
+        // A native menu command and editor key can arrive in one batch.
+        h.ui.input.keys.push(peel_ui::input::KeyPress {
+            key: peel_ui::Key::Named(peel_ui::NamedKey::Delete),
+            code: Some(peel_ui::KeyCode::Delete),
+            repeat: false,
+            modifiers: Default::default(),
+            consumed: false,
+        });
+        menu(&mut h, Command::Close);
+        assert_eq!(
+            h.session().project(),
+            &before,
+            "the first frame is modal too"
+        );
+        named_key(&mut h, peel_ui::NamedKey::Delete, peel_ui::KeyCode::Delete);
+        assert_eq!(
+            h.session().project(),
+            &before,
+            "the modal blocks note deletion"
+        );
+        assert_eq!(h.studio.pending, Some(Change::Close));
+        command_key(&mut h, "d", peel_ui::KeyCode::KeyD);
+        assert!(h.studio.pending.is_none(), "Don't save owns Cmd/Ctrl+D");
+        assert_blank(&h);
+        assert!(h.studio.welcome);
+    }
+
+    #[test]
     fn a_cancelled_save_as_cancels_the_change() {
         let mut h = Harness::new();
         edit(&mut h);

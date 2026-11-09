@@ -264,6 +264,18 @@ impl Studio {
             }
             ui.scene.pop_clip();
         });
+        if let Some(c) = choice {
+            self.resolve(c);
+        }
+        self.prompt_keys(ui);
+    }
+
+    /// Handle the modal's keys before any editor can consume them.
+    pub(crate) fn prompt_keys(&mut self, ui: &mut Ui) {
+        if self.pending.is_none() {
+            return;
+        }
+        let mut choice = None;
         if ui.input.take_named(NamedKey::Escape) {
             choice = Some(Choice::Cancel);
         } else if ui.input.take_named(NamedKey::Enter) {
@@ -275,6 +287,7 @@ impl Studio {
         for k in ui.input.keys.iter_mut() {
             k.consumed = true;
         }
+        ui.input.text.clear();
         if let Some(c) = choice {
             self.resolve(c);
         }

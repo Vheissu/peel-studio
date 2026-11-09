@@ -108,7 +108,8 @@ fn main() {
     }
     let options = WindowOptions {
         title: "Peel Studio".into(),
-        native_menus: true,
+        // A Windows native menu takes F10 and Alt from the editors.
+        native_menus: cfg!(target_os = "macos"),
         ..Default::default()
     };
     let result = peel_ui::run(options, move |_ui| {

@@ -2,7 +2,7 @@
 //!
 //! One [`MenuBar`] describes File, Edit, View, Transport and Help (plus the
 //! application and Window menus on macOS). It becomes the platform menu bar
-//! on macOS and Windows and the in-window strip elsewhere. Menus, their
+//! on macOS and the in-window strip elsewhere. Menus, their
 //! shortcuts and the start screen all end in [`run`], so each action has
 //! one implementation.
 
@@ -351,6 +351,7 @@ pub fn frame(ui: &mut Ui, studio: &mut Studio) {
     // While the save prompt is up it is the only thing that acts.
     if studio.pending.is_some() {
         ui.take_menu_commands();
+        studio.prompt_keys(ui);
         return;
     }
     for id in ui.take_menu_commands() {
@@ -367,6 +368,7 @@ pub fn frame(ui: &mut Ui, studio: &mut Studio) {
         }
         run(ui, studio, c);
         if studio.pending.is_some() {
+            studio.prompt_keys(ui);
             return;
         }
     }
@@ -393,6 +395,9 @@ pub fn frame(ui: &mut Ui, studio: &mut Studio) {
             break;
         }
         run(ui, studio, c);
+    }
+    if studio.pending.is_some() {
+        studio.prompt_keys(ui);
     }
 }
 
