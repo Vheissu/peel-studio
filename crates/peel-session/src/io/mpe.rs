@@ -84,6 +84,7 @@ struct Note {
     sustained: bool,
     dirty: bool,
     release_due: bool,
+    release_velocity: f32,
     poly_pressure: Option<f32>,
 }
 impl Default for Note {
@@ -95,6 +96,7 @@ impl Default for Note {
             sustained: false,
             dirty: false,
             release_due: false,
+            release_velocity: 0.0,
             poly_pressure: None,
         }
     }
@@ -197,7 +199,13 @@ impl MpeState {
             for key in 0..128u8 {
                 let note = &mut self.notes[usize::from(ch)][usize::from(key)];
                 if note.release_due {
-                    if !live.voice_off(note.slot, note.voice, key, ch) {
+                    if !live.voice_off_with_velocity(
+                        note.slot,
+                        note.voice,
+                        key,
+                        ch,
+                        note.release_velocity,
+                    ) {
                         return;
                     }
                     note.release_due = false;
@@ -225,17 +233,24 @@ impl MpeState {
             }
         }
     }
-    fn release(&mut self, live: &LiveInput, ch: u8, key: u8) {
+    fn release(&mut self, live: &LiveInput, ch: u8, key: u8, velocity: f32) {
         let note = &mut self.notes[usize::from(ch)][usize::from(key)];
         if note.voice == 0 || !note.held {
             return;
         }
+        note.release_velocity = velocity;
         if self.pedal {
             note.held = false;
             note.sustained = true;
         } else {
             note.held = false;
-            note.release_due = !live.voice_off(note.slot, note.voice, key, ch);
+            note.release_due = !live.voice_off_with_velocity(
+                note.slot,
+                note.voice,
+                key,
+                ch,
+                note.release_velocity,
+            );
         }
     }
     fn pedal(&mut self, live: &LiveInput, down: bool) {
@@ -246,7 +261,13 @@ impl MpeState {
                 for key in 0..128u8 {
                     let note = &mut self.notes[usize::from(ch)][usize::from(key)];
                     if note.sustained {
-                        note.release_due = !live.voice_off(note.slot, note.voice, key, ch);
+                        note.release_due = !live.voice_off_with_velocity(
+                            note.slot,
+                            note.voice,
+                            key,
+                            ch,
+                            note.release_velocity,
+                        );
                         if !note.release_due {
                             note.sustained = false;
                         }
@@ -260,7 +281,13 @@ impl MpeState {
             let note = &mut self.notes[usize::from(ch)][usize::from(key)];
             if note.voice != 0
                 && (note.held || note.sustained || note.release_due)
-                && !live.voice_off(note.slot, note.voice, key, ch)
+                && !live.voice_off_with_velocity(
+                    note.slot,
+                    note.voice,
+                    key,
+                    ch,
+                    note.release_velocity,
+                )
             {
                 note.held = false;
                 note.sustained = false;
@@ -368,12 +395,24 @@ impl MpeState {
                 if previous.voice != 0
                     && (previous.held || previous.sustained || previous.release_due)
                 {
-                    if !live.voice_off(previous.slot, previous.voice, key, ch) {
+                    let release_velocity = if previous.held {
+                        0.0
+                    } else {
+                        previous.release_velocity
+                    };
+                    if !live.voice_off_with_velocity(
+                        previous.slot,
+                        previous.voice,
+                        key,
+                        ch,
+                        release_velocity,
+                    ) {
                         // Overload drops the new strike; only its old release retries.
                         let previous = &mut self.notes[usize::from(ch)][usize::from(key)];
                         previous.held = false;
                         previous.sustained = false;
                         previous.release_due = true;
+                        previous.release_velocity = release_velocity;
                         return true;
                     }
                     self.notes[usize::from(ch)][usize::from(key)] = Note::default();
@@ -407,14 +446,21 @@ impl MpeState {
                         sustained: false,
                         dirty: false,
                         release_due: false,
+                        release_velocity: 0.0,
                         poly_pressure: None,
                     };
                 }
                 true
             }
-            MidiEvent::NoteOn { key, .. } | MidiEvent::NoteOff { key, .. } => {
+            MidiEvent::NoteOff { key, velocity, .. } => {
                 if member && key < 128 {
-                    self.release(live, ch, key);
+                    self.release(live, ch, key, f32::from(velocity.min(127)) / 127.0);
+                }
+                true
+            }
+            MidiEvent::NoteOn { key, .. } => {
+                if member && key < 128 {
+                    self.release(live, ch, key, 0.0);
                 }
                 true
             }
@@ -628,7 +674,7 @@ mod tests {
             MidiEvent::NoteOff {
                 channel: 1,
                 key: 60,
-                velocity: 0,
+                velocity: 91,
             },
         );
         assert!(state.notes[1][60].release_due);
@@ -643,7 +689,7 @@ mod tests {
             events
                 .iter()
                 .any(|e| e.voice == voice
-                    && matches!(e.kind, RecordedPerformanceKind::NoteOff { .. }))
+                    && matches!(e.kind, RecordedPerformanceKind::NoteOff {velocity,..} if (velocity-91.0/127.0).abs()<1e-7))
         );
         assert!(events.iter().any(|e| e.voice == voice
             && matches!(

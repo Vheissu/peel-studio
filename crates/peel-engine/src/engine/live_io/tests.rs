@@ -408,3 +408,23 @@ fn deferred_clear_and_snapshot_share_a_key_and_live_reset_preserves_sequence_cle
         EventKind::VoiceExpression { voice: 7, .. }
     ));
 }
+
+#[test]
+fn scoped_note_release_velocity_reaches_device_and_recording() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut e = engine(&seen);
+    let live = e.take_live_input().unwrap();
+    let mut record = e.take_recorded().unwrap();
+    let voice = crate::LIVE_VOICE_BASE + 3000;
+    let velocity = 91.0 / 127.0;
+    assert!(live.voice_on(0, voice, 60, 0.8, 1, 0.0, 0.0, 0.5));
+    let (mut l, mut r) = ([0.0; 256], [0.0; 256]);
+    e.render(&mut l, &mut r);
+    seen.lock().unwrap().clear();
+    assert!(live.voice_off_with_velocity(0, voice, 60, 1, velocity));
+    e.render(&mut l, &mut r);
+    assert!(seen.lock().unwrap().iter().any(|(_,_,event)|matches!(event,EventKind::NoteOff{voice:v,velocity:value,..}if *v==voice && (*value-velocity).abs()<1e-7)));
+    let mut events = Vec::new();
+    record.drain_performance_into(&mut events);
+    assert!(events.iter().any(|event|event.voice==voice && matches!(event.kind,crate::live::RecordedPerformanceKind::NoteOff{velocity:value,..}if(value-velocity).abs()<1e-7)));
+}

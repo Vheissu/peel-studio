@@ -68,8 +68,13 @@ impl Engine {
                     );
                 }
             }
-            LiveOp::VoiceOff { slot, key, voice } => {
-                self.scoped_live_note(slot, key, 0.0, voice, false, offset);
+            LiveOp::VoiceOff {
+                slot,
+                key,
+                voice,
+                velocity,
+            } => {
+                self.scoped_live_note(slot, key, velocity, voice, false, offset);
             }
             LiveOp::On {
                 slot,
@@ -141,7 +146,7 @@ impl Engine {
                 offset,
                 EventKind::NoteOff {
                     key,
-                    velocity: 0.0,
+                    velocity: clean_velocity(velocity),
                     voice,
                 },
             );

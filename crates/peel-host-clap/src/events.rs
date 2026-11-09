@@ -226,6 +226,12 @@ impl EventList {
     }
 
     #[cfg(test)]
+    pub(crate) fn note_at(&self, index: usize) -> Option<clap_event_note> {
+        // SAFETY: the release-velocity fixture calls this only for a note slot.
+        (index < self.len).then(|| unsafe { self.slots[index].note })
+    }
+
+    #[cfg(test)]
     pub(crate) fn param_at(&self, index: usize) -> Option<clap_event_param_value> {
         // SAFETY: only called on slots written by `push_param`.
         (index < self.len).then(|| unsafe { self.slots[index].param })

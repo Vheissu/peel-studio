@@ -149,7 +149,7 @@ pub struct RecordedNote {
     /// Instrument slot the note was played on.
     pub slot: Slot,
     pub key: u8,
-    /// 0..=1; zero for a note-off.
+    /// Attack or release velocity, normalized to 0..=1.
     pub velocity: f32,
     pub on: bool,
     /// Transport position (quarter notes) from telemetry when the note
@@ -307,6 +307,7 @@ pub(crate) enum LiveKind {
     VoiceOff {
         key: u8,
         voice: u32,
+        velocity: f32,
     },
 }
 
@@ -604,6 +605,7 @@ pub(crate) enum LiveOp {
         slot: u32,
         key: u8,
         voice: u32,
+        velocity: f32,
     },
     On {
         slot: u32,
@@ -864,13 +866,18 @@ impl LiveState {
                     timbre,
                 },
             ),
-            LiveKind::VoiceOff { key, voice } => emit(
+            LiveKind::VoiceOff {
+                key,
+                voice,
+                velocity,
+            } => emit(
                 out,
                 offset,
                 LiveOp::VoiceOff {
                     slot: ev.slot,
                     key,
                     voice,
+                    velocity,
                 },
             ),
             LiveKind::NoteOn { key, velocity } => {

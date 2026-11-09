@@ -108,7 +108,7 @@ fn live_input_never_allocates_on_the_audio_thread() {
             live.expression(EventKind::ClearVoiceExpression { voice });
             live.target().set(Some(block % 3));
         } else if block % 7 == 1 {
-            live.voice_off(0, voice - 1, 60, 1);
+            live.voice_off_with_velocity(0, voice - 1, 60, 1, 91.0 / 127.0);
         }
         // The engine may be asked for callbacks of any size.
         let n = [256usize, 64, 100, 256][block as usize % 4];

@@ -860,3 +860,46 @@ fn mpe_wide_manager_range_reaches_internal_and_member_recording_without_global_c
         assert_eq!(mpe_expression(&events, *voice).0, -96.0);
     }
 }
+
+#[test]
+fn mpe_lift_velocity_survives_raw_input_and_sustain_release() {
+    for sustained in [false, true] {
+        let mut s = mpe_session(MpeMode::Lower, 3);
+        mpe_on(&mut s, 1, 60);
+        s.take_recorded_performance();
+        if sustained {
+            s.handle_midi_event(MidiEvent::Sustain {
+                channel: 0,
+                down: true,
+            });
+        }
+        s.handle_midi_event(MidiEvent::NoteOff {
+            channel: 1,
+            key: 60,
+            velocity: 91,
+        });
+        if sustained {
+            assert!(
+                !s.take_recorded_performance()
+                    .iter()
+                    .any(|e| matches!(e.kind, RecordedPerformanceKind::NoteOff { .. }))
+            );
+            s.handle_midi_event(MidiEvent::Sustain {
+                channel: 0,
+                down: false,
+            });
+        }
+        let events = s.take_recorded_performance();
+        let release = events
+            .iter()
+            .find_map(|e| match e.kind {
+                RecordedPerformanceKind::NoteOff { velocity, .. } => Some(velocity),
+                _ => None,
+            })
+            .expect("release");
+        assert!(
+            (release - 91.0 / 127.0).abs() < 1e-7,
+            "sustain={sustained}: {release}"
+        );
+    }
+}

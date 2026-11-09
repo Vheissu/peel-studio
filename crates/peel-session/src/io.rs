@@ -52,7 +52,7 @@ pub struct RecordedMidi {
     /// The channel that was the live target, if it still exists.
     pub channel: Option<Id>,
     pub key: u8,
-    /// 0..=1; zero for a note-off.
+    /// Attack or release velocity, normalized to 0..=1.
     pub velocity: f32,
     pub on: bool,
     /// Playhead (quarter notes) from telemetry when the note arrived. It is

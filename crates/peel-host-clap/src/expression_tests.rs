@@ -734,3 +734,38 @@ fn clearing_midi_expression_keeps_the_member_and_follows_shared_controls() {
     );
     assert_eq!(dev.events.midi_at(0).unwrap().data, [0x81, 60, 0]);
 }
+
+#[test]
+fn lift_velocity_is_forwarded_to_native_and_midi_mpe_plugins() {
+    let velocity = 91.0 / 127.0;
+    let mut native = device(fixture::SINE);
+    on(&mut native, 60, 700);
+    native.events.clear();
+    push(
+        &mut native,
+        17,
+        EventKind::NoteOff {
+            key: 60,
+            voice: 700,
+            velocity,
+        },
+    );
+    assert_eq!(
+        native.events.note_at(0).unwrap().velocity,
+        f64::from(velocity)
+    );
+    let mut midi = device(fixture::MIDI_SINE);
+    midi.scoped.midi_enabled = true;
+    on(&mut midi, 60, 700);
+    midi.events.clear();
+    push(
+        &mut midi,
+        17,
+        EventKind::NoteOff {
+            key: 60,
+            voice: 700,
+            velocity,
+        },
+    );
+    assert_eq!(midi.events.midi_at(0).unwrap().data, [0x81, 60, 91]);
+}

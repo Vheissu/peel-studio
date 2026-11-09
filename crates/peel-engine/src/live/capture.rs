@@ -340,6 +340,21 @@ impl LiveInput {
         true
     }
     pub fn voice_off(&self, slot: u32, voice: u32, key: u8, channel: u8) -> bool {
+        self.voice_off_with_velocity(slot, voice, key, channel, 0.0)
+    }
+    /// Releases a scoped voice with its original MIDI lift velocity.
+    pub fn voice_off_with_velocity(
+        &self,
+        slot: u32,
+        voice: u32,
+        key: u8,
+        channel: u8,
+        velocity: f32,
+    ) -> bool {
+        if !velocity.is_finite() {
+            return false;
+        }
+        let velocity = velocity.clamp(0.0, 1.0);
         let shared = &self.inner.shared;
         let t = shared.now_ns();
         let mut tx = self.lock();
@@ -349,7 +364,11 @@ impl LiveInput {
             LiveEvent {
                 t_ns: t,
                 slot,
-                kind: LiveKind::VoiceOff { key, voice },
+                kind: LiveKind::VoiceOff {
+                    key,
+                    voice,
+                    velocity,
+                },
             },
             true,
         ) {
@@ -361,12 +380,12 @@ impl LiveInput {
             slot,
             voice,
             Some(channel),
-            RecordedPerformanceKind::NoteOff { key, velocity: 0.0 },
+            RecordedPerformanceKind::NoteOff { key, velocity },
         );
         let note = RecordedNote {
             slot,
             key,
-            velocity: 0.0,
+            velocity,
             on: false,
             beat: shared.telemetry.beat(),
             playing: shared.telemetry.playing.load(Ordering::Relaxed),
