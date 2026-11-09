@@ -71,6 +71,10 @@ pub struct PlaylistView {
     pub selection: HashSet<Id>,
     /// The tempo strip under the ruler is open.
     pub show_tempo: bool,
+    /// Frames left in which to fit the whole song into view (set for a
+    /// newly opened project, while the window settles; cleared by any
+    /// scroll or zoom).
+    pub fit: u8,
 }
 
 pub struct Workspace {
@@ -140,6 +144,7 @@ impl Default for Workspace {
                 tool: Tool::Draw,
                 selection: HashSet::new(),
                 show_tempo: false,
+                fit: 8,
             },
             mixer_scroll: 0.0,
             rack_scroll: 0.0,

@@ -9,7 +9,7 @@ use peel_ui::Id as W;
 use peel_ui::{Align, Button, Color, CursorIcon, Key, MenuItem, NamedKey, Rect, Ui, icons, vec2};
 
 use crate::studio::current_pattern;
-use crate::util::{col, format_length, ink_on, is_black_key, note_name};
+use crate::util::{SCROLLBAR, col, format_length, ink_on, is_black_key, note_name};
 use crate::workspace::{Tool, Workspace};
 
 const KEYS_W: f32 = 58.0;
@@ -121,6 +121,10 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
     area.cut_bottom(8.0);
     let vel_r = area.cut_bottom(VEL_H);
     area.cut_bottom(4.0);
+    let hbar_row = area.cut_bottom(SCROLLBAR);
+    area.cut_bottom(4.0);
+    let vbar_col = area.cut_right(SCROLLBAR);
+    area.cut_right(4.0);
     let mut top = area.cut_top(RULER_H);
     let keys_r = area.cut_left(KEYS_W);
     top.cut_left(KEYS_W);
@@ -184,6 +188,37 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
         .scroll_beats
         .clamp(0.0, (len_beats + 8.0 - canvas.w / ws.roll.zoom_x).max(0.0));
     ws.roll.top_key = ws.roll.top_key.clamp(canvas.h / ws.roll.row_h, 128.0);
+    let view_beats = canvas.w / ws.roll.zoom_x;
+    let mut scroll = ws.roll.scroll_beats;
+    ui.scrollbar(
+        W::new("roll-hbar"),
+        Rect {
+            x: canvas.x,
+            w: canvas.w,
+            ..hbar_row
+        },
+        true,
+        &mut scroll,
+        view_beats,
+        (len_beats + 8.0).max(view_beats),
+    );
+    ws.roll.scroll_beats = scroll;
+    // Keys run top to bottom from 128, in pixels.
+    let mut key_px = (128.0 - ws.roll.top_key) * ws.roll.row_h;
+    if ui.scrollbar(
+        W::new("roll-vbar"),
+        Rect {
+            y: canvas.y,
+            h: canvas.h,
+            ..vbar_col
+        },
+        false,
+        &mut key_px,
+        canvas.h,
+        128.0 * ws.roll.row_h,
+    ) {
+        ws.roll.top_key = 128.0 - key_px / ws.roll.row_h;
+    }
     let v = View {
         canvas,
         zoom_x: ws.roll.zoom_x,

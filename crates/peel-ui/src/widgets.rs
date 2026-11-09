@@ -1226,6 +1226,74 @@ impl Ui {
         }
     }
 
+    /// A standalone scrollbar for views that manage their own scrolling
+    /// (timelines). `offset`, `view` and `content` share one unit (beats,
+    /// pixels, rows). Drag the thumb, or press the track to jump there and
+    /// keep dragging. Returns true when the offset changed.
+    pub fn scrollbar(
+        &mut self,
+        id: Id,
+        track: Rect,
+        horizontal: bool,
+        offset: &mut f32,
+        view: f32,
+        content: f32,
+    ) -> bool {
+        let t = self.theme.clone();
+        let len = if horizontal { track.w } else { track.h };
+        let max = (content - view).max(0.0);
+        self.scene
+            .rect(track, track.h.min(track.w) * 0.5, t.panel_alt);
+        if max <= 0.0 || len <= 0.0 {
+            return false;
+        }
+        let thumb_len = (len * view / content).clamp(28.0_f32.min(len), len);
+        let travel = (len - thumb_len).max(1.0);
+        let at = |o: f32| travel * (o / max).clamp(0.0, 1.0);
+        let thumb = |o: f32| {
+            if horizontal {
+                Rect {
+                    x: track.x + at(o),
+                    w: thumb_len,
+                    ..track
+                }
+            } else {
+                Rect {
+                    y: track.y + at(o),
+                    h: thumb_len,
+                    ..track
+                }
+            }
+        };
+        let before = *offset;
+        let resp = self.interact(id, track.expand(2.0));
+        if resp.pressed
+            && let Some(p) = self.pointer()
+            && !thumb(*offset).contains(p)
+        {
+            // Jump so the thumb centres under the pointer.
+            let along = if horizontal {
+                p.x - track.x
+            } else {
+                p.y - track.y
+            };
+            *offset = ((along - thumb_len * 0.5) / travel * max).clamp(0.0, max);
+        }
+        if resp.dragging {
+            let d = if horizontal {
+                resp.drag_delta.x
+            } else {
+                resp.drag_delta.y
+            };
+            *offset = (*offset + d * max / travel).clamp(0.0, max);
+        }
+        let hot = self.animate_bool(id.with("hot"), resp.hovered || resp.active);
+        let r = thumb(*offset);
+        self.scene
+            .rect(r, r.h.min(r.w) * 0.5, t.text_faint.alpha(0.35 + hot * 0.4));
+        (*offset - before).abs() > f32::EPSILON
+    }
+
     /// Scroll requests from assistive technology: by a line or a page, or to
     /// an offset.
     fn take_scroll_requests(&mut self, id: Id, view: Rect, offset: &mut Vec2) {

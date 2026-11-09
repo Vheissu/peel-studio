@@ -10,7 +10,7 @@ use peel_ui::{Align, Color, CursorIcon, MenuItem, Rect, Ui, icons, vec2};
 
 use crate::browser::BrowserItem;
 use crate::studio::current_pattern;
-use crate::util::{col, format_length, ink_on};
+use crate::util::{SCROLLBAR, col, format_length, ink_on};
 use crate::workspace::{DockTab, Focus, Tool, Workspace};
 
 const HEAD_W: f32 = 150.0;
@@ -100,7 +100,11 @@ pub fn draw(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) {
     let head = body.cut_top(38.0);
     header(ui, head, s, ws);
     body = body.shrink2(8.0, 0.0);
-    body.cut_bottom(8.0);
+    body.cut_bottom(6.0);
+    let hbar_row = body.cut_bottom(SCROLLBAR);
+    body.cut_bottom(4.0);
+    let vbar_col = body.cut_right(SCROLLBAR);
+    body.cut_right(4.0);
 
     let arr = s.project().arrangement().clone();
     let ruler_h = if arr.markers.is_empty() {
@@ -114,6 +118,19 @@ pub fn draw(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) {
     top.cut_left(HEAD_W);
     let lanes_r = body;
 
+    // A newly opened project starts with the whole song in view.
+    if ws.playlist.fit > 0 {
+        ws.playlist.fit -= 1;
+        let end = arr.end().as_f64() as f32;
+        if end > 0.0 && lanes_r.w > 0.0 {
+            ws.playlist.zoom_x = (lanes_r.w / (end + 4.0)).clamp(1.5, 200.0);
+            ws.playlist.scroll_beats = 0.0;
+            ws.playlist.scroll_y = 0.0;
+            let n = arr.tracks.len().max(1) as f32;
+            ws.playlist.lane_h = (lanes_r.h / n).clamp(30.0, 52.0);
+        }
+    }
+
     // Navigation.
     let nav = Rect {
         x: heads.x,
@@ -125,6 +142,7 @@ pub fn draw(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) {
         let sc = ui.input.scroll;
         let m = ui.input.modifiers;
         if sc != peel_ui::Vec2::ZERO || ui.input.zoom != 0.0 {
+            ws.playlist.fit = 0;
             if m.command() || ui.input.zoom != 0.0 {
                 let p = ui.pointer().unwrap_or_default();
                 let before = (p.x - lanes_r.x) / ws.playlist.zoom_x + ws.playlist.scroll_beats;
@@ -133,7 +151,7 @@ pub fn draw(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) {
                 } else {
                     (1.0f32 + sc.y * 0.004).clamp(0.5, 2.0)
                 };
-                ws.playlist.zoom_x = (ws.playlist.zoom_x * f).clamp(3.0, 200.0);
+                ws.playlist.zoom_x = (ws.playlist.zoom_x * f).clamp(1.5, 200.0);
                 ws.playlist.scroll_beats = before - (p.x - lanes_r.x) / ws.playlist.zoom_x;
             } else if m.alt {
                 ws.playlist.lane_h = (ws.playlist.lane_h * (1.0 + sc.y * 0.004)).clamp(28.0, 140.0);
@@ -156,6 +174,39 @@ pub fn draw(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) {
         .playlist
         .scroll_y
         .clamp(0.0, (content_h - lanes_r.h).max(0.0));
+    // Scrollbars: the timeline extends 16 bars past the last clip.
+    let view_beats = lanes_r.w / ws.playlist.zoom_x;
+    let song_beats = arr.end().as_f64() as f32 + 64.0;
+    let content_beats = song_beats.max(ws.playlist.scroll_beats + view_beats);
+    let hbar = Rect {
+        x: lanes_r.x,
+        w: lanes_r.w,
+        ..hbar_row
+    };
+    let scrolled_h = ui.scrollbar(
+        W::new("pl-hbar"),
+        hbar,
+        true,
+        &mut ws.playlist.scroll_beats,
+        view_beats,
+        content_beats,
+    );
+    let vbar = Rect {
+        y: lanes_r.y,
+        h: lanes_r.h,
+        ..vbar_col
+    };
+    let scrolled_v = ui.scrollbar(
+        W::new("pl-vbar"),
+        vbar,
+        false,
+        &mut ws.playlist.scroll_y,
+        lanes_r.h,
+        content_h,
+    );
+    if scrolled_h || scrolled_v {
+        ws.playlist.fit = 0;
+    }
     let v = View {
         lanes: lanes_r,
         zoom_x: ws.playlist.zoom_x,

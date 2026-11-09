@@ -4,6 +4,9 @@ use peel_document::{Color as DocColor, Time, TimeSignature};
 use peel_ui::Color;
 
 /// Names for the twelve palette colors, in palette order.
+/// Thickness of the timeline scrollbars.
+pub const SCROLLBAR: f32 = 8.0;
+
 pub const COLOR_NAMES: [&str; 12] = [
     "Tomato", "Amber", "Mustard", "Olive", "Jade", "Teal", "Blue", "Lavender", "Rose", "Salmon",
     "Beige", "Steel",

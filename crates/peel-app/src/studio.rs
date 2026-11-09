@@ -68,8 +68,20 @@ impl Studio {
             last_autosave: std::time::Instant::now(),
             autosaved_revision: revision,
         };
+        studio.open_view();
         studio.apply_debug_env();
         studio
+    }
+
+    /// View defaults for a newly opened project: an arranged song opens in
+    /// Song mode, with the tempo strip shown when the tempo changes.
+    fn open_view(&mut self) {
+        let p = self.session.project();
+        let arranged = !p.arrangement().clips.is_empty();
+        self.ws.playlist.show_tempo = p.tempo.len() > 1;
+        if arranged {
+            self.session.set_mode(peel_session::PlayMode::Song);
+        }
     }
 
     fn reset_workspace(&mut self) {
@@ -87,6 +99,7 @@ impl Studio {
             .or(self.session.project().channels.first())
             .map(|c| c.id);
         self.ws.focus = self.ws.selected_channel.map(Focus::Channel);
+        self.open_view();
         self.autosaved_revision = self.session.doc.revision();
     }
 
@@ -424,7 +437,7 @@ impl Studio {
         if input.take_command("n", false) {
             self.session
                 .replace_project(peel_session::template::beat_and_melody());
-            self.ws = Workspace::default();
+            self.reset_workspace();
         }
         if input.take_command("e", false) {
             self.export();
