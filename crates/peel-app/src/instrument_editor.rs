@@ -30,6 +30,11 @@ pub struct InstState {
     pub sustain: bool,
     /// Key under a pressed mouse button.
     pub mouse_key: Option<u8>,
+    /// Instrument channel the mouse note went to, so its release reaches
+    /// the same instrument after the target changes.
+    pub mouse_channel: Option<Id>,
+    /// MIDI channel the Sustain switch pressed on, for its release.
+    sustain_channel: u8,
     /// Parameter picked in the controller mapper.
     pub pick: Option<String>,
     /// Pitch and Pressure held by the mouse.
@@ -45,6 +50,8 @@ impl Default for InstState {
             velocity: 0.8,
             sustain: false,
             mouse_key: None,
+            mouse_channel: None,
+            sustain_channel: 0,
             pick: None,
             expr: Default::default(),
             chain_scroll: 0.0,
@@ -59,27 +66,40 @@ impl InstState {
     }
 }
 
-/// MIDI channel used for notes played in the editor: the filter's channel,
-/// or channel 1 when listening to all.
-pub fn play_channel(s: &Session) -> u8 {
-    s.midi_channel_filter().unwrap_or(0)
+/// MIDI channel the Sustain switch presses on: the MPE zone's manager
+/// (channel 1 for a lower zone, 16 for an upper one), otherwise the channel
+/// filter, or channel 1 when listening to all.
+pub fn sustain_channel(s: &Session) -> u8 {
+    match s.mpe_config().mode {
+        MpeMode::Lower => 0,
+        MpeMode::Upper => 15,
+        MpeMode::Off => s.midi_channel_filter().unwrap_or(0),
+    }
+}
+
+/// Plays or ends a mouse note on an instrument channel. It goes through the
+/// session's own note path (the one the computer keyboard uses), so it is
+/// heard and recorded whatever MIDI setup is active, and never borrows an
+/// MPE member channel a controller may be using for the same key.
+fn mouse_note(s: &mut Session, channel: Id, key: u8, velocity: f32, on: bool) {
+    s.live_note(channel, key, velocity, on);
+}
+
+fn release_mouse_note(s: &mut Session, ws: &mut Workspace) {
+    let channel = ws.inst.mouse_channel.take().or(ws.inst.target);
+    if let (Some(k), Some(c)) = (ws.inst.mouse_key.take(), channel) {
+        mouse_note(s, c, k, 0.0, false);
+    }
 }
 
 /// Ends every note, the sustain switch and any held bend or pressure.
 pub fn release_all(s: &mut Session, ws: &mut Workspace) {
     crate::expression::release(s, &mut ws.inst.expr);
-    let ch = play_channel(s);
-    if let Some(k) = ws.inst.mouse_key.take() {
-        s.handle_midi_event(MidiEvent::NoteOff {
-            channel: ch,
-            key: k,
-            velocity: 0,
-        });
-    }
+    release_mouse_note(s, ws);
     if ws.inst.sustain {
         ws.inst.sustain = false;
         s.handle_midi_event(MidiEvent::Sustain {
-            channel: ch,
+            channel: ws.inst.sustain_channel,
             down: false,
         });
     }
@@ -230,16 +250,6 @@ pub fn draw(ui: &mut Ui, area: Rect, s: &mut Session, ws: &mut Workspace, prefs:
     }
     if ui.input.focus_lost {
         release_all(s, ws);
-    }
-}
-
-fn release_mouse_note(s: &mut Session, ws: &mut Workspace) {
-    if let Some(k) = ws.inst.mouse_key.take() {
-        s.handle_midi_event(MidiEvent::NoteOff {
-            channel: play_channel(s),
-            key: k,
-            velocity: 0,
-        });
     }
 }
 
@@ -443,26 +453,20 @@ fn piano(ui: &mut Ui, r: Rect, ch: &peel_document::Channel, s: &mut Session, ws:
     let hover = ui.pointer().and_then(|p| key_at(&keys, p));
     // Mouse: press plays, dragging across keys glides, release stops.
     let down = ui.input.down[0];
-    let ch_midi = play_channel(s);
-    let vel = (ws.inst.velocity * 127.0).round().clamp(1.0, 127.0) as u8;
+    // Same velocity steps as a MIDI keyboard.
+    let vel = (ws.inst.velocity * 127.0).round().clamp(1.0, 127.0) / 127.0;
     if resp.pressed {
         if let Some(k) = hover {
             ws.inst.mouse_key = Some(k);
-            s.handle_midi_event(MidiEvent::NoteOn {
-                channel: ch_midi,
-                key: k,
-                velocity: vel,
-            });
+            ws.inst.mouse_channel = Some(ch.id);
+            mouse_note(s, ch.id, k, vel, true);
         }
     } else if ui.is_active(id) && down && hover != ws.inst.mouse_key {
         release_mouse_note(s, ws);
         if let Some(k) = hover {
             ws.inst.mouse_key = Some(k);
-            s.handle_midi_event(MidiEvent::NoteOn {
-                channel: ch_midi,
-                key: k,
-                velocity: vel,
-            });
+            ws.inst.mouse_channel = Some(ch.id);
+            mouse_note(s, ch.id, k, vel, true);
         }
     }
     if ws.inst.mouse_key.is_some() && !down {
@@ -780,8 +784,11 @@ fn rail_content(
         t.focus,
     ) {
         ws.inst.sustain = !ws.inst.sustain;
+        if ws.inst.sustain {
+            ws.inst.sustain_channel = sustain_channel(s);
+        }
         s.handle_midi_event(MidiEvent::Sustain {
-            channel: play_channel(s),
+            channel: ws.inst.sustain_channel,
             down: ws.inst.sustain,
         });
     }

@@ -661,7 +661,11 @@ fn choosing_off_after_a_controller_turned_the_zone_off_stops_listening() {
     assert_eq!(h.session().mpe_config().mode, MpeMode::Off);
     pick(&mut h, "inst-mpe-mode", 0);
     rpn_zone(&mut h, 7);
-    assert_eq!(h.session().mpe_config().mode, MpeMode::Off, "zone came back after Off");
+    assert_eq!(
+        h.session().mpe_config().mode,
+        MpeMode::Off,
+        "zone came back after Off"
+    );
     assert_eq!(h.studio.prefs.mpe.mode, MpeMode::Off);
 
     // A saved Off preference does the same at project reset.
@@ -671,4 +675,173 @@ fn choosing_off_after_a_controller_turned_the_zone_off_stops_listening() {
     h.studio.apply_io_prefs();
     rpn_zone(&mut h, 7);
     assert_eq!(h.session().mpe_config().mode, MpeMode::Off);
+}
+
+/// Opens the Piano's editor, arms the pattern recorder and starts playing.
+/// Returns (pattern, channel, notes already on the channel).
+fn start_take(h: &mut H, mpe: MpeMode) -> (Id, Id, Vec<Id>) {
+    h.studio
+        .session
+        .configure_mpe(MpeConfig {
+            mode: mpe,
+            ..MpeConfig::default()
+        })
+        .unwrap();
+    open_instrument(h);
+    let ch = h.studio.ws.inst.target.unwrap();
+    let pid = h.session().selected_pattern();
+    let before = h
+        .session()
+        .project()
+        .pattern(pid)
+        .unwrap()
+        .notes_for(ch)
+        .map(|n| n.id)
+        .collect();
+    h.studio
+        .session
+        .set_mode(peel_session::PlayMode::Pattern(pid));
+    h.studio.recorder.armed = true;
+    h.studio.session.play();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while h.session().position() <= 0.02 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "transport never started"
+        );
+        wait(h, 2);
+    }
+    (pid, ch, before)
+}
+
+/// Real time passes (the silent engine runs on the clock) while frames run.
+fn wait(h: &mut H, ms: u64) {
+    std::thread::sleep(std::time::Duration::from_millis(ms));
+    h.frame();
+}
+
+/// Stops the take and returns the notes it added.
+fn finish_take(h: &mut H, pid: Id, ch: Id, before: &[Id]) -> Vec<Note> {
+    h.studio.session.stop();
+    h.frames(3);
+    h.studio.recorder.armed = false;
+    h.frames(2);
+    let mut notes: Vec<Note> = h
+        .session()
+        .project()
+        .pattern(pid)
+        .unwrap()
+        .notes_for(ch)
+        .filter(|n| !before.contains(&n.id))
+        .copied()
+        .collect();
+    notes.sort_by(|a, b| a.length.cmp(&b.length));
+    h.valid();
+    notes
+}
+
+fn piano_key(h: &H) -> crate::instrument_editor::PianoKey {
+    let r = h.rect(W::new("inst-piano"));
+    let base = ((h.studio.ws.octave + 1) * 12) as u8;
+    crate::instrument_editor::piano_layout(r, base, if r.w >= 900.0 { 4 } else { 3 })
+        .into_iter()
+        .find(|k| !k.black)
+        .unwrap()
+}
+
+fn mouse_down(h: &mut H, k: &crate::instrument_editor::PianoKey) {
+    let p = vec2(k.rect.center().x, k.rect.bottom() - 10.0);
+    h.move_to(p);
+    h.move_to(p);
+    h.press(0);
+}
+
+#[test]
+fn the_mouse_piano_plays_and_records_in_either_mpe_zone() {
+    for mode in [MpeMode::Off, MpeMode::Lower, MpeMode::Upper] {
+        let mut h = H::new();
+        let (pid, ch, before) = start_take(&mut h, mode);
+        let k = piano_key(&h);
+        mouse_down(&mut h, &k);
+        assert_eq!(h.studio.ws.inst.mouse_key, Some(k.key));
+        wait(&mut h, 30);
+        h.release(0);
+        wait(&mut h, 10);
+        let notes = finish_take(&mut h, pid, ch, &before);
+        assert_eq!(notes.len(), 1, "{mode:?}: the mouse note was not heard");
+        assert_eq!(notes[0].key, k.key);
+    }
+}
+
+#[test]
+fn a_mouse_note_and_an_mpe_member_note_on_the_same_key_stay_separate() {
+    use peel_session::MidiEvent::{NoteOff, NoteOn};
+    let mut h = H::new();
+    let (pid, ch, before) = start_take(&mut h, MpeMode::Lower);
+    let k = piano_key(&h);
+    // A controller holds the key on member channel 2 ...
+    h.studio.session.handle_midi_event(NoteOn {
+        channel: 1,
+        key: k.key,
+        velocity: 100,
+    });
+    wait(&mut h, 5);
+    // ... while the mouse plays and releases the same key.
+    mouse_down(&mut h, &k);
+    wait(&mut h, 30);
+    h.release(0);
+    // The controller's note keeps sounding well past the mouse release.
+    for _ in 0..10 {
+        wait(&mut h, 20);
+    }
+    h.studio.session.handle_midi_event(NoteOff {
+        channel: 1,
+        key: k.key,
+        velocity: 0,
+    });
+    wait(&mut h, 10);
+    let notes = finish_take(&mut h, pid, ch, &before);
+    assert_eq!(notes.len(), 2, "{notes:?}");
+    assert!(notes.iter().all(|n| n.key == k.key));
+    // The mouse release ended only the mouse note.
+    assert!(
+        notes[1].length.as_f64() > notes[0].length.as_f64() + 0.25,
+        "{:?} vs {:?}",
+        notes[1].length,
+        notes[0].length
+    );
+}
+
+#[test]
+fn the_sustain_switch_holds_member_notes_in_an_upper_zone() {
+    use peel_session::MidiEvent::{NoteOff, NoteOn};
+    let mut h = H::new();
+    let (pid, ch, before) = start_take(&mut h, MpeMode::Upper);
+    assert_eq!(crate::instrument_editor::sustain_channel(h.session()), 15);
+    h.click(W::new("inst-sustain"));
+    assert!(h.studio.ws.inst.sustain);
+    // Member channel 15 (index 14) of the upper zone.
+    h.studio.session.handle_midi_event(NoteOn {
+        channel: 14,
+        key: 64,
+        velocity: 100,
+    });
+    wait(&mut h, 20);
+    h.studio.session.handle_midi_event(NoteOff {
+        channel: 14,
+        key: 64,
+        velocity: 0,
+    });
+    // Held by the pedal for a while, then the switch lets go.
+    for _ in 0..12 {
+        wait(&mut h, 20);
+    }
+    h.click(W::new("inst-sustain"));
+    assert!(!h.studio.ws.inst.sustain);
+    wait(&mut h, 10);
+    let notes = finish_take(&mut h, pid, ch, &before);
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    // 20 ms of key plus ~240 ms of pedal at 120 BPM is about half a beat;
+    // without the pedal it would be about 0.04 beats.
+    assert!(notes[0].length.as_f64() > 0.3, "{:?}", notes[0].length);
 }
