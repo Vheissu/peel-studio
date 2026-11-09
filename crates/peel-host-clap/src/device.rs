@@ -38,14 +38,14 @@ const RELEASE_RESERVE: usize = MAX_TRACKED_NOTES + 128;
 /// Notes remembered for `AllNotesOff`. More than this still play; only the
 /// explicit per-note release on a panic is lost, and the wildcard release
 /// still covers them.
-const MAX_TRACKED_NOTES: usize = 512;
+pub(super) const MAX_TRACKED_NOTES: usize = 512;
 /// Output below this after a `CLAP_PROCESS_CONTINUE_IF_NOT_QUIET` is quiet
 /// (about -180 dBFS).
 const QUIET_PEAK: f32 = 1e-9;
 
 /// How notes reach the plugin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Dialect {
+pub(super) enum Dialect {
     /// CLAP note events.
     Clap,
     /// MIDI 1.0 bytes, for plugins that accept nothing else.
@@ -96,11 +96,11 @@ impl ActiveNotes {
     }
 }
 
-fn note_id(voice: u32) -> i32 {
+pub(super) fn note_id(voice: u32) -> i32 {
     (voice & 0x7fff_ffff) as i32
 }
 
-fn unit(v: f32) -> f64 {
+pub(super) fn unit(v: f32) -> f64 {
     if v.is_finite() {
         f64::from(v.clamp(0.0, 1.0))
     } else {
@@ -108,15 +108,15 @@ fn unit(v: f32) -> f64 {
     }
 }
 
-fn midi_velocity(v: f32) -> u8 {
+pub(super) fn midi_velocity(v: f32) -> u8 {
     (unit(v) * 127.0).round().clamp(1.0, 127.0) as u8
 }
 
-struct Expression {
-    bend: f32,
+pub(super) struct Expression {
+    pub(super) bend: f32,
     range: f32,
-    pressure: f32,
-    keys: [Option<f32>; 128],
+    pub(super) pressure: f32,
+    pub(super) keys: [Option<f32>; 128],
     midi_configured: bool,
 }
 impl Default for Expression {
@@ -147,7 +147,7 @@ struct PendingExpression {
     keys: u128,
 }
 
-fn midi_bend(semitones: f32, range: f32) -> [u8; 3] {
+pub(super) fn midi_bend(semitones: f32, range: f32) -> [u8; 3] {
     let value = if range > 0.0 {
         (semitones / range).clamp(-1.0, 1.0)
     } else {
@@ -178,13 +178,14 @@ pub struct ClapDevice {
     info: ClapPluginInfo,
     descriptor: &'static DeviceDescriptor,
     kind: DeviceKind,
-    dialect: Dialect,
+    pub(super) dialect: Dialect,
     audio: AudioBuffers,
-    events: EventList,
+    pub(super) events: EventList,
     pending: PendingParams,
     voices: ActiveNotes,
-    expression: Expression,
+    pub(super) expression: Expression,
     pending_expression: PendingExpression,
+    pub(super) scoped: crate::scoped::Scoped,
     transport: clap_event_transport,
     steady_time: i64,
     sample_rate: f32,
@@ -261,6 +262,7 @@ impl ClapDevice {
             voices: ActiveNotes::new(),
             expression: Expression::default(),
             pending_expression: PendingExpression::default(),
+            scoped: crate::scoped::Scoped::default(),
             transport: new_transport(),
             steady_time: 0,
             info: info.clone(),
@@ -361,6 +363,12 @@ impl ClapDevice {
             .min(chunk_len.saturating_sub(1));
         let time = rel as u32;
         let accepted = match e.kind {
+            EventKind::VoiceExpression {
+                voice,
+                pitch,
+                pressure,
+                timbre,
+            } => self.push_scoped(time, voice, pitch, pressure, timbre),
             EventKind::NoteOn {
                 key,
                 velocity,
@@ -370,7 +378,7 @@ impl ClapDevice {
                 let id = note_id(voice);
                 let inherited = usize::from(self.expression.bend != 0.0)
                     + usize::from(self.expression.pressure != 0.0);
-                let midi_extra = if self.dialect == Dialect::Midi {
+                let midi_extra = if self.dialect == Dialect::Midi && !self.scoped.midi_enabled {
                     usize::from(
                         self.expression.keys[usize::from(key)].is_some()
                             || self.pending_expression.keys & (1u128 << key) != 0,
@@ -393,7 +401,7 @@ impl ClapDevice {
                     self.shared.dropped_events.fetch_add(1, Ordering::Relaxed);
                     return;
                 }
-                if self.dialect == Dialect::Midi {
+                if self.dialect == Dialect::Midi && !self.scoped.midi_enabled {
                     if !self.expression.midi_configured || self.pending_expression.range {
                         self.push_expression(
                             time,
@@ -409,6 +417,12 @@ impl ClapDevice {
                         self.pending_expression.keys &= !(1u128 << key);
                     }
                 }
+                if !self
+                    .scoped
+                    .note_on(id, key, self.expression.bend, self.expression.pressure)
+                {
+                    return;
+                }
                 let ok = match self.dialect {
                     Dialect::Clap => self.events.push_note(
                         CLAP_EVENT_NOTE_ON,
@@ -420,6 +434,9 @@ impl ClapDevice {
                         unit(velocity),
                         false,
                     ),
+                    Dialect::Midi if self.scoped.midi_enabled => {
+                        self.midi_member_on(time, id, key, velocity)
+                    }
                     Dialect::Midi => {
                         self.events
                             .push_midi(time, 0, [0x90, key, midi_velocity(velocity)], false)
@@ -460,6 +477,7 @@ impl ClapDevice {
                 let key = key.min(127);
                 let id = note_id(voice);
                 self.voices.remove(id);
+                self.scoped.note_off(id);
                 match self.dialect {
                     Dialect::Clap => self.events.push_note(
                         CLAP_EVENT_NOTE_OFF,
@@ -471,6 +489,9 @@ impl ClapDevice {
                         unit(velocity),
                         true,
                     ),
+                    Dialect::Midi if self.scoped.midi_enabled => {
+                        self.midi_member_off(time, id, key, velocity)
+                    }
                     Dialect::Midi => self.events.push_midi(
                         time,
                         0,
@@ -509,12 +530,17 @@ impl ClapDevice {
                 true
             }
             EventKind::AllSoundOff => {
+                self.expression.clear();
+                self.pending_expression = PendingExpression::default();
                 self.release_all(time, true);
                 self.reset_after_block = true;
                 true
             }
         };
         if !accepted {
+            if let EventKind::NoteOn { voice, .. } = e.kind {
+                self.scoped.note_off(note_id(voice));
+            }
             self.shared.dropped_events.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -642,6 +668,9 @@ impl ClapDevice {
     }
 
     fn emit_expression(&mut self, time: u32, kind: EventKind) -> bool {
+        if self.dialect == Dialect::Midi && self.scoped.midi_enabled {
+            return self.midi_mpe_global(time, kind);
+        }
         let count = match self.dialect {
             Dialect::None => return true,
             Dialect::Clap => match kind {
@@ -663,7 +692,10 @@ impl ClapDevice {
         let configure = self.dialect == Dialect::Midi
             && (!self.expression.midi_configured || self.pending_expression.range)
             && !matches!(kind, EventKind::PitchBendRange { .. });
-        if !self.events.has_room(count + if configure { 7 } else { 0 }) {
+        if !self
+            .events
+            .has_room(count + if configure { 7 } else { 0 } + self.scoped_reapply_count())
+        {
             return false;
         }
         if configure {
@@ -790,6 +822,7 @@ impl ClapDevice {
             },
             Dialect::None => {}
         }
+        self.reapply_scoped(time);
         true
     }
 
@@ -797,6 +830,7 @@ impl ClapDevice {
     /// is the one that covers notes the host is not tracking, so it must not
     /// lose its slot to the per-note releases that follow.
     fn release_all(&mut self, time: u32, choke: bool) {
+        self.release_mpe_members(time, choke);
         let type_ = if choke {
             CLAP_EVENT_NOTE_CHOKE
         } else {
@@ -821,6 +855,12 @@ impl ClapDevice {
             Dialect::None => {}
         }
         self.voices.clear();
+        for entry in &mut self.scoped.entries {
+            entry.held = false;
+        }
+        if choke {
+            self.scoped.reset();
+        }
     }
 
     /// Sends one parameter value outside of `process`. False when the plugin
@@ -972,6 +1012,7 @@ impl Device for ClapDevice {
 
     fn reset(&mut self) {
         self.voices.clear();
+        self.scoped.reset();
         self.replay_expression_after_reset();
         self.events.clear();
         self.sleeping = false;
@@ -1019,6 +1060,7 @@ impl Device for ClapDevice {
         left: &mut [f32],
         right: &mut [f32],
     ) {
+        self.mark_scoped_block(events);
         let frames = left.len().min(right.len());
         if frames == 0 {
             return;
@@ -1048,6 +1090,7 @@ impl Device for ClapDevice {
             let n = (frames - pos).min(self.max_block);
             self.events.clear();
             self.flush_expression();
+            self.flush_scoped();
             if pos == 0 {
                 self.pending
                     .drain_into(&self.shared.table, &mut self.events);
@@ -1105,6 +1148,7 @@ impl Device for ClapDevice {
     fn is_silent(&self) -> bool {
         self.sleeping
             && !self.pending_expression.any()
+            && !self.scoped.entries.iter().any(|e| e.dirty)
             && !self.shared.host.shared.is_raised(F_PROCESS | F_FLUSH)
     }
 }

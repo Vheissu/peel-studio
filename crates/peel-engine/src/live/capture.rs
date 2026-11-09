@@ -38,7 +38,7 @@ impl Tx {
         midi_channel: Option<u8>,
         kind: RecordedPerformanceKind,
     ) {
-        if slot == LIVE_TARGET_NONE && !matches!(kind,RecordedPerformanceKind::Reset) {
+        if slot == LIVE_TARGET_NONE && !matches!(kind, RecordedPerformanceKind::Reset) {
             return;
         }
         let event = RecordedPerformanceEvent {
@@ -157,7 +157,7 @@ impl Tx {
             }
         }
         // Reset is a take boundary, not merely a return of a wheel to centre.
-        self.performance(shared,t,slot,0,None,RecordedPerformanceKind::Reset);
+        self.performance(shared, t, slot, 0, None, RecordedPerformanceKind::Reset);
         self.capture.bend = 0.0;
         self.capture.pressure = 0.0;
         self.capture.keys.fill(0.0);
@@ -254,6 +254,7 @@ impl LiveInput {
         timbre: f32,
     ) -> bool {
         if slot == LIVE_TARGET_NONE
+            || !(crate::LIVE_VOICE_BASE..0x7fff_ff00).contains(&voice)
             || key > 127
             || channel > 15
             || !pitch.is_finite()

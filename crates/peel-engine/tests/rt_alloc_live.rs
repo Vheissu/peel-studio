@@ -100,6 +100,13 @@ fn live_input_never_allocates_on_the_audio_thread() {
         if block % 17 == 0 {
             live.expression(EventKind::ResetExpression);
         }
+        let voice = peel_engine::LIVE_VOICE_BASE + 128 + block;
+        if block % 7 == 0 {
+            live.voice_on(0, voice, 60, 0.8, 1, 12.0, 0.5, 0.8);
+            live.voice_expression(0, voice, 1, 0.0, 0.0, 0.5);
+        } else if block % 7 == 1 {
+            live.voice_off(0, voice - 1, 60, 1);
+        }
         // The engine may be asked for callbacks of any size.
         let n = [256usize, 64, 100, 256][block as usize % 4];
         assert_no_alloc(|| engine.process(&mut left[..n], &mut right[..n]));

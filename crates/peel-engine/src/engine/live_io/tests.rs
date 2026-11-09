@@ -273,3 +273,67 @@ fn expression_keeps_sample_offsets_and_reset_preserves_notes() {
             .any(|&(_, _, kind)| matches!(kind, EventKind::NoteOff { .. }))
     );
 }
+
+#[test]
+fn scoped_same_pitch_voices_are_independent_and_deferred_neutral_is_retried() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut e = engine(&seen);
+    let live = e.take_live_input().unwrap();
+    let a = crate::LIVE_VOICE_BASE + 200;
+    let b = a + 1;
+    assert!(live.voice_on(0, a, 60, 0.8, 1, 7.0, 0.8, 0.9));
+    assert!(live.voice_on(0, b, 60, 0.7, 2, -3.0, 0.2, 0.1));
+    let (mut l, mut r) = ([0.0; 256], [0.0; 256]);
+    e.render(&mut l, &mut r);
+    assert!(e.active.as_mut_slice().iter().any(|n| n.voice == a));
+    assert!(e.active.as_mut_slice().iter().any(|n| n.voice == b));
+    assert!(live.voice_off(0, a, 60, 1));
+    e.render(&mut l, &mut r);
+    assert!(!e.active.as_mut_slice().iter().any(|n| n.voice == a));
+    assert!(e.active.as_mut_slice().iter().any(|n| n.voice == b));
+    seen.lock().unwrap().clear();
+    while e
+        .stage
+        .push_on(0, 0, EventKind::Param { id: 1, value: 0.0 })
+    {}
+    e.apply_live(crate::live::LiveAction {
+        offset: 0,
+        op: crate::live::LiveOp::Expression {
+            slot: 0,
+            kind: EventKind::VoiceExpression {
+                voice: b,
+                pitch: 0.0,
+                pressure: 0.0,
+                timbre: 0.5,
+            },
+        },
+    });
+    assert_eq!(e.live.deferred_expression.len(), 1);
+    e.stage.clear();
+    e.render(&mut l, &mut r);
+    assert!(e.live.deferred_expression.is_empty());
+    assert!(seen.lock().unwrap().iter().any(|(_,_,k)|matches!(k,EventKind::VoiceExpression{voice,pitch:0.0,pressure:0.0,..}if *voice==b)));
+}
+#[test]
+fn a_saturated_live_release_queue_has_a_bounded_emergency_reset_fence() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut e = engine(&seen);
+    let live = e.take_live_input().unwrap();
+    let (mut l, mut r) = ([0.0; 256], [0.0; 256]);
+    assert!(live.voice_on(0, crate::LIVE_VOICE_BASE + 500, 60, 0.8, 1, 0.0, 0.0, 0.5));
+    e.render(&mut l, &mut r);
+    // Fill the ordinary queue, then its critical reserve. No callback has drained it.
+    live.target().set(Some(0));
+    while live.expression(EventKind::ChannelPressure { value: 0.5 }) {}
+    for key in 0..128 {
+        live.voice_off(0, crate::LIVE_VOICE_BASE + 500, key, 1);
+    }
+    assert!(live.all_notes_off(0));
+    e.render(&mut l, &mut r);
+    assert!(e.active.as_mut_slice().iter().all(|n| !n.live));
+    // Old queued note-ons and pressure cannot resurrect a voice next chunk.
+    for _ in 0..4 {
+        e.render(&mut l, &mut r);
+    }
+    assert!(e.active.as_mut_slice().iter().all(|n| !n.live));
+}

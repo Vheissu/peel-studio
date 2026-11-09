@@ -12,6 +12,17 @@ use peel_dsp::EventKind;
 impl Engine {
     /// Stages the live events that belong in a chunk of `frames`.
     pub(super) fn drain_live(&mut self, frames: usize) {
+        // Keep deferred order: a reset must not leapfrog a newer wheel value.
+        for (slot, kind) in &mut self.live.deferred_expression {
+            if !self.slots.get(*slot as usize).is_some_and(Option::is_some)
+                || self.stage.push_on(*slot as usize, 0, *kind)
+            {
+                *slot = LIVE_TARGET_NONE;
+            }
+        }
+        self.live
+            .deferred_expression
+            .retain(|(slot, _)| *slot != LIVE_TARGET_NONE);
         // Taking the scratch out leaves an empty (non-allocating) Vec behind
         // so the router and the engine can borrow `self` in turn.
         let mut actions = std::mem::take(&mut self.live.actions);
@@ -51,7 +62,11 @@ impl Engine {
             LiveOp::AllOff { slot } => self.release_live_slot(slot, offset),
             LiveOp::Expression { slot, kind } => {
                 if self.slots.get(slot as usize).is_some_and(Option::is_some) {
-                    self.stage.push_on(slot as usize, offset, kind);
+                    if self.stage.push_on(slot as usize, offset, kind) {
+                        self.live.clear_deferred_expression(slot, kind);
+                    } else {
+                        self.live.defer_expression(slot, kind);
+                    }
                 }
             }
         }
@@ -119,9 +134,14 @@ impl Engine {
     /// [`LIVE_TARGET_NONE`]) `offset` frames into the block.
     fn release_live_slot(&mut self, slot: u32, offset: u32) {
         for (index, device) in self.slots.iter().enumerate() {
-            if device.is_some() && (slot == LIVE_TARGET_NONE || index == slot as usize) {
-                self.stage
-                    .push_on(index, offset, EventKind::ResetExpression);
+            if device.is_some()
+                && (slot == LIVE_TARGET_NONE || index == slot as usize)
+                && !self
+                    .stage
+                    .push_on(index, offset, EventKind::ResetExpression)
+            {
+                self.live
+                    .defer_expression(index as u32, EventKind::ResetExpression);
             }
         }
         let mut i = 0;

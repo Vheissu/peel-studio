@@ -33,7 +33,11 @@ pub use peel_midi_io::{MidiEvent, MidiPortInfo, PortSelection};
 
 mod controls;
 mod expression;
+mod mpe;
 pub use controls::{MidiControlTarget, MidiLearnStatus, MidiMapping};
+pub use mpe::{MpeConfig, MpeMode};
+use peel_engine::RecordedPerformanceEvent;
+pub use peel_engine::RecordedPerformanceKind;
 
 use crate::{SampleLoader, Session};
 
@@ -66,6 +70,19 @@ pub struct RecordedMidi {
     pub time_ns: u64,
 }
 
+/// One accepted note or expression change, sharing an ordered recording feed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RecordedPerformance {
+    pub channel: Option<Id>,
+    pub voice: u32,
+    pub midi_channel: Option<u8>,
+    pub beat: f64,
+    pub playing: bool,
+    pub sustain: bool,
+    pub time_ns: u64,
+    pub kind: RecordedPerformanceKind,
+}
+
 /// Hands MIDI events from the port threads to the current engine.
 ///
 /// The engine behind it changes when audio restarts, so the live input is
@@ -77,6 +94,7 @@ pub(crate) struct MidiBridge {
     hardware_enabled: AtomicBool,
     messages: AtomicU64,
     expression: expression::ExpressionState,
+    mpe: Mutex<mpe::MpeState>,
 }
 
 impl MidiBridge {
@@ -84,15 +102,30 @@ impl MidiBridge {
         let mut guard = self.live.lock().unwrap_or_else(PoisonError::into_inner);
         *guard = live;
         self.expression.clear();
+        self.mpe
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .reset();
     }
 
     pub(crate) fn release_all(&self) {
         let guard = self.live.lock().unwrap_or_else(PoisonError::into_inner);
         self.expression.clear();
+        self.mpe
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .reset();
         if let Some(live) = guard.as_ref() {
             live.sustain(false);
             live.all_notes_off(peel_engine::live::LIVE_TARGET_NONE);
         }
+    }
+
+    pub(crate) fn note(&self, slot: u32, key: u8, velocity: f32, on: bool) -> bool {
+        let guard = self.live.lock().unwrap_or_else(PoisonError::into_inner);
+        guard
+            .as_ref()
+            .is_some_and(|live| live.note(slot, key, velocity, on))
     }
 
     fn handle_hardware(&self, event: &MidiEvent) {
@@ -109,6 +142,37 @@ impl MidiBridge {
             return;
         }
         self.messages.fetch_add(1, Ordering::Relaxed);
+        {
+            let guard = self.live.lock().unwrap_or_else(PoisonError::into_inner);
+            if !(hardware && !self.hardware_enabled.load(Ordering::Acquire))
+                && let Some(live) = guard.as_ref()
+            {
+                let mut mpe = self.mpe.lock().unwrap_or_else(PoisonError::into_inner);
+                let manager =
+                    mpe.config().mode != MpeMode::Off && event.channel() == mpe.config().manager();
+                if mpe.handle(live, *event) {
+                    if manager {
+                        self.expression.readback_controller(*event);
+                        match *event {
+                            MidiEvent::PitchBend { value, .. } => {
+                                let value =
+                                    f32::from(value) / if value < 0 { 8192.0 } else { 8191.0 };
+                                live.expression(peel_dsp::EventKind::PitchBend {
+                                    semitones: value * mpe.config().manager_bend_range,
+                                });
+                            }
+                            MidiEvent::ChannelPressure { value, .. } => {
+                                live.expression(peel_dsp::EventKind::ChannelPressure {
+                                    value: f32::from(value.min(127)) / 127.0,
+                                });
+                            }
+                            _ => {}
+                        }
+                    }
+                    return;
+                }
+            }
+        }
         // Controller traffic never takes the live-input mutex. A flood can
         // only replace one value per channel/CC in the fixed mailbox.
         match *event {
@@ -141,15 +205,33 @@ impl MidiBridge {
             MidiEvent::NoteOn {
                 key, velocity: 0, ..
             } => {
-                live.note_to_target(key, 0.0, false);
+                live.note_channel(
+                    live.target().get().unwrap_or(peel_engine::LIVE_TARGET_NONE),
+                    key,
+                    0.0,
+                    false,
+                    Some(event.channel()),
+                );
             }
             MidiEvent::NoteOn { key, velocity, .. } => {
-                if live.note_to_target(key, f32::from(velocity) / 127.0, true) {
+                if live.note_channel(
+                    live.target().get().unwrap_or(peel_engine::LIVE_TARGET_NONE),
+                    key,
+                    f32::from(velocity) / 127.0,
+                    true,
+                    Some(event.channel()),
+                ) {
                     self.clear_key_pressure(key);
                 }
             }
             MidiEvent::NoteOff { key, .. } => {
-                live.note_to_target(key, 0.0, false);
+                live.note_channel(
+                    live.target().get().unwrap_or(peel_engine::LIVE_TARGET_NONE),
+                    key,
+                    0.0,
+                    false,
+                    Some(event.channel()),
+                );
             }
             MidiEvent::Sustain { down, .. } => {
                 live.sustain(down);
@@ -220,6 +302,7 @@ pub(crate) struct IoState {
     last_scan: Option<Instant>,
     known_inputs: Vec<MidiPortInfo>,
     recorded: Vec<RecordedNote>,
+    performance: Vec<RecordedPerformanceEvent>,
 }
 
 impl IoState {
@@ -238,6 +321,7 @@ impl IoState {
             last_scan: None,
             known_inputs: Vec::new(),
             recorded: Vec::new(),
+            performance: Vec::new(),
         }
     }
 }
@@ -345,6 +429,8 @@ impl Session {
         self.stop();
         self.engine.collect_garbage();
         self.engine.drain_recorded(&mut self.io.recorded);
+        self.engine
+            .drain_recorded_performance(&mut self.io.performance);
         self.io.bridge.set(None);
         self.engine.stop_audio();
 
@@ -563,7 +649,34 @@ impl Session {
     pub fn poll_midi(&mut self) {
         self.refresh_live_target();
         self.poll_midi_controls();
+        {
+            let guard = self
+                .io
+                .bridge
+                .live
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if let Some(live) = guard.as_ref() {
+                self.io
+                    .bridge
+                    .mpe
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .flush(live);
+            }
+        }
         self.engine.drain_recorded(&mut self.io.recorded);
+        self.engine
+            .drain_recorded_performance(&mut self.io.performance);
+        let excess_performance = self
+            .io
+            .performance
+            .len()
+            .saturating_sub(MAX_PENDING_RECORDED);
+        if excess_performance > 0 {
+            self.io.performance.drain(..excess_performance);
+            self.engine.live_stats().performance_dropped.fetch_add(excess_performance as u64,Ordering::Relaxed);
+        }
         let excess = self.io.recorded.len().saturating_sub(MAX_PENDING_RECORDED);
         if excess > 0 {
             self.io.recorded.drain(..excess);
@@ -612,11 +725,40 @@ impl Session {
         }
     }
 
+    /// Drains accepted notes and full per-note expression in arrival order.
+    pub fn take_recorded_performance(&mut self) -> Vec<RecordedPerformance> {
+        self.engine
+            .drain_recorded_performance(&mut self.io.performance);
+        self.engine.drain_recorded(&mut self.io.recorded);
+        self.io.recorded.clear();
+        std::mem::take(&mut self.io.performance)
+            .into_iter()
+            .map(|n| RecordedPerformance {
+                channel: self.channel_for_slot(n.slot),
+                voice: n.voice,
+                midi_channel: n.midi_channel,
+                beat: n.beat,
+                playing: n.playing,
+                sustain: n.sustain,
+                time_ns: n.time_ns,
+                kind: n.kind,
+            })
+            .collect()
+    }
+    pub fn recorded_performance_dropped(&self) -> u64 {
+        self.engine
+            .live_stats()
+            .performance_dropped
+            .load(Ordering::Relaxed)
+    }
+
     /// Notes that arrived on the MIDI keyboard since the last call, oldest
     /// first, for recording into a pattern. Also returns notes recorded
     /// before an audio restart.
     pub fn take_recorded_midi(&mut self) -> Vec<RecordedMidi> {
         self.engine.drain_recorded(&mut self.io.recorded);
+        self.engine
+            .drain_recorded_performance(&mut self.io.performance);
         let notes = std::mem::take(&mut self.io.recorded);
         notes
             .into_iter()

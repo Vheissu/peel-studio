@@ -346,3 +346,247 @@ fn implicit_device_reset_replays_desired_expression_for_hardware_readback_consis
         }
     }
 }
+
+#[test]
+fn scoped_expression_addresses_same_key_voices_and_release_tails_independently() {
+    let mut dev = device(fixture::SINE);
+    on(&mut dev, 60, 1001);
+    on(&mut dev, 60, 1002);
+    dev.events.clear();
+    push(
+        &mut dev,
+        17,
+        EventKind::VoiceExpression {
+            voice: 1001,
+            pitch: 7.0,
+            pressure: 0.8,
+            timbre: 0.9,
+        },
+    );
+    push(
+        &mut dev,
+        19,
+        EventKind::VoiceExpression {
+            voice: 1002,
+            pitch: -3.0,
+            pressure: 0.2,
+            timbre: 0.1,
+        },
+    );
+    assert_eq!(dev.events.len(), 6);
+    for (i, id, pitch, pressure, timbre) in
+        [(0, 1001, 7.0, 0.8f32, 0.9f32), (3, 1002, -3.0, 0.2, 0.1)]
+    {
+        for (j, dimension, value) in [
+            (0, CLAP_NOTE_EXPRESSION_TUNING, pitch),
+            (1, CLAP_NOTE_EXPRESSION_PRESSURE, f64::from(pressure)),
+            (
+                2,
+                clap_sys::events::CLAP_NOTE_EXPRESSION_BRIGHTNESS,
+                f64::from(timbre),
+            ),
+        ] {
+            let event = dev.events.expression_at(i + j).unwrap();
+            assert_eq!(
+                (event.note_id, event.key, event.expression_id),
+                (id, 60, dimension)
+            );
+            assert_eq!(event.value, value);
+        }
+    }
+    push(
+        &mut dev,
+        21,
+        EventKind::NoteOff {
+            key: 60,
+            velocity: 0.0,
+            voice: 1001,
+        },
+    );
+    dev.events.clear();
+    push(
+        &mut dev,
+        23,
+        EventKind::VoiceExpression {
+            voice: 1001,
+            pitch: 4.0,
+            pressure: 0.5,
+            timbre: 0.5,
+        },
+    );
+    assert_eq!(dev.events.expression_at(0).unwrap().note_id, 1001);
+    assert_eq!(dev.events.expression_at(0).unwrap().value, 4.0);
+    dev.events.clear();
+    assert!(dev.push_expression(30, EventKind::ResetExpression));
+    assert_eq!(
+        dev.events.len(),
+        8,
+        "global reset re-applies both scoped voices"
+    );
+    assert_eq!(dev.events.expression_at(2).unwrap().value, 4.0);
+    assert_eq!(dev.events.expression_at(5).unwrap().value, -3.0);
+}
+#[test]
+fn scoped_expression_overflow_keeps_desired_state_and_retries_without_using_release_reserve() {
+    let mut dev = device(fixture::SINE);
+    on(&mut dev, 60, 77);
+    dev.events = EventList::with_capacity(16, 8);
+    for _ in 0..8 {
+        assert!(dev.events.push_midi(0, 0, [0xb0, 1, 0], false));
+    }
+    assert!(!dev.push_scoped(17, 77, 12.0, 0.9, 0.1));
+    assert!(dev.scoped.entries.iter().any(|e| e.id == 77 && e.dirty));
+    for _ in 0..8 {
+        assert!(dev.events.push_midi(0, 0, [0x80, 60, 0], true));
+    }
+    assert_eq!(dev.events.len(), 16);
+    process_empty(&mut dev);
+    assert!(!dev.scoped.entries.iter().any(|e| e.dirty));
+    assert_eq!(dev.events.expression_at(0).unwrap().value, 12.0);
+    assert_eq!(
+        dev.events.expression_at(1).unwrap().value,
+        f64::from(0.9f32)
+    );
+    dev.events.clear();
+    for _ in 0..8 {
+        dev.events.push_midi(0, 0, [0xb0, 1, 0], false);
+    }
+    assert!(!dev.push_scoped(20, 77, 0.0, 0.0, 0.5));
+    process_empty(&mut dev);
+    assert_eq!(dev.events.expression_at(0).unwrap().value, 0.0);
+    assert_eq!(dev.events.expression_at(1).unwrap().value, 0.0);
+}
+#[test]
+fn midi_scoped_notes_get_mpe_members_and_scoped_releases() {
+    let mut dev = device(fixture::MIDI_SINE);
+    let events = [
+        DeviceEvent {
+            offset: 0,
+            kind: EventKind::NoteOn {
+                key: 60,
+                velocity: 0.8,
+                voice: 101,
+            },
+        },
+        DeviceEvent {
+            offset: 0,
+            kind: EventKind::VoiceExpression {
+                voice: 101,
+                pitch: 12.0,
+                pressure: 0.8,
+                timbre: 0.9,
+            },
+        },
+        DeviceEvent {
+            offset: 0,
+            kind: EventKind::NoteOn {
+                key: 60,
+                velocity: 0.7,
+                voice: 102,
+            },
+        },
+        DeviceEvent {
+            offset: 0,
+            kind: EventKind::VoiceExpression {
+                voice: 102,
+                pitch: -12.0,
+                pressure: 0.2,
+                timbre: 0.1,
+            },
+        },
+    ];
+    let (mut l, mut r) = ([0.0; fixture::BLOCK], [0.0; fixture::BLOCK]);
+    dev.process(&ProcessContext::new(fixture::SR), &events, &mut l, &mut r);
+    let messages: Vec<_> = (0..dev.events.len())
+        .filter_map(|i| dev.events.midi_at(i).map(|e| e.data))
+        .collect();
+    let ons: Vec<_> = messages.iter().filter(|e| e[0] & 0xf0 == 0x90).collect();
+    assert_eq!(ons.len(), 2);
+    assert_eq!((ons[0][0] & 15, ons[1][0] & 15), (1, 2));
+    assert!(messages.contains(&[0xb0, 100, 6]));
+    assert!(messages.contains(&[0xb0, 6, 15]));
+    for (channel, pitch, pressure, timbre) in [(1u8, 12.0, 0.8f32, 0.9f32), (2, -12.0, 0.2, 0.1)] {
+        let mut wheel = midi_bend(pitch, 96.0);
+        wheel[0] |= channel;
+        assert!(messages.contains(&wheel));
+        assert!(messages.contains(&[0xd0 | channel, (pressure * 127.0).round() as u8, 0]));
+        assert!(messages.contains(&[0xb0 | channel, 74, (timbre * 127.0).round() as u8]));
+    }
+    dev.events.clear();
+    push(
+        &mut dev,
+        10,
+        EventKind::NoteOff {
+            key: 60,
+            velocity: 0.0,
+            voice: 101,
+        },
+    );
+    assert_eq!(dev.events.midi_at(0).unwrap().data, [0x81, 60, 0]);
+    dev.events.clear();
+    push(
+        &mut dev,
+        10,
+        EventKind::VoiceExpression {
+            voice: 102,
+            pitch: 6.0,
+            pressure: 0.5,
+            timbre: 0.7,
+        },
+    );
+    assert_eq!(
+        dev.events.midi_at(0).unwrap().data[0],
+        0xe2,
+        "other note still owns its member"
+    );
+}
+#[test]
+fn midi_mpe_setup_is_atomic_and_note_capacity_is_bounded() {
+    let mut dev = device(fixture::MIDI_SINE);
+    dev.scoped.midi_enabled = true;
+    dev.events = EventList::with_capacity(20, 12);
+    on(&mut dev, 60, 1);
+    assert_eq!(dev.events.len(), 0, "failed setup emits no partial RPN");
+    dev.events = EventList::with_capacity(2048, 640);
+    for i in 0..17 {
+        on(&mut dev, 60, 100 + i);
+    }
+    let ons = (0..dev.events.len())
+        .filter_map(|i| dev.events.midi_at(i))
+        .filter(|e| e.data[0] & 0xf0 == 0x90)
+        .count();
+    assert_eq!(ons, 15);
+    dev.events.clear();
+    dev.release_all(0, true);
+    let ccs: Vec<_> = (0..dev.events.len())
+        .filter_map(|i| dev.events.midi_at(i))
+        .map(|e| e.data)
+        .collect();
+    for ch in 1..=15 {
+        assert!(ccs.contains(&[0xb0 | ch, 120, 0]), "panic channel{ch}");
+    }
+}
+
+#[test]
+fn all_sound_off_clears_global_and_scoped_expression_before_new_notes() {
+    for id in [fixture::SINE, fixture::MIDI_SINE] {
+        let mut dev = device(id);
+        on(&mut dev, 60, 51);
+        assert!(dev.push_expression(0, EventKind::PitchBend { semitones: 7.0 }));
+        assert!(dev.push_expression(0, EventKind::ChannelPressure { value: 0.8 }));
+        assert!(dev.push_scoped(0, 51, 12.0, 0.9, 0.7));
+        push(&mut dev, 0, EventKind::AllSoundOff);
+        assert_eq!(dev.expression.bend, 0.0);
+        assert_eq!(dev.expression.pressure, 0.0);
+        assert!(dev.scoped.entries.is_empty());
+        process_empty(&mut dev);
+        dev.events.clear();
+        on(&mut dev, 60, 52);
+        assert!(
+            dev.scoped
+                .entries
+                .iter()
+                .all(|e| e.pitch == 0.0 && e.pressure == 0.0 && e.timbre == 0.5)
+        );
+    }
+}

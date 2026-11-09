@@ -418,3 +418,409 @@ fn expression_accepts_hardware_and_software_with_one_filter_and_readback() {
     assert_eq!(s.pitch_bend_value(), 0.0);
     assert_eq!(s.pitch_bend_range(), 12.5);
 }
+
+fn mpe_session(mode: MpeMode, members: u8) -> Session {
+    let mut s = session();
+    let piano = channel(&s, "Piano");
+    s.set_live_target(Some(piano));
+    s.configure_mpe(MpeConfig {
+        mode,
+        members,
+        ..Default::default()
+    })
+    .unwrap();
+    s.take_recorded_performance();
+    s
+}
+fn mpe_on(s: &mut Session, ch: u8, key: u8) {
+    s.handle_midi_event(MidiEvent::NoteOn {
+        channel: ch,
+        key,
+        velocity: 100,
+    });
+}
+fn mpe_off(s: &mut Session, ch: u8, key: u8) {
+    s.handle_midi_event(MidiEvent::NoteOff {
+        channel: ch,
+        key,
+        velocity: 0,
+    });
+}
+fn mpe_cc(s: &mut Session, ch: u8, cc: u8, value: u8) {
+    s.handle_midi_event(MidiEvent::ControlChange {
+        channel: ch,
+        controller: cc,
+        value,
+    });
+}
+fn mpe_expression(events: &[RecordedPerformance], voice: u32) -> (f32, f32, f32) {
+    events
+        .iter()
+        .rev()
+        .find_map(|e| match e.kind {
+            RecordedPerformanceKind::Expression {
+                pitch,
+                pressure,
+                timbre,
+            } if e.voice == voice => Some((pitch, pressure, timbre)),
+            _ => None,
+        })
+        .expect("expression for voice")
+}
+#[test]
+fn mpe_same_key_on_different_members_keeps_independent_voice_identity() {
+    let mut s = mpe_session(MpeMode::Lower, 4);
+    s.set_midi_channel_filter(Some(12)).unwrap();
+    let before = s.project().clone();
+    mpe_on(&mut s, 1, 60);
+    mpe_on(&mut s, 2, 60);
+    let starts = s.take_recorded_performance();
+    let notes: Vec<_> = starts
+        .iter()
+        .filter(|e| matches!(e.kind, RecordedPerformanceKind::NoteOn { .. }))
+        .collect();
+    assert_eq!(notes.len(), 2);
+    assert_ne!(notes[0].voice, notes[1].voice);
+    let (a, b) = (notes[0].voice, notes[1].voice);
+    assert_eq!(notes[0].midi_channel, Some(1));
+    assert_eq!(notes[1].midi_channel, Some(2));
+    s.handle_midi_event(MidiEvent::PitchBend {
+        channel: 1,
+        value: 8191,
+    });
+    let bent = s.take_recorded_performance();
+    assert_eq!(mpe_expression(&bent, a), (48.0, 0.0, 0.5));
+    assert!(bent.iter().all(|e| e.voice != b));
+    s.handle_midi_event(MidiEvent::ChannelPressure {
+        channel: 2,
+        value: 127,
+    });
+    mpe_cc(&mut s, 2, 74, 127);
+    let pressed = s.take_recorded_performance();
+    assert_eq!(mpe_expression(&pressed, b), (0.0, 1.0, 1.0));
+    assert!(pressed.iter().all(|e| e.voice != a));
+    mpe_off(&mut s, 1, 60);
+    let off = s.take_recorded_performance();
+    assert!(off.iter().any(
+        |e| e.voice == a && matches!(e.kind, RecordedPerformanceKind::NoteOff { key: 60, .. })
+    ));
+    assert!(off.iter().all(|e| e.voice != b));
+    assert_eq!(s.project(), &before);
+}
+#[test]
+fn mpe_manager_and_pre_note_member_state_are_combined_once_and_read_back() {
+    let mut s = mpe_session(MpeMode::Lower, 4);
+    s.handle_midi_event(MidiEvent::PitchBend {
+        channel: 1,
+        value: 8191,
+    });
+    s.handle_midi_event(MidiEvent::PitchBend {
+        channel: 0,
+        value: 8191,
+    });
+    s.handle_midi_event(MidiEvent::ChannelPressure {
+        channel: 1,
+        value: 100,
+    });
+    s.handle_midi_event(MidiEvent::ChannelPressure {
+        channel: 0,
+        value: 63,
+    });
+    mpe_cc(&mut s, 1, 74, 127);
+    mpe_on(&mut s, 1, 60);
+    let events = s.take_recorded_performance();
+    let on = events
+        .iter()
+        .find(|e| matches!(e.kind, RecordedPerformanceKind::NoteOn { .. }))
+        .unwrap();
+    assert_eq!(mpe_expression(&events, on.voice), (50.0, 1.0, 1.0));
+    assert_eq!(s.pitch_bend_value(), 1.0);
+    assert!((s.channel_pressure_value() - 63.0 / 127.0).abs() < 1e-6);
+    assert!(s.pitch_bend(-1.0));
+    assert_eq!(
+        mpe_expression(&s.take_recorded_performance(), on.voice).0,
+        46.0
+    );
+    s.set_pitch_bend_range(12.0).unwrap();
+    assert_eq!(s.mpe_config().manager_bend_range, 12.0);
+    assert_eq!(s.pitch_bend_range(), 12.0);
+    assert_eq!(
+        mpe_expression(&s.take_recorded_performance(), on.voice).0,
+        36.0
+    );
+}
+#[test]
+fn mpe_upper_zone_rpn_sensitivity_and_zone_resize_follow_the_selected_manager() {
+    let mut s = mpe_session(MpeMode::Upper, 3);
+    mpe_on(&mut s, 14, 60);
+    mpe_on(&mut s, 13, 60);
+    mpe_on(&mut s, 1, 60);
+    mpe_on(&mut s, 15, 60);
+    let events = s.take_recorded_performance();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(e.kind, RecordedPerformanceKind::NoteOn { .. }))
+            .count(),
+        2
+    );
+    for (cc, value) in [
+        (101, 0),
+        (100, 0),
+        (6, 12),
+        (38, 50),
+        (101, 127),
+        (100, 127),
+    ] {
+        mpe_cc(&mut s, 14, cc, value);
+    }
+    assert_eq!(s.mpe_config().member_bend_range, 12.5);
+    s.handle_midi_event(MidiEvent::PitchBend {
+        channel: 14,
+        value: -8192,
+    });
+    let events = s.take_recorded_performance();
+    assert!(
+        events.iter().any(
+            |e| matches!(e.kind,RecordedPerformanceKind::Expression{pitch,..} if pitch == -12.5)
+        )
+    );
+    for (cc, value) in [(101, 0), (100, 6), (6, 2), (101, 127), (100, 127)] {
+        mpe_cc(&mut s, 15, cc, value);
+    }
+    assert_eq!(s.mpe_config().members, 2);
+    mpe_on(&mut s, 12, 62);
+    assert!(
+        s.take_recorded_performance()
+            .iter()
+            .all(|e| !matches!(e.kind, RecordedPerformanceKind::NoteOn { key: 62, .. }))
+    );
+    for (cc, value) in [(101, 0), (100, 6), (6, 0)] {
+        mpe_cc(&mut s, 15, cc, value);
+    }
+    assert_eq!(s.mpe_config().mode, MpeMode::Off);
+}
+#[test]
+fn mpe_sustain_and_channel_reuse_preserve_the_other_same_pitch_voice() {
+    let mut s = mpe_session(MpeMode::Lower, 4);
+    mpe_on(&mut s, 1, 60);
+    mpe_on(&mut s, 2, 60);
+    let initial = s.take_recorded_performance();
+    let voices: Vec<_> = initial
+        .iter()
+        .filter(|e| matches!(e.kind, RecordedPerformanceKind::NoteOn { .. }))
+        .map(|e| e.voice)
+        .collect();
+    s.handle_midi_event(MidiEvent::Sustain {
+        channel: 0,
+        down: true,
+    });
+    mpe_off(&mut s, 1, 60);
+    mpe_off(&mut s, 2, 60);
+    assert!(
+        !s.take_recorded_performance()
+            .iter()
+            .any(|e| matches!(e.kind, RecordedPerformanceKind::NoteOff { .. }))
+    );
+    s.handle_midi_event(MidiEvent::PitchBend {
+        channel: 1,
+        value: 8191,
+    });
+    assert_eq!(
+        mpe_expression(&s.take_recorded_performance(), voices[0]).0,
+        48.0
+    );
+    mpe_on(&mut s, 1, 60);
+    let retrigger = s.take_recorded_performance();
+    assert!(
+        retrigger
+            .iter()
+            .any(|e| e.voice == voices[0]
+                && matches!(e.kind, RecordedPerformanceKind::NoteOff { .. }))
+    );
+    let next = retrigger
+        .iter()
+        .find(|e| matches!(e.kind, RecordedPerformanceKind::NoteOn { .. }))
+        .unwrap()
+        .voice;
+    assert_ne!(next, voices[0]);
+    assert!(retrigger.iter().all(|e| e.voice != voices[1]));
+    s.handle_midi_event(MidiEvent::Sustain {
+        channel: 0,
+        down: false,
+    });
+    let released = s.take_recorded_performance();
+    assert!(
+        released
+            .iter()
+            .any(|e| e.voice == voices[1]
+                && matches!(e.kind, RecordedPerformanceKind::NoteOff { .. }))
+    );
+    assert!(
+        !released
+            .iter()
+            .any(|e| e.voice == next && matches!(e.kind, RecordedPerformanceKind::NoteOff { .. }))
+    );
+}
+#[test]
+fn mpe_lifecycle_emits_a_recording_boundary_and_configuration_is_validated_first() {
+    let mut s = mpe_session(MpeMode::Lower, 3);
+    let before = s.mpe_config();
+    for invalid in [
+        MpeConfig {
+            members: 0,
+            ..before
+        },
+        MpeConfig {
+            members: 16,
+            ..before
+        },
+        MpeConfig {
+            member_bend_range: f32::NAN,
+            ..before
+        },
+        MpeConfig {
+            manager_bend_range: 97.0,
+            ..before
+        },
+    ] {
+        assert!(s.configure_mpe(invalid).is_err());
+        assert_eq!(s.mpe_config(), before);
+    }
+    mpe_on(&mut s, 1, 60);
+    s.take_recorded_performance();
+    let bass = channel(&s, "Bass");
+    s.set_live_target(Some(bass));
+    assert!(
+        s.take_recorded_performance()
+            .iter()
+            .any(|e| matches!(e.kind, RecordedPerformanceKind::Reset))
+    );
+    mpe_on(&mut s, 1, 62);
+    let events = s.take_recorded_performance();
+    let voice = events
+        .iter()
+        .find(|e| matches!(e.kind, RecordedPerformanceKind::NoteOn { .. }))
+        .unwrap()
+        .voice;
+    assert_eq!(mpe_expression(&events, voice), (0.0, 0.0, 0.5));
+    s.panic();
+    assert!(
+        s.take_recorded_performance()
+            .iter()
+            .any(|e| matches!(e.kind, RecordedPerformanceKind::Reset))
+    );
+}
+#[test]
+fn mpe_member_slide_is_not_sent_to_the_cc_mapper() {
+    let mut s = mpe_session(MpeMode::Lower, 3);
+    let device = s
+        .project()
+        .channel(s.live_target().unwrap())
+        .unwrap()
+        .device
+        .clone();
+    let param = peel_devices::descriptor(&device.type_id).unwrap().params[0];
+    s.set_midi_control_mappings(vec![MidiMapping {
+        controller: 74,
+        channel: None,
+        target: MidiControlTarget::DeviceParam {
+            device: device.id,
+            key: param.key.into(),
+        },
+        min: param.min,
+        max: param.max,
+    }])
+    .unwrap();
+    let before = s.project().clone();
+    mpe_on(&mut s, 1, 60);
+    mpe_cc(&mut s, 1, 74, 127);
+    s.poll_midi();
+    assert_eq!(s.project(), &before);
+}
+#[test]
+fn legacy_and_internal_notes_record_initial_state_and_controllers_in_the_same_feed() {
+    let mut s = session();
+    let piano = channel(&s, "Piano");
+    s.set_live_target(Some(piano));
+    s.take_recorded_performance();
+    s.set_pitch_bend_range(12.0).unwrap();
+    assert!(s.pitch_bend(0.5));
+    s.live_note(piano, 60, 0.8, true);
+    let events = s.take_recorded_performance();
+    let voice = events
+        .iter()
+        .find(|e| matches!(e.kind, RecordedPerformanceKind::NoteOn { .. }))
+        .unwrap()
+        .voice;
+    assert_eq!(mpe_expression(&events, voice), (6.0, 0.0, 0.5));
+    assert!(s.channel_pressure(0.5));
+    assert!(s.poly_pressure(60, 0.5));
+    assert_eq!(
+        mpe_expression(&s.take_recorded_performance(), voice),
+        (6.0, 0.75, 0.5)
+    );
+    s.handle_midi_event(MidiEvent::Sustain {
+        channel: 0,
+        down: true,
+    });
+    s.live_note(piano, 60, 0.0, false);
+    assert!(
+        !s.take_recorded_performance()
+            .iter()
+            .any(|e| matches!(e.kind, RecordedPerformanceKind::NoteOff { .. }))
+    );
+    s.handle_midi_event(MidiEvent::Sustain {
+        channel: 0,
+        down: false,
+    });
+    assert!(
+        s.take_recorded_performance()
+            .iter()
+            .any(|e| e.voice == voice && matches!(e.kind, RecordedPerformanceKind::NoteOff { .. }))
+    );
+}
+
+#[test]
+fn mpe_rpn_disabled_zone_can_reenable_but_explicit_off_stops_listening() {
+    let mut s = mpe_session(MpeMode::Upper, 4);
+    for (cc, value) in [(101, 0), (100, 6), (6, 0)] {
+        mpe_cc(&mut s, 15, cc, value);
+    }
+    assert_eq!(s.mpe_config().mode, MpeMode::Off);
+    for (cc, value) in [(101, 0), (100, 6), (6, 5)] {
+        mpe_cc(&mut s, 15, cc, value);
+    }
+    assert_eq!(s.mpe_config().mode, MpeMode::Upper);
+    assert_eq!(s.mpe_config().members, 5);
+    for (cc, value) in [(101, 0), (100, 6), (6, 0)] {
+        mpe_cc(&mut s, 15, cc, value);
+    }
+    let off = s.mpe_config();
+    s.configure_mpe(off).unwrap();
+    for (cc, value) in [(101, 0), (100, 6), (6, 5)] {
+        mpe_cc(&mut s, 15, cc, value);
+    }
+    assert_eq!(
+        s.mpe_config().mode,
+        MpeMode::Off,
+        "manual Off also stops the private RPN listener"
+    );
+}
+#[test]
+fn mpe_lsb_only_range_change_keeps_coarse_and_cc74_midpoint_is_neutral() {
+    let mut s = mpe_session(MpeMode::Lower, 4);
+    for (cc, value) in [(101, 0), (100, 0), (38, 50)] {
+        mpe_cc(&mut s, 1, cc, value);
+    }
+    assert_eq!(s.mpe_config().member_bend_range, 48.5);
+    mpe_cc(&mut s, 1, 74, 64);
+    mpe_cc(&mut s, 0, 74, 64);
+    mpe_on(&mut s, 1, 60);
+    let events = s.take_recorded_performance();
+    let on = events
+        .iter()
+        .find(|e| matches!(e.kind, RecordedPerformanceKind::NoteOn { .. }))
+        .unwrap();
+    assert_eq!(mpe_expression(&events, on.voice), (0.0, 0.0, 0.5));
+}

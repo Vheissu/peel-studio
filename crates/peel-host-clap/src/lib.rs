@@ -95,6 +95,7 @@ mod isolated;
 mod module;
 mod params;
 mod scan;
+mod scoped;
 mod state;
 mod thread;
 

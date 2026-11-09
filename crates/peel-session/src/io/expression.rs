@@ -31,7 +31,23 @@ impl ExpressionState {
     fn range(&self) -> f32 {
         f32::from_bits(self.range.load(Ordering::Relaxed))
     }
+    pub(super) fn readback_controller(&self, event: super::MidiEvent) {
+        match event {
+            super::MidiEvent::PitchBend { value, .. } => self.bend.store(
+                (f32::from(value) / if value < 0 { 8192.0 } else { 8191.0 }).to_bits(),
+                Ordering::Relaxed,
+            ),
+            super::MidiEvent::ChannelPressure { value, .. } => self.pressure.store(
+                (f32::from(value.min(127)) / 127.0).to_bits(),
+                Ordering::Relaxed,
+            ),
+            _ => (),
+        }
+    }
     pub(super) fn push(&self, live: &LiveInput, kind: EventKind) -> bool {
+        self.push_with_range(live, kind, self.range())
+    }
+    fn push_with_range(&self, live: &LiveInput, kind: EventKind, range: f32) -> bool {
         let (kind, value, destination) = match kind {
             EventKind::PitchBend {
                 semitones: normalized,
@@ -39,7 +55,7 @@ impl ExpressionState {
                 let value = normalized.clamp(-1.0, 1.0);
                 (
                     EventKind::PitchBend {
-                        semitones: value * self.range(),
+                        semitones: value * range,
                     },
                     value,
                     &self.bend,
@@ -90,6 +106,10 @@ impl MidiBridge {
         }
         target.set(slot);
         self.expression.clear();
+        self.mpe
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .reset();
         if let Some(live) = guard.as_ref() {
             live.expression_batch(&[
                 EventKind::ResetExpression,
@@ -104,9 +124,23 @@ impl MidiBridge {
             .live
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        guard
-            .as_ref()
-            .is_some_and(|live| self.expression.push(live, kind))
+        guard.as_ref().is_some_and(|live| {
+            let mut mpe = self
+                .mpe
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let config = mpe.config();
+            let range = if config.mode == super::MpeMode::Off {
+                self.expression.range()
+            } else {
+                config.manager_bend_range
+            };
+            let ok = self.expression.push_with_range(live, kind, range);
+            if ok {
+                mpe.manager_expression(live, kind);
+            }
+            ok
+        })
     }
 }
 impl Session {
@@ -130,6 +164,13 @@ impl Session {
         {
             return Err("Live expression queue is full".into());
         }
+        if let Some(live) = guard.as_ref() {
+            bridge
+                .mpe
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .manager_range(live, semitones);
+        }
         bridge
             .expression
             .range
@@ -137,7 +178,12 @@ impl Session {
         Ok(())
     }
     pub fn pitch_bend_range(&self) -> f32 {
-        self.io.bridge.expression.range()
+        let config = self.mpe_config();
+        if config.mode == super::MpeMode::Off {
+            self.io.bridge.expression.range()
+        } else {
+            config.manager_bend_range
+        }
     }
     /// Queues a normalized pitch-wheel value (-1..1) for the selected instrument.
     pub fn pitch_bend(&mut self, value: f32) -> bool {

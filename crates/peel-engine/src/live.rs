@@ -234,6 +234,7 @@ pub(crate) struct LiveShared {
     target: LiveTarget,
     spread: AtomicBool,
     pedal: AtomicBool,
+    emergency_reset: AtomicU64,
     stats: LiveStats,
     telemetry: Arc<Telemetry>,
 }
@@ -245,6 +246,7 @@ impl LiveShared {
             target: LiveTarget::new(),
             spread: AtomicBool::new(false),
             pedal: AtomicBool::new(false),
+            emergency_reset: AtomicU64::new(0),
             stats: LiveStats::default(),
             telemetry,
         }
@@ -333,6 +335,9 @@ impl LiveInput {
         on: bool,
         midi_channel: Option<u8>,
     ) -> bool {
+        if on && slot == LIVE_TARGET_NONE {
+            return false;
+        }
         let key = key.min(127);
         let velocity = if on { clean_velocity(velocity) } else { 0.0 };
         let shared = &self.inner.shared;
@@ -411,11 +416,15 @@ impl LiveInput {
             kind: LiveKind::AllNotesOff,
         };
         let mut tx = self.lock();
-        let ok = push_event(&mut tx, shared, ev, true);
-        if ok {
-            tx.capture_reset(shared, ev.t_ns, slot);
+        if !push_event(&mut tx, shared, ev, true) {
+            // A release flood can exhaust even the protected reserve. Publish
+            // a bounded emergency reset outside that queue instead of hanging notes.
+            shared
+                .emergency_reset
+                .store(ev.t_ns.max(1), Ordering::Release);
         }
-        ok
+        tx.capture_reset(shared, ev.t_ns, slot);
+        true
     }
 
     /// [`all_notes_off`](LiveInput::all_notes_off) on the current target, or
@@ -616,9 +625,11 @@ pub(crate) struct LiveState {
     /// Frames in this callback (0 if unknown) and how many are done.
     cb_frames: usize,
     cb_done: usize,
+    discard_before: u64,
 
     /// Scratch for the actions one event expands to.
     pub actions: Vec<LiveAction>,
+    pub(crate) deferred_expression: Vec<(u32, EventKind)>,
 }
 
 impl LiveState {
@@ -654,7 +665,9 @@ impl LiveState {
             prev_cb_ns: None,
             cb_frames: 0,
             cb_done: 0,
+            discard_before: 0,
             actions: Vec::with_capacity(ACTION_CAPACITY),
+            deferred_expression: Vec::with_capacity(crate::MAX_ACTIVE_NOTES * 2 + 256),
         }
     }
 
@@ -676,6 +689,7 @@ impl LiveState {
         self.held = [LIVE_TARGET_NONE; 128];
         self.sustained.clear();
         self.shared.pedal.store(false, Ordering::Relaxed);
+        self.deferred_expression.clear();
     }
 
     /// Forgets keys owned by a device that has been removed or restarted,
@@ -687,6 +701,34 @@ impl LiveState {
             }
         }
         self.sustained.retain(|(owner, _)| *owner != slot);
+        self.deferred_expression.retain(|(owner, _)| *owner != slot);
+    }
+
+    pub(crate) fn defer_expression(&mut self, slot: u32, kind: EventKind) {
+        if matches!(kind, EventKind::ResetExpression) {
+            self.deferred_expression.retain(|(owner, old)| {
+                *owner != slot
+                    || matches!(
+                        old,
+                        EventKind::VoiceExpression { .. } | EventKind::PitchBendRange { .. }
+                    )
+            });
+        }
+        if let Some(entry) = self
+            .deferred_expression
+            .iter_mut()
+            .find(|(owner, old)| *owner == slot && expression_key(*old) == expression_key(kind))
+        {
+            entry.1 = kind;
+        } else if self.deferred_expression.len() < self.deferred_expression.capacity() {
+            self.deferred_expression.push((slot, kind));
+        } else {
+            self.shared.stats.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    pub(crate) fn clear_deferred_expression(&mut self, slot: u32, kind: EventKind) {
+        self.deferred_expression
+            .retain(|(owner, old)| *owner != slot || expression_key(*old) != expression_key(kind));
     }
 
     /// Notes the start of a device callback of `frames` frames (0 = unknown).
@@ -711,6 +753,33 @@ impl LiveState {
     /// offset. Events that arrived after this callback began, or that fall
     /// in a later chunk of the callback, stay queued.
     pub fn next(&mut self, frames: usize) -> Option<(LiveEvent, u32)> {
+        let emergency = self.shared.emergency_reset.swap(0, Ordering::Acquire);
+        if emergency != 0 {
+            self.discard_before = self.discard_before.max(emergency);
+            return Some((
+                LiveEvent {
+                    t_ns: emergency,
+                    slot: LIVE_TARGET_NONE,
+                    kind: LiveKind::AllNotesOff,
+                },
+                0,
+            ));
+        }
+        // Old note-ons cannot resurrect notes after an emergency reset. The
+        // timestamp fence also catches producers that waited for the TX lock.
+        for _ in 0..LIVE_QUEUE_CAPACITY {
+            if self
+                .rx
+                .peek()
+                .ok()
+                .is_some_and(|e| self.discard_before != 0 && e.t_ns <= self.discard_before)
+            {
+                let _ = self.rx.pop();
+                self.shared.stats.dropped.fetch_add(1, Ordering::Relaxed);
+            } else {
+                break;
+            }
+        }
         let ev = *self.rx.peek().ok()?;
         let offset = self.place(ev.t_ns, frames)?;
         let _ = self.rx.pop();
@@ -861,6 +930,10 @@ impl LiveState {
                     }
                 }
                 self.sustained.retain(|&(s, _)| !every && s != slot);
+                self.deferred_expression.retain(|(owner,kind)| {
+                    if !every && *owner!=slot {return true;}
+                    matches!(kind,EventKind::VoiceExpression{voice,..} if *voice<crate::LIVE_VOICE_BASE)
+                });
                 emit(out, offset, LiveOp::AllOff { slot });
             }
         }
@@ -875,6 +948,18 @@ impl LiveState {
     #[cfg(test)]
     pub fn pending(&self) -> usize {
         self.rx.slots()
+    }
+}
+
+fn expression_key(kind: EventKind) -> (u8, u32) {
+    match kind {
+        EventKind::PitchBend { .. } => (0, 0),
+        EventKind::PitchBendRange { .. } => (1, 0),
+        EventKind::ChannelPressure { .. } => (2, 0),
+        EventKind::PolyPressure { key, .. } => (3, u32::from(key)),
+        EventKind::ResetExpression => (4, 0),
+        EventKind::VoiceExpression { voice, .. } => (5, voice),
+        _ => (255, 0),
     }
 }
 
