@@ -333,5 +333,29 @@ fn clip_audio(
         };
         out.insert(*asset, buf);
     }
+    // Tempo-following clips play stretched copies.
+    let tempo = peel_time::TempoMap::from_segments(&project.tempo);
+    for clip in &arr.clips {
+        let (ClipContent::Audio { asset, .. }, Some(ratio)) =
+            (&clip.content, crate::compile::stretch_ratio(&tempo, clip))
+        else {
+            continue;
+        };
+        let key = crate::compile::stretched_key(*asset, ratio);
+        if out.contains_key(&key) {
+            continue;
+        }
+        if let Some(src) = out.get(asset).cloned() {
+            out.insert(key, Arc::new(stretched(&src, ratio)));
+        }
+    }
     Ok(out)
+}
+
+/// A time-stretched copy of a sample (pitch kept).
+pub(crate) fn stretched(src: &SampleBuffer, ratio: f64) -> SampleBuffer {
+    let channels = peel_dsp::stretch::stretch(&src.channels, ratio, src.sample_rate);
+    let mut out = SampleBuffer::new(src.name.clone(), src.sample_rate, channels);
+    out.root_key = src.root_key;
+    out
 }

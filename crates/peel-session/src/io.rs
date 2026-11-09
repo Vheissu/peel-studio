@@ -285,6 +285,7 @@ impl Session {
         if (rate - old_rate).abs() > 0.5 {
             // Cached samples were resampled for the old rate; decode again.
             self.samples = SampleLoader::new();
+            self.audio.stretched.clear();
         }
 
         // Plugins are rebuilt from their current state.

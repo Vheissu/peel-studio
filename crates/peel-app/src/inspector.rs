@@ -1372,6 +1372,68 @@ pub(crate) fn reaches(
     false
 }
 
+fn clip_source_bpm(c: &peel_document::Clip) -> Option<f64> {
+    match &c.content {
+        peel_document::ClipContent::Audio { source_bpm, .. } => *source_bpm,
+        _ => None,
+    }
+}
+
+/// The tempo of a loop of `seconds`: a whole number of bars (1 to 16) that
+/// lands between 80 and 160 BPM, the one closest to the song's tempo.
+fn guess_bpm(seconds: f64, song: f64) -> f64 {
+    if seconds <= 0.0 {
+        return song;
+    }
+    [1.0, 2.0, 4.0, 8.0, 16.0]
+        .iter()
+        .map(|bars: &f64| bars * 4.0 * 60.0 / seconds)
+        .filter(|b| (80.0..160.0).contains(b))
+        .min_by(|a, b| (a - song).abs().total_cmp(&(b - song).abs()))
+        .map_or(song, |b| (b * 10.0).round() / 10.0)
+}
+
+/// Turns tempo following on (with a source tempo) or off. The clip keeps
+/// playing the same part of the file, so its length, offset and fades are
+/// rescaled between song beats and the loop's own beats.
+fn set_follow(s: &mut Session, id: Id, bpm: Option<f64>, gesture: Option<u64>) {
+    let tempo = peel_time::TempoMap::from_segments(&s.project().tempo);
+    let label = match bpm {
+        Some(_) => "Follow tempo",
+        None => "Play at native speed",
+    };
+    let apply = |p: &mut peel_document::Project| {
+        let Some(c) = p.arrangement_mut().clips.iter_mut().find(|c| c.id == id) else {
+            return;
+        };
+        let song = tempo.bpm_at(c.start.as_f64());
+        let peel_document::ClipContent::Audio {
+            source_bpm,
+            fade_in,
+            fade_out,
+            ..
+        } = &mut c.content
+        else {
+            return;
+        };
+        // Beats per beat: how the clip's timing scales from the old mode to
+        // the new one.
+        let before = source_bpm.unwrap_or(song);
+        let after = bpm.unwrap_or(song);
+        let k = after / before;
+        let scale = |t: peel_document::Time| peel_document::Time::from_f64(t.as_f64() * k, 960);
+        *fade_in = scale(*fade_in);
+        *fade_out = scale(*fade_out);
+        *source_bpm = bpm;
+        c.offset = scale(c.offset);
+        c.length = scale(c.length).max(peel_document::Time::new(1, 16));
+    };
+    match gesture {
+        Some(g) => s.doc.edit_gesture(g, label, apply),
+        None => s.doc.edit(label, apply),
+    }
+}
+
 fn audio_clip_of(s: &Session, id: Id) -> Option<peel_document::Clip> {
     s.project()
         .arrangement()
@@ -1456,7 +1518,11 @@ fn audio_clip(ui: &mut Ui, r: Rect, id: Id, s: &mut Session) {
     body.cut_top(12.0);
     ui.scene.rect(wave, t.radius_m, t.bg);
     let total = s.asset_duration_seconds(asset).unwrap_or(0.0);
-    let src_start = peel_session::clip_source_start_seconds(&tempo, &clip);
+    // Where the clip reads the file, in the file's own seconds (a clip
+    // following the song tempo counts beats at its source tempo).
+    let src_bpm = clip_source_bpm(&clip).unwrap_or(bpm);
+    let src_start = clip.offset.as_f64() * 60.0 / src_bpm;
+    let src_secs = clip.length.as_f64() * 60.0 / src_bpm;
     if let Some(peaks) = s.audio_peaks(asset)
         && total > 0.0
     {
@@ -1465,7 +1531,7 @@ fn audio_clip(ui: &mut Ui, r: Rect, id: Id, s: &mut Session) {
         let frames = peaks.frames();
         let (lit0, lit1) = (
             (src_start / total) as f32,
-            ((src_start + secs) / total) as f32,
+            ((src_start + src_secs) / total) as f32,
         );
         for (i, (lo, hi)) in peaks.query(0, frames, cols).enumerate() {
             let x = inner.x + i as f32;
@@ -1580,7 +1646,7 @@ fn audio_clip(ui: &mut Ui, r: Rect, id: Id, s: &mut Session) {
     {
         let rate = f64::from(buf.sample_rate);
         let a = (src_start * rate) as usize;
-        let b = ((src_start + secs) * rate) as usize;
+        let b = ((src_start + src_secs) * rate) as usize;
         let peak = buf
             .channels
             .iter()
@@ -1595,6 +1661,66 @@ fn audio_clip(ui: &mut Ui, r: Rect, id: Id, s: &mut Session) {
         } else {
             s.notify("The clip is silent", true);
         }
+    }
+
+    // Tempo: follow the song by time-stretching from the loop's own tempo.
+    let mut row = body.cut_top(30.0);
+    body.cut_top(10.0);
+    ui.text(
+        row.cut_left(60.0),
+        "Tempo",
+        t.caption,
+        t.text_dim,
+        Align::Start,
+    );
+    let follow = clip_source_bpm(&clip);
+    let led = ui.led(
+        W::new(("clip-follow", id)),
+        Rect::from_center(row.cut_left(26.0).center(), 20.0, 20.0),
+        follow.is_some(),
+        t.accent,
+    );
+    ui.name(&led, "Follow song tempo");
+    ui.tooltip(
+        &led,
+        "Stretch the audio to follow the song's tempo, keeping its pitch",
+    );
+    row.cut_left(6.0);
+    if let Some(src) = follow {
+        let mut v = src;
+        let num = row.cut_left(110.0);
+        let resp = ui.drag_number(
+            W::new(("clip-bpm", id)),
+            num,
+            &mut v,
+            40.0,
+            240.0,
+            0.1,
+            t.label,
+            t.text,
+            |x| format!("{x:.1} BPM"),
+        );
+        if resp.changed {
+            set_follow(
+                s,
+                id,
+                Some(((v * 10.0).round() / 10.0).clamp(40.0, 240.0)),
+                Some(W::new(("clip-bpm-g", id)).0),
+            );
+        }
+        if resp.released {
+            s.doc.end_gesture();
+        }
+        if s.stretching() {
+            row.cut_left(8.0);
+            ui.text(row, "Stretching", t.caption, t.text_faint, Align::Start);
+        }
+    } else {
+        ui.text(row, "Native speed", t.caption, t.text_faint, Align::Start);
+    }
+    if led.clicked {
+        let guess = follow.is_none().then(|| guess_bpm(total, bpm));
+        set_follow(s, id, guess, None);
     }
 
     // Mixer output.

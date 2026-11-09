@@ -243,6 +243,7 @@ mod tests {
             track,
             fade_in: Time::new(1, 3),
             fade_out: Time::new(5, 4),
+            source_bpm: None,
         };
         let json = serde_json::to_string(&faded).unwrap();
         assert!(
@@ -281,6 +282,7 @@ mod tests {
                 track,
                 fade_in,
                 fade_out: Time::ZERO,
+                source_bpm: None,
             },
         };
         p.assets.push(asset.clone());

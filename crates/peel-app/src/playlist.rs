@@ -1961,12 +1961,27 @@ fn draw_audio_clip(
     let mid = body_r.center().y;
     let amp = body_r.h * 0.48;
     ui.scene.push_clip(cr);
+    // A clip following the song tempo reads the file in its own beats.
+    let follow = match &c.content {
+        ClipContent::Audio { source_bpm, .. } => *source_bpm,
+        _ => None,
+    };
     let frame_at = |x: f32| -> f64 {
-        let sec = tempo.beat_to_seconds(v.beat(x));
-        let into = if reversed {
-            (clip_sec1 - sec) + source0
+        let into = if let Some(src) = follow {
+            let b = v.beat(x);
+            let beats = if reversed {
+                c.end().as_f64() - b
+            } else {
+                b - c.start.as_f64()
+            };
+            (beats + c.offset.as_f64()) * 60.0 / src
         } else {
-            (sec - clip_sec0) + source0
+            let sec = tempo.beat_to_seconds(v.beat(x));
+            if reversed {
+                (clip_sec1 - sec) + source0
+            } else {
+                (sec - clip_sec0) + source0
+            }
         };
         (into * rate).clamp(0.0, frames)
     };

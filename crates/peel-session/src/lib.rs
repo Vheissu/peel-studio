@@ -27,6 +27,7 @@ use peel_engine::{EngineCommand, EngineConfig, EngineHandle, RenderPlan, Slot, T
 
 pub use compile::{
     CompileContext, PlanIndex, PlayMode, clip_source_start_seconds, compile, same_structure,
+    stretch_ratio, stretched_key,
 };
 pub use export::{ExportJob, ExportSettings, render as render_to_wav, stem_tracks};
 pub use io::{
@@ -196,6 +197,7 @@ impl Session {
         }
         self.plugins.idle();
         self.poll_bounce();
+        self.poll_stretches();
         self.poll_recording();
         for (asset, result) in self.samples.poll() {
             match result {
@@ -1339,6 +1341,90 @@ mod tests {
             "nearly identical: residue {} of {r0}",
             rms(&diff)
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_loop_following_the_tempo_lands_on_the_song_beats() {
+        use peel_document::{ClipContent, Time};
+        let dir = std::env::temp_dir().join(format!("peel-stretch-test-{}", Id::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Two bars at 100 BPM: a click on every beat.
+        let sr = 48_000u32;
+        let beat = 0.6f64;
+        let mut x = vec![0.0f32; (8.0 * beat * sr as f64) as usize];
+        for k in 0..8 {
+            let at = (k as f64 * beat * sr as f64) as usize;
+            for i in 0..240 {
+                x[at + i] = (1.0 - i as f32 / 240.0) * if i % 2 == 0 { 0.8 } else { -0.8 };
+            }
+        }
+        let wav = dir.join("loop.wav");
+        peel_media::write_wav(&wav, &[&x, &x], sr, peel_media::WavFormat::FLOAT32).unwrap();
+        let mut p = template::empty();
+        p.set_bpm(118.0);
+        let mut s = Session::new_silent(p);
+        let lane = s.project().arrangement().tracks[0].id;
+        let clip = s.add_audio_clip(lane, Time::ZERO, &wav).expect("clip");
+        s.doc.edit("Follow", |p| {
+            let c = p
+                .arrangement_mut()
+                .clips
+                .iter_mut()
+                .find(|c| c.id == clip)
+                .unwrap();
+            c.length = Time::beats(8);
+            if let ClipContent::Audio { source_bpm, .. } = &mut c.content {
+                *source_bpm = Some(100.0);
+            }
+        });
+        let start = Instant::now();
+        let out = dir.join("out.wav");
+        let job = loop {
+            s.tick();
+            let asset = match &s.project().arrangement().clips[0].content {
+                ClipContent::Audio { asset, .. } => *asset,
+                _ => unreachable!(),
+            };
+            if s.sample(asset).is_some() {
+                break s.export(ExportSettings {
+                    path: out.clone(),
+                    sample_rate: sr,
+                    bits: 32,
+                    tail_seconds: 0.0,
+                });
+            }
+            assert!(start.elapsed().as_secs() < 20);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        loop {
+            if let Some(r) = job.take_result() {
+                r.expect("export");
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let y = peel_media::decode_file(&out).unwrap().left().to_vec();
+        let song_beat = 60.0 / 118.0;
+        assert!(
+            (y.len() as f64 / sr as f64 - 8.0 * song_beat).abs() < 0.05,
+            "eight song beats long"
+        );
+        for k in 1..8 {
+            let at = (k as f64 * song_beat * sr as f64) as usize;
+            let win = &y[at.saturating_sub(600)..(at + 600).min(y.len())];
+            assert!(
+                win.iter().any(|v| v.abs() > 0.4),
+                "click {k} on song beat {k}"
+            );
+            // Halfway between beats is quiet.
+            let mid = at - (song_beat * 0.5 * sr as f64) as usize;
+            let gap = &y[mid - 300..mid + 300];
+            assert!(
+                gap.iter().all(|v| v.abs() < 0.1),
+                "silence between clicks before beat {k}"
+            );
+        }
         std::fs::remove_dir_all(&dir).ok();
     }
 

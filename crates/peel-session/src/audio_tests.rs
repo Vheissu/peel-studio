@@ -488,6 +488,7 @@ fn the_cli_style_render_includes_clips_too() {
             track: master,
             fade_in: Time::ZERO,
             fade_out: Time::ZERO,
+            source_bpm: None,
         },
     });
     let samples = HashMap::from([(

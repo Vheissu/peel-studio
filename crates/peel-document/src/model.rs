@@ -278,9 +278,10 @@ pub enum ClipContent {
     /// The enclosing [`Clip`] places and trims it: `start` is where the
     /// audio sounds, `length` is how much of it plays, and `offset` is how
     /// far into the file (in quarter notes at the tempo in force at `start`)
-    /// the first audible frame lies. The audio always plays at its native
-    /// speed; there is no time stretching, so a tempo change moves the clip
-    /// but never changes how fast it plays.
+    /// the first audible frame lies. Without `source_bpm` the audio plays at
+    /// its native speed, so a tempo change moves the clip but never changes
+    /// how fast it plays. With it, the audio is time-stretched (pitch kept)
+    /// from that tempo to the song's tempo at the clip start.
     Audio {
         asset: Id,
         #[serde(default)]
@@ -295,6 +296,9 @@ pub enum ClipContent {
         /// Fade-out length to the clip end, in quarter notes.
         #[serde(default, skip_serializing_if = "time_is_zero")]
         fade_out: Time,
+        /// Tempo the audio was played at; when set, it follows the song.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_bpm: Option<f64>,
     },
     /// An envelope that drives one parameter while the clip plays.
     Automation {
@@ -391,6 +395,7 @@ impl ClipContent {
             track,
             fade_in: Time::ZERO,
             fade_out: Time::ZERO,
+            source_bpm: None,
         }
     }
 }

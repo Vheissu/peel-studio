@@ -16,6 +16,7 @@ pub mod device;
 pub mod param;
 pub mod preset;
 pub mod sample;
+pub mod stretch;
 pub mod util;
 
 // Primitive building blocks. Instruments primarily use the first group and

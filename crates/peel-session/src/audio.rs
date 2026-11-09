@@ -30,6 +30,13 @@ pub(crate) struct AudioState {
     /// Assets that failed to decode. They are not requested again until the
     /// project is replaced, so a broken file does not retry on every edit.
     pub failed: HashSet<Id>,
+    /// Time-stretched copies for tempo-following clips, by stretched key.
+    pub stretched: std::collections::HashMap<Id, Arc<SampleBuffer>>,
+    /// Stretches running in the background: asset -> stretched key. One
+    /// per asset at a time, so dragging the tempo does not queue dozens.
+    pub stretching: std::collections::HashMap<Id, Id>,
+    pub stretch_tx: Option<std::sync::mpsc::Sender<(Id, SampleBuffer)>>,
+    pub stretch_rx: Option<std::sync::mpsc::Receiver<(Id, SampleBuffer)>>,
 }
 
 /// Assets used by audio clips of the active arrangement (muted or not, so
@@ -310,7 +317,77 @@ impl Session {
                 self.samples.request(id, path, rate);
             }
         }
+        // Stretched copies for clips that follow the song tempo, made in
+        // the background the first time a ratio is needed.
+        let tempo = TempoMap::from_segments(&self.doc.project().tempo);
+        let wanted: Vec<(Id, Id, f64)> = self
+            .doc
+            .project()
+            .arrangement()
+            .clips
+            .iter()
+            .filter_map(|c| {
+                let ClipContent::Audio { asset, .. } = &c.content else {
+                    return None;
+                };
+                let r = crate::compile::stretch_ratio(&tempo, c)?;
+                Some((*asset, crate::compile::stretched_key(*asset, r), r))
+            })
+            .collect();
+        let keep: HashSet<Id> = wanted.iter().map(|w| w.1).collect();
+        self.audio.stretched.retain(|k, _| keep.contains(k));
+        for (asset, key, ratio) in wanted {
+            if let Some(buf) = self.audio.stretched.get(&key) {
+                out.insert(key, buf.clone());
+                continue;
+            }
+            let Some(src) = out.get(&asset).cloned() else {
+                continue;
+            };
+            if self.audio.stretching.contains_key(&asset) {
+                continue;
+            }
+            self.audio.stretching.insert(asset, key);
+            if self.audio.stretch_tx.is_none() {
+                let (tx, rx) = std::sync::mpsc::channel();
+                self.audio.stretch_tx = Some(tx);
+                self.audio.stretch_rx = Some(rx);
+            }
+            let tx = self.audio.stretch_tx.clone();
+            std::thread::Builder::new()
+                .name("peel-stretch".into())
+                .spawn(move || {
+                    let buf = crate::export::stretched(&src, ratio);
+                    if let Some(tx) = tx {
+                        let _ = tx.send((key, buf));
+                    }
+                })
+                .ok();
+        }
         out
+    }
+
+    /// Takes finished stretches; true when any arrived (the plan must be
+    /// rebuilt to use them).
+    pub(crate) fn poll_stretches(&mut self) -> bool {
+        let Some(rx) = &self.audio.stretch_rx else {
+            return false;
+        };
+        let mut any = false;
+        while let Ok((key, buf)) = rx.try_recv() {
+            self.audio.stretching.retain(|_, k| *k != key);
+            self.audio.stretched.insert(key, Arc::new(buf));
+            any = true;
+        }
+        if any {
+            self.audio.generation += 1;
+        }
+        any
+    }
+
+    /// True while a tempo-following clip's audio is being stretched.
+    pub fn stretching(&self) -> bool {
+        !self.audio.stretching.is_empty()
     }
 
     /// Audio of unmuted clips that is not decoded yet, with where to read it

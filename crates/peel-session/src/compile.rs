@@ -263,11 +263,14 @@ fn audio_region(
         track,
         fade_in,
         fade_out,
+        ..
     } = &clip.content
     else {
         return None;
     };
-    let sample = ctx.samples.get(asset)?;
+    // A clip that follows the song tempo plays a stretched copy.
+    let key = stretch_ratio(tempo, clip).map_or(*asset, |r| stretched_key(*asset, r));
+    let sample = ctx.samples.get(&key)?;
     if !clip.length.is_positive() {
         return None;
     }
@@ -288,6 +291,28 @@ fn audio_region(
         fade_in_beats: fade_in,
         fade_out_beats: fade_out,
     })
+}
+
+/// How much a tempo-following audio clip is stretched (output length over
+/// input length): its source tempo over the song's tempo at the clip start,
+/// to a thousandth. `None` when the clip plays at its native speed.
+pub fn stretch_ratio(tempo: &TempoMap, clip: &peel_document::Clip) -> Option<f64> {
+    let ClipContent::Audio {
+        source_bpm: Some(src),
+        ..
+    } = &clip.content
+    else {
+        return None;
+    };
+    let song = tempo.bpm_at(clip.start.as_f64());
+    let r = (src / song * 1000.0).round() / 1000.0;
+    (r.is_finite() && r > 0.05 && (r - 1.0).abs() > 1e-6).then_some(r)
+}
+
+/// The key a stretched copy of `asset` is passed to [`compile`] under.
+pub fn stretched_key(asset: Id, ratio: f64) -> Id {
+    let r = (ratio * 1000.0).round() as u128;
+    Id::from_u128(asset.as_u128() ^ r.wrapping_mul(0x9E37_79B9_7F4A_7C15_F39C_C060_5CED_C835) ^ 1)
 }
 
 /// Swing offset for a note start (delays off-beat 16ths).
@@ -892,6 +917,7 @@ mod tests {
             track,
             fade_in: Time::new(1, 2),
             fade_out: Time::beats(1),
+            source_bpm: None,
         };
         let (plan, index) = f.compile(PlayMode::Song);
         assert_eq!(plan.audio.len(), 1);
@@ -956,6 +982,7 @@ mod tests {
             track,
             fade_in: Time::beats(3),
             fade_out: Time::beats(3),
+            source_bpm: None,
         };
         let r = &f.compile(PlayMode::Song).0.audio[0];
         assert_eq!(r.fade_in_beats, 2.0);
@@ -1010,6 +1037,7 @@ mod tests {
             track: f.track,
             fade_in: Time::ZERO,
             fade_out: Time::ZERO,
+            source_bpm: None,
         };
         f.p.arrangement_mut().clips[0].start = Time::ZERO;
         let (quieter, _) = f.compile(PlayMode::Song);
