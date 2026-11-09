@@ -5,7 +5,16 @@
 //! through a peak or RMS follower, is converted to dB, and the channel levels
 //! are blended toward their maximum by the link amount. The static curve
 //! ([`GainComputer`]) turns that level into a target gain change, which is
-//! smoothed with attack and release in the log domain ([`GainSmoother`]).
+//! smoothed with attack, hold and release in the log domain ([`Ballistics`]).
+//!
+//! Three detector modes: *Peak* follows the rectified signal, *RMS* a
+//! mean-square average (gentle, little low-frequency ripple) and *Glue* an
+//! RMS-style level with a two-stage program-dependent release: short peaks
+//! recover quickly while sustained reduction eases off slowly, which is what
+//! lets a bus compressor hold a mix together without pumping. *Hold* keeps the
+//! gain at its deepest for a set time before release begins, which shapes a
+//! sidechain duck into a plateau and a smooth return instead of a ragged
+//! follow of the key's decay.
 //!
 //! Auto makeup: when enabled, the compressor adds the static gain reduction
 //! that a signal halfway (in dB) between the threshold and 0 dBFS would get,
@@ -16,7 +25,7 @@
 
 use peel_dsp::biquad::{Coeffs, FilterKind, StereoBiquad};
 use peel_dsp::device::{DeviceDescriptor, DeviceKind, ProcessContext};
-use peel_dsp::dynamics::{DetectorMode, EnvelopeFollower, GainComputer, GainSmoother};
+use peel_dsp::dynamics::{DetectorMode, EnvelopeFollower, GainComputer, time_coeff};
 use peel_dsp::param::{ParamDescriptor, ParamId, Unit};
 use peel_dsp::preset::Preset;
 use peel_dsp::util::{Smoothed, db_to_gain, gain_to_db};
@@ -34,10 +43,11 @@ pub const ID_MIX: ParamId = 7;
 pub const ID_DETECTOR: ParamId = 8;
 pub const ID_SC_HPF: ParamId = 9;
 pub const ID_LINK: ParamId = 10;
+pub const ID_HOLD: ParamId = 11;
 
-const DETECTORS: &[&str] = &["Peak", "RMS"];
+const DETECTORS: &[&str] = &["Peak", "RMS", "Glue"];
 
-static PARAMS: [ParamDescriptor; 11] = [
+static PARAMS: [ParamDescriptor; 12] = [
     ParamDescriptor::linear(
         ID_THRESHOLD,
         "threshold",
@@ -78,6 +88,17 @@ static PARAMS: [ParamDescriptor; 11] = [
         2_000.0,
         150.0,
         Unit::Milliseconds,
+    ),
+    ParamDescriptor::power(
+        ID_HOLD,
+        "hold",
+        "Hold",
+        "Compression",
+        0.0,
+        250.0,
+        0.0,
+        Unit::Milliseconds,
+        2.0,
     ),
     ParamDescriptor::linear(
         ID_KNEE,
@@ -140,7 +161,7 @@ pub static DESCRIPTOR: DeviceDescriptor = DeviceDescriptor {
     params: &PARAMS,
 };
 
-pub static PRESETS: [Preset; 6] = [
+pub static PRESETS: [Preset; 8] = [
     Preset {
         name: "Default",
         params: &[],
@@ -153,7 +174,7 @@ pub static PRESETS: [Preset; 6] = [
             ("attack", 30.0),
             ("release", 250.0),
             ("knee", 12.0),
-            ("detector", 1.0),
+            ("detector", 2.0),
             ("auto_makeup", 1.0),
         ],
     },
@@ -183,6 +204,32 @@ pub static PRESETS: [Preset; 6] = [
         ],
     },
     Preset {
+        // Key from the kick: drops fast, sits, then swells back before the
+        // next beat.
+        name: "EDM Pump",
+        params: &[
+            ("threshold", -34.0),
+            ("ratio", 20.0),
+            ("attack", 0.5),
+            ("hold", 40.0),
+            ("release", 105.0),
+            ("knee", 2.0),
+        ],
+    },
+    Preset {
+        name: "Bus Glue",
+        params: &[
+            ("threshold", -16.0),
+            ("ratio", 2.0),
+            ("attack", 30.0),
+            ("release", 200.0),
+            ("knee", 14.0),
+            ("detector", 2.0),
+            ("sidechain.hpf", 90.0),
+            ("auto_makeup", 1.0),
+        ],
+    },
+    Preset {
         name: "Vocal Leveler",
         params: &[
             ("threshold", -24.0),
@@ -208,6 +255,98 @@ pub static PRESETS: [Preset; 6] = [
     },
 ];
 
+/// Gain-reduction ballistics in the log domain: attack while the reduction
+/// deepens, an optional hold at the deepest point, then release. In dual mode
+/// the release runs as two parallel recoveries (a fast one and a slow one)
+/// whose average is the gain, so it eases back quickly at first and finishes
+/// slowly.
+#[derive(Clone, Copy, Debug)]
+struct Ballistics {
+    attack: f32,
+    fast: f32,
+    slow: f32,
+    dual: bool,
+    hold_samples: u32,
+    hold: u32,
+    state_fast: f32,
+    state_slow: f32,
+}
+
+impl Ballistics {
+    fn new() -> Ballistics {
+        Ballistics {
+            attack: 0.0,
+            fast: 0.999,
+            slow: 0.999,
+            dual: false,
+            hold_samples: 0,
+            hold: 0,
+            state_fast: 0.0,
+            state_slow: 0.0,
+        }
+    }
+
+    fn set(&mut self, attack_s: f32, release_s: f32, hold_s: f32, dual: bool, sample_rate: f32) {
+        self.attack = time_coeff(attack_s, sample_rate);
+        self.dual = dual;
+        if dual {
+            self.fast = time_coeff(release_s * 0.3, sample_rate);
+            self.slow = time_coeff(release_s * 3.0, sample_rate);
+        } else {
+            self.fast = time_coeff(release_s, sample_rate);
+            self.slow = self.fast;
+        }
+        self.hold_samples = (hold_s * sample_rate) as u32;
+    }
+
+    fn reset(&mut self) {
+        self.state_fast = 0.0;
+        self.state_slow = 0.0;
+        self.hold = 0;
+    }
+
+    /// Current gain in dB (zero or negative).
+    fn value_db(&self) -> f32 {
+        if self.dual {
+            0.5 * (self.state_fast + self.state_slow)
+        } else {
+            self.state_fast
+        }
+    }
+
+    /// Moves toward `target_db` (zero or negative); returns the new gain.
+    #[inline]
+    fn process(&mut self, target_db: f32) -> f32 {
+        if target_db < self.value_db() {
+            self.hold = self.hold_samples;
+        } else if self.hold > 0 {
+            self.hold -= 1;
+        }
+        let hold = self.hold > 0;
+        let step = |state: f32, release: f32| {
+            if target_db < state {
+                target_db + self.attack * (state - target_db)
+            } else if hold {
+                state
+            } else {
+                target_db + release * (state - target_db)
+            }
+        };
+        self.state_fast = step(self.state_fast, self.fast);
+        self.state_slow = if self.dual {
+            step(self.state_slow, self.slow)
+        } else {
+            self.state_fast
+        };
+        for st in [&mut self.state_fast, &mut self.state_slow] {
+            if *st > -1e-3 && target_db >= 0.0 {
+                *st = 0.0;
+            }
+        }
+        self.value_db()
+    }
+}
+
 /// Compressor. Read the current gain reduction with
 /// [`Compressor::gain_reduction_db`].
 pub struct Compressor {
@@ -215,7 +354,7 @@ pub struct Compressor {
     sample_rate: f32,
     computer: GainComputer,
     env: [EnvelopeFollower; 2],
-    smooth: [GainSmoother; 2],
+    smooth: [Ballistics; 2],
     sidechain: StereoBiquad,
     link: f32,
     makeup: Smoothed,
@@ -237,7 +376,7 @@ impl Compressor {
             sample_rate: 48_000.0,
             computer: GainComputer::new(-18.0, 4.0, 6.0),
             env: [EnvelopeFollower::new(DetectorMode::Peak); 2],
-            smooth: [GainSmoother::new(); 2],
+            smooth: [Ballistics::new(); 2],
             sidechain: StereoBiquad::default(),
             link: 1.0,
             makeup: Smoothed::new(1.0),
@@ -267,18 +406,33 @@ impl Compressor {
 
     fn update_detector_times(&mut self) {
         let sr = self.sample_rate;
-        let mode = if self.store.get(ID_DETECTOR) >= 0.5 {
+        let kind = self.store.get(ID_DETECTOR) as usize;
+        let mode = if kind >= 1 {
             DetectorMode::Rms
         } else {
             DetectorMode::Peak
         };
+        // The peak follower lets go over a few milliseconds; the longer the
+        // release setting, the longer it holds, so the ripple of low notes
+        // never reaches the gain.
+        let peak_release = (self.store.get(ID_RELEASE) * 0.0002).clamp(0.008, 0.03);
         for e in &mut self.env {
             e.set_mode(mode);
-            match mode {
-                // Fast rise, short hold so ripple does not reach the gain.
-                DetectorMode::Peak => e.set_times(0.0, 0.010, sr),
-                DetectorMode::Rms => e.set_times(0.015, 0.015, sr),
+            match kind {
+                0 => e.set_times(0.0, peak_release, sr),
+                1 => e.set_times(0.015, 0.015, sr),
+                _ => e.set_times(0.003, 0.05, sr),
             }
+        }
+    }
+
+    fn update_ballistics(&mut self) {
+        let a = self.store.get(ID_ATTACK) * 0.001;
+        let r = self.store.get(ID_RELEASE) * 0.001;
+        let h = self.store.get(ID_HOLD) * 0.001;
+        let dual = self.store.get(ID_DETECTOR) >= 1.5;
+        for s in &mut self.smooth {
+            s.set(a, r, h, dual, self.sample_rate);
         }
     }
 }
@@ -321,15 +475,16 @@ impl Fx for Compressor {
                 );
                 self.makeup.set_target(db_to_gain(self.total_makeup_db()));
             }
-            ID_ATTACK | ID_RELEASE => {
-                let a = self.store.get(ID_ATTACK) * 0.001;
-                let r = self.store.get(ID_RELEASE) * 0.001;
-                for s in &mut self.smooth {
-                    s.set_times(a, r, sr);
-                }
+            ID_ATTACK | ID_HOLD => self.update_ballistics(),
+            ID_RELEASE => {
+                self.update_ballistics();
+                self.update_detector_times();
             }
             ID_MIX => self.mix.set_target(value),
-            ID_DETECTOR => self.update_detector_times(),
+            ID_DETECTOR => {
+                self.update_detector_times();
+                self.update_ballistics();
+            }
             ID_SC_HPF => {
                 let c = if value <= 20.5 {
                     Coeffs::IDENTITY
@@ -593,5 +748,125 @@ mod tests {
             c.process(&ctx, &[], &mut l, &mut r);
         }
         assert!(c.gain_reduction_db() < 0.01);
+    }
+
+    /// Level of the harmonics 2..=5 against the fundamental, in dB, for a
+    /// steady low sine at `amp` through the compressor.
+    fn harmonic_distortion_db(c: &mut Compressor, freq: f32, amp: f32) -> f32 {
+        let ctx = ProcessContext::new(SR);
+        let n = 48_128;
+        let mut out = Vec::with_capacity(n);
+        for block in 0..(2 * n / 256) {
+            let mut l = sine_block(amp, freq, block * 256, 256);
+            let mut r = l.clone();
+            c.process(&ctx, &[], &mut l, &mut r);
+            if block >= n / 256 {
+                out.extend_from_slice(&l);
+            }
+        }
+        out.truncate(48_000);
+        let tone = |f: f32| {
+            let (mut re, mut im) = (0.0f64, 0.0f64);
+            for (i, v) in out.iter().enumerate() {
+                let ph = std::f64::consts::TAU * f64::from(f) * (n + i) as f64 / f64::from(SR);
+                re += f64::from(*v) * ph.cos();
+                im += f64::from(*v) * ph.sin();
+            }
+            (re * re + im * im).sqrt()
+        };
+        let harm: f64 = (2..=5)
+            .map(|k| tone(freq * k as f32).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        (20.0 * (harm / tone(freq)).log10()) as f32
+    }
+
+    #[test]
+    fn low_notes_are_compressed_without_audible_distortion() {
+        for mode in [0.0f32, 1.0, 2.0] {
+            let mut c = Compressor::new();
+            c.set_param(ID_THRESHOLD, -18.0);
+            c.set_param(ID_RATIO, 4.0);
+            c.set_param(ID_ATTACK, 10.0);
+            c.set_param(ID_RELEASE, 150.0);
+            c.set_param(ID_DETECTOR, mode);
+            c.prepare(SR, 256);
+            let thd = harmonic_distortion_db(&mut c, 60.0, 0.5);
+            assert!(c.gain_reduction_db() > 4.0, "mode {mode}: no reduction");
+            assert!(thd < -62.0, "mode {mode}: harmonics at {thd} dB");
+        }
+    }
+
+    #[test]
+    fn hold_keeps_the_reduction_before_release_begins() {
+        let gr_after = |hold: f32, gap_ms: usize| {
+            let mut c = Compressor::new();
+            c.set_param(ID_THRESHOLD, -30.0);
+            c.set_param(ID_RATIO, 10.0);
+            c.set_param(ID_KNEE, 0.0);
+            c.set_param(ID_ATTACK, 1.0);
+            c.set_param(ID_RELEASE, 40.0);
+            c.set_param(ID_HOLD, hold);
+            c.prepare(SR, 256);
+            let ctx = ProcessContext::new(SR);
+            for block in 0..60 {
+                let mut l = sine_block(0.5, 200.0, block * 256, 256);
+                let mut r = l.clone();
+                c.process(&ctx, &[], &mut l, &mut r);
+            }
+            let peak = c.gain_reduction_db();
+            let frames = SR as usize * gap_ms / 1000;
+            for _ in 0..(frames / 8) {
+                let (mut l, mut r) = (vec![0.0; 8], vec![0.0; 8]);
+                c.process(&ctx, &[], &mut l, &mut r);
+            }
+            (peak, c.gain_reduction_db())
+        };
+        let (peak, after) = gr_after(0.0, 50);
+        assert!(after < peak * 0.5, "no hold: {after} of {peak} dB left");
+        let (peak, after) = gr_after(80.0, 50);
+        assert!(
+            after > peak * 0.95,
+            "hold 80 ms: {after} of {peak} dB left at 50 ms"
+        );
+        let (peak, after) = gr_after(80.0, 400);
+        assert!(
+            after < peak * 0.1,
+            "hold 80 ms: {after} of {peak} dB left at 400 ms"
+        );
+    }
+
+    #[test]
+    fn glue_release_is_slower_but_complete() {
+        // The glue mode lets go more slowly than RMS with the same setting
+        // (a slow second stage and a smoother detector), but still lets go.
+        let remaining = |mode: f32, gap_ms: usize| {
+            let mut c = Compressor::new();
+            c.set_param(ID_THRESHOLD, -24.0);
+            c.set_param(ID_RATIO, 4.0);
+            c.set_param(ID_ATTACK, 5.0);
+            c.set_param(ID_RELEASE, 200.0);
+            c.set_param(ID_KNEE, 0.0);
+            c.set_param(ID_DETECTOR, mode);
+            c.prepare(SR, 256);
+            let ctx = ProcessContext::new(SR);
+            for block in 0..200 {
+                let mut l = sine_block(0.5, 300.0, block * 256, 256);
+                let mut r = l.clone();
+                c.process(&ctx, &[], &mut l, &mut r);
+            }
+            let peak = c.gain_reduction_db();
+            let frames = SR as usize * gap_ms / 1000;
+            for _ in 0..(frames / 8) {
+                let (mut l, mut r) = (vec![0.0; 8], vec![0.0; 8]);
+                c.process(&ctx, &[], &mut l, &mut r);
+            }
+            c.gain_reduction_db() / peak
+        };
+        let (rms_early, glue_early) = (remaining(1.0, 100), remaining(2.0, 100));
+        let (rms_late, glue_late) = (remaining(1.0, 800), remaining(2.0, 800));
+        assert!(glue_late > rms_late, "{glue_late} vs {rms_late}");
+        assert!(glue_early > rms_early, "{glue_early} vs {rms_early}");
+        assert!(glue_late < 0.3, "glue should still let go: {glue_late}");
     }
 }
