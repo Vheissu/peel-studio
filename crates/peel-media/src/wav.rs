@@ -42,10 +42,10 @@ impl Default for WavFormat {
 
 /// xorshift64* generator for dither. Deterministic, so the same input always
 /// produces the same file.
-struct Rng(u64);
+pub(crate) struct Rng(u64);
 
 impl Rng {
-    fn new(stream: u64) -> Rng {
+    pub(crate) fn new(stream: u64) -> Rng {
         Rng(0x9E37_79B9_7F4A_7C15 ^ stream.wrapping_mul(0xD1B5_4A32_D192_ED03) | 1)
     }
 
@@ -60,7 +60,7 @@ impl Rng {
 
     /// Triangular noise with a peak of one least-significant bit: the sum of
     /// two independent uniform ±0.5 LSB values.
-    fn tpdf(&mut self) -> f64 {
+    pub(crate) fn tpdf(&mut self) -> f64 {
         self.next() + self.next()
     }
 }

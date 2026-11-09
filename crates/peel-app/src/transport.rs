@@ -1,6 +1,7 @@
 //! Top bar: transport, tempo, position, pattern picker and master meter.
 
 use peel_document::{Id, PALETTE, Pattern, Time};
+use peel_media::AudioFormat;
 use peel_session::PlayMode;
 use peel_ui::Id as W;
 use peel_ui::{Align, MenuItem, Rect, Ui, WindowControl, icons, vec2};
@@ -409,7 +410,10 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
             ui.set_cursor(peel_ui::CursorIcon::Pointer);
         }
     }
-    ui.tooltip(&export, "Render the arrangement to WAV (Cmd/Ctrl+E)");
+    ui.tooltip(
+        &export,
+        "Export the arrangement as audio or MIDI (Cmd/Ctrl+E)",
+    );
     if export.clicked {
         studio.export();
     }
@@ -750,12 +754,18 @@ fn export_panel(ui: &mut Ui, anchor: Rect, studio: &mut Studio) {
     }
     let t = ui.theme.clone();
     let screen = ui.screen();
-    let w = 300.0;
+    let w = 440.0f32.min(screen.w - 16.0);
+    let has_dither = studio.ws.export_format != AudioFormat::Mp3;
+    let h = if has_dither { 400.0 } else { 364.0 };
     let r = Rect {
-        x: (anchor.right() - w).min(screen.right() - w - 8.0),
-        y: anchor.bottom() + 6.0,
+        x: (anchor.right() - w)
+            .min(screen.right() - w - 8.0)
+            .max(screen.x + 8.0),
+        y: (anchor.bottom() + 6.0)
+            .min(screen.bottom() - h - 8.0)
+            .max(screen.y + 8.0),
         w,
-        h: 250.0,
+        h,
     };
     let mut action = 0;
     ui.popup_panel(id, r, |ui, r| {
@@ -771,39 +781,117 @@ fn export_panel(ui: &mut Ui, anchor: Rect, studio: &mut Studio) {
         let row = |body: &mut Rect| {
             let mut r = body.cut_top(28.0);
             body.cut_top(8.0);
-            let label = r.cut_left(64.0);
+            let label = r.cut_left(80.0);
             (label, r)
         };
         let (l, c) = row(&mut body);
         ui.text(l, "Format", t.caption, t.text_dim, Align::Start);
-        let bits = [16u16, 24, 32];
-        let mut i = bits
+        let formats = [
+            AudioFormat::Wav,
+            AudioFormat::Mp3,
+            AudioFormat::Flac,
+            AudioFormat::Aiff,
+        ];
+        let mut i = formats
             .iter()
-            .position(|b| *b == studio.ws.export_bits)
-            .unwrap_or(1);
+            .position(|f| *f == studio.ws.export_format)
+            .unwrap_or(0);
         if ui.segmented(
-            W::new("export-bits"),
+            W::new("export-format"),
             c,
-            &["16-bit", "24-bit", "32 float"],
+            &["WAV", "MP3", "FLAC", "AIFF"],
             &mut i,
         ) {
-            studio.ws.export_bits = bits[i];
+            studio.ws.export_format = formats[i];
+            if studio.ws.export_format != AudioFormat::Wav && studio.ws.export_bits == 32 {
+                studio.ws.export_bits = 24;
+            }
+            if !studio
+                .ws
+                .export_format
+                .supported_sample_rates()
+                .contains(&studio.ws.export_rate)
+            {
+                studio.ws.export_rate = 48_000;
+            }
+        }
+        ui.describe_node(
+            W::new("export-format"),
+            peel_ui::Semantics::patch().label("Audio format"),
+        );
+        let (l, c) = row(&mut body);
+        if studio.ws.export_format == AudioFormat::Mp3 {
+            ui.text(l, "kbps", t.caption, t.text_dim, Align::Start);
+            let bitrates = [128, 192, 256, 320];
+            let mut i = bitrates
+                .iter()
+                .position(|b| *b == studio.ws.export_bitrate)
+                .unwrap_or(3);
+            if ui.segmented(
+                W::new("export-bitrate"),
+                c,
+                &["128", "192", "256", "320"],
+                &mut i,
+            ) {
+                studio.ws.export_bitrate = bitrates[i];
+            }
+            ui.describe_node(
+                W::new("export-bitrate"),
+                peel_ui::Semantics::patch().label("MP3 bitrate in kilobits per second"),
+            );
+        } else {
+            ui.text(l, "Depth", t.caption, t.text_dim, Align::Start);
+            let bits: &[u16] = if studio.ws.export_format == AudioFormat::Wav {
+                &[16, 24, 32]
+            } else {
+                &[16, 24]
+            };
+            let labels: &[&str] = if studio.ws.export_format == AudioFormat::Wav {
+                &["16-bit", "24-bit", "32 float"]
+            } else {
+                &["16-bit", "24-bit"]
+            };
+            let mut i = bits
+                .iter()
+                .position(|b| *b == studio.ws.export_bits)
+                .unwrap_or(1);
+            if ui.segmented(W::new("export-bits"), c, labels, &mut i) {
+                studio.ws.export_bits = bits[i];
+            }
+            ui.describe_node(
+                W::new("export-bits"),
+                peel_ui::Semantics::patch().label("Bit depth"),
+            );
         }
         let (l, c) = row(&mut body);
-        ui.text(l, "Rate", t.caption, t.text_dim, Align::Start);
-        let rates = [44_100u32, 48_000, 96_000];
+        ui.text(l, "Rate (kHz)", t.caption, t.text_dim, Align::Start);
+        let rates = studio.ws.export_format.supported_sample_rates();
+        let labels: Vec<String> = rates
+            .iter()
+            .map(|rate| format!("{}", *rate as f32 / 1000.0))
+            .collect();
+        let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
         let mut i = rates
             .iter()
             .position(|x| *x == studio.ws.export_rate)
             .unwrap_or(1);
-        if ui.segmented(
-            W::new("export-rate"),
-            c,
-            &["44.1 kHz", "48 kHz", "96 kHz"],
-            &mut i,
-        ) {
+        if ui.segmented(W::new("export-rate"), c, &labels, &mut i) {
             studio.ws.export_rate = rates[i];
         }
+        ui.describe_node(
+            W::new("export-rate"),
+            peel_ui::Semantics::patch().label("Sample rate in kilohertz"),
+        );
+        let (l, c) = row(&mut body);
+        ui.text(l, "Channels", t.caption, t.text_dim, Align::Start);
+        let mut i = usize::from(studio.ws.export_mono);
+        if ui.segmented(W::new("export-channels"), c, &["Stereo", "Mono"], &mut i) {
+            studio.ws.export_mono = i == 1;
+        }
+        ui.describe_node(
+            W::new("export-channels"),
+            peel_ui::Semantics::patch().label("Output channels"),
+        );
         let (l, c) = row(&mut body);
         ui.text(l, "Tail", t.caption, t.text_dim, Align::Start);
         let tails = [0.0f32, 3.0, 8.0];
@@ -814,27 +902,79 @@ fn export_panel(ui: &mut Ui, anchor: Rect, studio: &mut Studio) {
         if ui.segmented(W::new("export-tail"), c, &["None", "3 s", "8 s"], &mut i) {
             studio.ws.export_tail = tails[i];
         }
+        ui.describe_node(
+            W::new("export-tail"),
+            peel_ui::Semantics::patch().label("Effect tail"),
+        );
         let (l, c) = row(&mut body);
         ui.text(l, "Files", t.caption, t.text_dim, Align::Start);
         let mut i = usize::from(studio.ws.export_stems);
         if ui.segmented(W::new("export-stems"), c, &["Mix", "Stems"], &mut i) {
             studio.ws.export_stems = i == 1;
         }
+        ui.describe_node(
+            W::new("export-stems"),
+            peel_ui::Semantics::patch().label("Export files"),
+        );
+        let (l, c) = row(&mut body);
+        ui.text(l, "Normalize", t.caption, t.text_dim, Align::Start);
+        let mut i = usize::from(studio.ws.export_normalize);
+        if ui.segmented(
+            W::new("export-normalize"),
+            c,
+            &["Off", "-1 dB peak"],
+            &mut i,
+        ) {
+            studio.ws.export_normalize = i == 1;
+        }
+        ui.describe_node(
+            W::new("export-normalize"),
+            peel_ui::Semantics::patch().label("Peak normalization, applied to each file"),
+        );
+        if studio.ws.export_format != AudioFormat::Mp3 {
+            let (l, c) = row(&mut body);
+            ui.text(l, "Dither", t.caption, t.text_dim, Align::Start);
+            if studio.ws.export_bits == 32 {
+                ui.text(
+                    c,
+                    "Not used for float audio",
+                    t.caption,
+                    t.text_dim,
+                    Align::Start,
+                );
+            } else {
+                let mut i = usize::from(studio.ws.export_dither);
+                if ui.segmented(W::new("export-dither"), c, &["Off", "TPDF"], &mut i) {
+                    studio.ws.export_dither = i == 1;
+                }
+                ui.describe_node(
+                    W::new("export-dither"),
+                    peel_ui::Semantics::patch().label("Dither"),
+                );
+            }
+        }
         body.cut_top(6.0);
         let mut buttons = body.cut_top(34.0);
         let midi = buttons.cut_left(100.0);
         buttons.cut_left(8.0);
-        let label = if studio.ws.export_stems {
-            "Export stems"
+        let label = if studio.ws.export.is_some() {
+            "Exporting…".to_string()
+        } else if studio.ws.export_stems {
+            "Export stems".to_string()
         } else {
-            "Export WAV"
+            format!("Export {}", studio.ws.export_format.label())
         };
         if ui
-            .button_primary(W::new("export-audio"), buttons, label)
+            .button_primary(W::new("export-audio"), buttons, &label)
             .clicked
+            && studio.ws.export.is_none()
         {
             action = 1;
         }
+        ui.describe_node(
+            W::new("export-audio"),
+            peel_ui::Semantics::patch().disabled(studio.ws.export.is_some()),
+        );
         if ui.button(W::new("export-midi"), midi, "MIDI").clicked {
             action = 2;
         }

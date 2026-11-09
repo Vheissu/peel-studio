@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use peel_document::{ClipContent, Id, Project};
 use peel_dsp::{Device, SampleBuffer};
 use peel_engine::{EngineCommand, EngineConfig, OfflineEngine, Slot};
+use peel_media::{AudioEncoding, AudioFormat};
 
 use crate::compile::{CompileContext, PlayMode, compile};
 
@@ -20,6 +21,90 @@ pub struct ExportSettings {
     pub bits: u16,
     /// Seconds rendered after the arrangement ends (reverb and delay tails).
     pub tail_seconds: f32,
+}
+
+impl Default for ExportSettings {
+    fn default() -> Self {
+        Self {
+            path: PathBuf::new(),
+            sample_rate: 48_000,
+            bits: 24,
+            tail_seconds: 3.0,
+        }
+    }
+}
+
+/// Format and processing options for an offline mix or stem export.
+#[derive(Clone, Debug)]
+pub struct AudioExportSettings {
+    pub render: ExportSettings,
+    pub format: AudioFormat,
+    /// Constant MP3 bitrate; ignored by lossless formats.
+    pub bitrate_kbps: u16,
+    /// TPDF dither for integer PCM output.
+    pub dither: bool,
+    /// Downmix left and right at equal gain before encoding.
+    pub mono: bool,
+    /// Adjust the file's peak to -1 dBFS after downmixing. Silent files stay silent.
+    pub normalize: bool,
+}
+
+impl Default for AudioExportSettings {
+    fn default() -> Self {
+        Self {
+            render: ExportSettings::default(),
+            format: AudioFormat::Wav,
+            bitrate_kbps: 320,
+            dither: true,
+            mono: false,
+            normalize: false,
+        }
+    }
+}
+
+impl From<ExportSettings> for AudioExportSettings {
+    fn from(render: ExportSettings) -> Self {
+        Self {
+            render,
+            ..Self::default()
+        }
+    }
+}
+
+impl AudioExportSettings {
+    pub fn encoding(&self) -> AudioEncoding {
+        AudioEncoding {
+            format: self.format,
+            bits: self.render.bits,
+            bitrate_kbps: self.bitrate_kbps,
+            dither: self.dither,
+        }
+    }
+
+    /// Validate before constructing devices or allocating render buffers.
+    pub fn validate(&self) -> Result<(), String> {
+        self.encoding()
+            .validate(self.render.sample_rate)
+            .map_err(|e| e.to_string())?;
+        if !self.render.tail_seconds.is_finite()
+            || !(0.0..=60.0).contains(&self.render.tail_seconds)
+        {
+            return Err("Tail must be between 0 and 60 seconds".into());
+        }
+        if self.render.path.file_name().is_none() {
+            return Err("Choose an export file".into());
+        }
+        let extension =
+            AudioFormat::from_extension(&self.render.path).map_err(|e| e.to_string())?;
+        if extension != self.format {
+            return Err(format!(
+                "{} exports need a .{} file extension",
+                self.format.label(),
+                self.format.extension()
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// A running export; poll `progress()` and `result()` from the UI.
@@ -39,7 +124,7 @@ pub type Prebuilt = HashMap<Id, Box<dyn Device>>;
 pub(crate) struct Render {
     pub project: Project,
     pub prebuilt: Prebuilt,
-    pub settings: ExportSettings,
+    pub settings: AudioExportSettings,
 }
 
 /// Mixer tracks worth a stem: anything a channel, an audio clip or another
@@ -85,6 +170,15 @@ pub(crate) fn file_safe(name: &str) -> String {
 }
 
 impl ExportJob {
+    pub(crate) fn failed(error: String) -> Self {
+        Self {
+            progress: Arc::new(AtomicU32::new(0)),
+            cancel: Arc::new(AtomicBool::new(false)),
+            result: Arc::new(Mutex::new(Some(Err(error)))),
+            plugins: Vec::new(),
+        }
+    }
+
     /// Starts an export. `loads` are audio files the clips need that the
     /// session has not decoded yet; the export thread decodes them itself.
     pub(crate) fn start(
@@ -93,9 +187,10 @@ impl ExportJob {
         loads: Vec<(Id, PathBuf)>,
         prebuilt: Prebuilt,
         plugins: Vec<peel_host_clap::ClapHandle>,
-        settings: ExportSettings,
+        settings: impl Into<AudioExportSettings>,
     ) -> ExportJob {
-        let rate = settings.sample_rate;
+        let settings = settings.into();
+        let rate = settings.render.sample_rate;
         let renders = vec![Render {
             project,
             prebuilt,
@@ -195,6 +290,17 @@ pub fn render(
     progress: &AtomicU32,
     cancel: &AtomicBool,
 ) -> Result<PathBuf, String> {
+    render_audio(project, samples, &settings.clone().into(), progress, cancel)
+}
+
+/// Renders to the selected audio format with optional downmixing and normalization.
+pub fn render_audio(
+    project: &Project,
+    samples: &HashMap<Id, Arc<SampleBuffer>>,
+    settings: &AudioExportSettings,
+    progress: &AtomicU32,
+    cancel: &AtomicBool,
+) -> Result<PathBuf, String> {
     let report = |f: f32| progress.store(f.to_bits(), Ordering::Relaxed);
     render_with(project, samples, Prebuilt::new(), settings, &report, cancel)
 }
@@ -204,10 +310,15 @@ pub fn render_with(
     project: &Project,
     samples: &HashMap<Id, Arc<SampleBuffer>>,
     mut prebuilt: Prebuilt,
-    settings: &ExportSettings,
+    options: &AudioExportSettings,
     progress: &dyn Fn(f32),
     cancel: &AtomicBool,
 ) -> Result<PathBuf, String> {
+    options.validate()?;
+    if cancel.load(Ordering::Relaxed) {
+        return Err("Export cancelled".into());
+    }
+    let settings = &options.render;
     let rate = settings.sample_rate as f32;
     let config = EngineConfig {
         max_block: 512,
@@ -267,14 +378,30 @@ pub fn render_with(
     if end_beat <= 0.0 {
         return Err("The arrangement is empty. Place patterns in the playlist first.".into());
     }
-    let total = (tempo.beat_to_seconds(end_beat) as f32 + settings.tail_seconds.max(0.0)) * rate;
-    let total = total.ceil() as usize;
+    let frames = ((tempo.beat_to_seconds(end_beat) + f64::from(settings.tail_seconds))
+        * f64::from(settings.sample_rate))
+    .ceil();
+    if !frames.is_finite()
+        || frames <= 0.0
+        || frames > (isize::MAX as usize / size_of::<f32>()) as f64
+    {
+        return Err("The arrangement is too long to export".into());
+    }
+    let total = frames as usize;
     engine.send(EngineCommand::SetPlan(Box::new(plan)));
     engine.send(EngineCommand::Seek { beat: 0.0 });
     engine.send(EngineCommand::Play);
 
-    let mut left = vec![0.0f32; total];
-    let mut right = vec![0.0f32; total];
+    let allocate = || -> Result<Vec<f32>, String> {
+        let mut buffer = Vec::new();
+        buffer
+            .try_reserve_exact(total)
+            .map_err(|_| "Not enough memory to export this arrangement".to_string())?;
+        buffer.resize(total, 0.0);
+        Ok(buffer)
+    };
+    let mut left = allocate()?;
+    let mut right = allocate()?;
     let chunk = 4096;
     let mut pos = 0;
     while pos < total {
@@ -287,19 +414,64 @@ pub fn render_with(
         progress(pos as f32 / total as f32 * 0.95);
         engine.drain_retired();
     }
-    let format = peel_media::WavFormat {
-        bits: settings.bits,
-        dither: settings.bits < 32,
+    process_output(&mut left, &mut right, options, cancel)?;
+    let channels: Vec<&[f32]> = if options.mono {
+        vec![&left]
+    } else {
+        vec![&left, &right]
     };
-    peel_media::write_wav(
+    peel_media::write_audio(
         &settings.path,
-        &[&left, &right],
+        &channels,
         settings.sample_rate,
-        format,
+        options.encoding(),
+        cancel,
     )
     .map_err(|e| e.to_string())?;
     progress(1.0);
     Ok(settings.path.clone())
+}
+
+fn process_output(
+    left: &mut [f32],
+    right: &mut [f32],
+    options: &AudioExportSettings,
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    let mut peak = 0.0f32;
+    for (ls, rs) in left.chunks_mut(4096).zip(right.chunks_mut(4096)) {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("Export cancelled".into());
+        }
+        for (l, r) in ls.iter_mut().zip(rs) {
+            if !l.is_finite() {
+                *l = 0.0;
+            }
+            if !r.is_finite() {
+                *r = 0.0;
+            }
+            if options.mono {
+                *l = *l * 0.5 + *r * 0.5;
+            }
+            peak = peak.max(l.abs());
+            if !options.mono {
+                peak = peak.max(r.abs());
+            }
+        }
+    }
+    if options.normalize && peak > 0.0 {
+        let gain = f64::from(peel_dsp::util::db_to_gain(-1.0)) / f64::from(peak);
+        for (ls, rs) in left.chunks_mut(4096).zip(right.chunks_mut(4096)) {
+            if cancel.load(Ordering::Relaxed) {
+                return Err("Export cancelled".into());
+            }
+            for (l, r) in ls.iter_mut().zip(rs) {
+                *l = (f64::from(*l) * gain) as f32;
+                *r = (f64::from(*r) * gain) as f32;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Decoded audio for the arrangement's audible audio clips at the export
@@ -358,4 +530,44 @@ pub(crate) fn stretched(src: &SampleBuffer, ratio: f64) -> SampleBuffer {
     let mut out = SampleBuffer::new(src.name.clone(), src.sample_rate, channels);
     out.root_key = src.root_key;
     out
+}
+
+#[cfg(test)]
+mod output_tests {
+    use super::*;
+
+    #[test]
+    fn mono_averages_channels_before_normalizing_and_silence_stays_finite() {
+        let options = AudioExportSettings {
+            mono: true,
+            normalize: true,
+            ..Default::default()
+        };
+        let (mut left, mut right) = ([0.5, -0.5, f32::NAN], [0.25, 0.5, f32::INFINITY]);
+        process_output(&mut left, &mut right, &options, &AtomicBool::new(false)).unwrap();
+        assert!((left[0] - peel_dsp::util::db_to_gain(-1.0)).abs() < 1e-6);
+        assert_eq!(left[1], 0.0, "opposite channels cancel in mono");
+        assert_eq!(left[2], 0.0);
+        let (mut left, mut right) = ([0.0; 3], [0.0; 3]);
+        process_output(&mut left, &mut right, &options, &AtomicBool::new(false)).unwrap();
+        assert_eq!(left, [0.0; 3]);
+    }
+
+    #[test]
+    fn stereo_normalization_preserves_channel_balance_and_float_headroom() {
+        let mut options = AudioExportSettings {
+            normalize: true,
+            ..Default::default()
+        };
+        let (mut left, mut right) = ([2.0, -1.0], [1.0, -0.5]);
+        process_output(&mut left, &mut right, &options, &AtomicBool::new(false)).unwrap();
+        assert!((left[0] - peel_dsp::util::db_to_gain(-1.0)).abs() < 1e-6);
+        assert_eq!(left[0], right[0] * 2.0);
+        assert_eq!(left[1], right[1] * 2.0);
+        options.normalize = false;
+        let (mut left, mut right) = ([2.0], [-3.0]);
+        process_output(&mut left, &mut right, &options, &AtomicBool::new(false)).unwrap();
+        assert_eq!(left, [2.0]);
+        assert_eq!(right, [-3.0]);
+    }
 }

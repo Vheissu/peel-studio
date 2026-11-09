@@ -49,7 +49,8 @@ effects. There is no web view.
 - Exact rational musical time, sample-accurate playback that cannot drift,
   and a realtime audio path verified to make no allocations.
 - Open project files with atomic saves, autosave and crash recovery,
-  Standard MIDI File import and export, WAV export of the mix or stems,
+  Standard MIDI File import and export, WAV, MP3, FLAC and AIFF export of
+  the mix or stems,
   undo history.
 - Screen reader support through AccessKit and keyboard focus traversal.
 
@@ -72,6 +73,11 @@ cargo run -p peel-cli -- help  # headless tools
 cargo test --workspace
 ```
 
+The MP3 encoder is built from bundled LAME sources, so building also needs
+a C compiler (Xcode Command Line Tools on macOS, Visual Studio Build Tools
+on Windows, or a C toolchain on Linux). Audio export needs no external
+encoder at runtime.
+
 Linux also needs ALSA development headers (`libasound2-dev` on Debian and
 Ubuntu) and a Vulkan driver.
 
@@ -88,11 +94,38 @@ without it the bundle is ad-hoc signed for local use.
 
 ```sh
 peel render song.peelproj mix.wav --rate 48000 --bits 24
+peel render song.peelproj mix.mp3 --bitrate 192 --normalize
+peel render song.peelproj mix.flac --bits 24 --rate 96000
+peel render song.peelproj mix.aiff --mono --tail 8
 peel render --demo demo.wav       # the demo song
 peel info song.peelproj
 peel validate song.peelproj
 peel devices                      # every native instrument and effect
 ```
+
+## Export
+
+Open Export from the toolbar or press Cmd/Ctrl+E. Choose a mix or one file
+per mixer track, then the format and quality:
+
+| Format | Quality |
+| --- | --- |
+| WAV | 16-bit or 24-bit PCM, or 32-bit float |
+| MP3 | 128, 192, 256 or 320 kbps constant bitrate; 44.1 or 48 kHz |
+| FLAC | Lossless 16-bit or 24-bit PCM; up to 96 kHz |
+| AIFF | Uncompressed 16-bit or 24-bit PCM |
+
+WAV and AIFF offer sample rates from 44.1 to 192 kHz; FLAC supports up to
+96 kHz. Stereo or mono, effect tails and optional normalization are
+available for every format.
+Normalization adjusts each rendered file independently to -1 dBFS peak;
+it isn't a loudness target. Leave it off for stems whose relative levels
+you want to preserve. MP3 encoding can shift the decoded peak slightly.
+TPDF dither can be enabled for integer PCM output.
+
+The headless renderer chooses the format from the output extension and
+accepts `--rate`, `--bits`, `--bitrate`, `--tail`, `--mono`, `--normalize`
+and `--no-dither`. Existing WAV render commands still work.
 
 ## Layout
 
@@ -105,7 +138,9 @@ peel devices                      # every native instrument and effect
 
 ## License
 
-GPL-3.0-or-later. Bundled fonts and icons keep their own licenses; see
+GPL-3.0-or-later. MP3 encoding statically links LAME through
+`mp3lame-encoder` and `mp3lame-sys` (LGPL-3.0); FLAC encoding uses
+`flacenc` (Apache-2.0). Bundled fonts and icons keep their own licenses; see
 [assets/LICENSES.md](assets/LICENSES.md).
 
 Peel Studio is an independent project. It is not affiliated with

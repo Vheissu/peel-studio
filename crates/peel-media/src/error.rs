@@ -19,9 +19,11 @@ pub enum MediaError {
     /// The audio data is damaged beyond what the decoder can skip.
     #[error("{}: could not decode audio ({reason})", path.display())]
     Decode { path: PathBuf, reason: String },
-    /// A WAV could not be written.
-    #[error("{}: could not write WAV ({reason})", path.display())]
+    /// An audio file could not be written.
+    #[error("{}: could not write audio ({reason})", path.display())]
     Encode { path: PathBuf, reason: String },
+    #[error("Export cancelled")]
+    Cancelled,
     /// The arguments make no sense (empty channel list, unequal lengths,
     /// unsupported bit depth, zero sample rate).
     #[error("invalid argument: {0}")]

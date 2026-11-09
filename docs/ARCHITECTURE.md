@@ -18,7 +18,7 @@ the specification each crate owns.
 | Audio I/O | `cpal` 0.18 behind `peel-engine`'s backend | Core Audio, WASAPI, ALSA/PipeWire today; dedicated ASIO and HAL adapters later |
 | MIDI input | `midir` 0.11 behind `peel-midi-io` | Core MIDI, WinMM and ALSA sequencer with one API |
 | Engine queues | `rtrb` | Bounded, wait-free SPSC ring buffers |
-| Media | `symphonia` decode, `hound` WAV encode | Pure Rust, offline |
+| Media | `symphonia` decode; `hound` WAV, `flacenc` FLAC, bundled LAME MP3 and PCM AIFF encode | Offline, no external encoder process |
 | Persistence | JSON manifest plus content-addressed shards, `blake3` hashes | Open, inspectable and recoverable |
 
 ## Crates
@@ -32,7 +32,7 @@ the specification each crate owns.
 | `peel-effects` | Native effects | engine, GUI, document |
 | `peel-devices` | Registry of every native device type | engine, GUI |
 | `peel-engine` | Audio callback, transport, sequencer, mixer graph, telemetry, offline render | document, GUI |
-| `peel-media` | Decoding, resampling, WAV export, crash-safe WAV recording, waveform peaks | engine, GUI |
+| `peel-media` | Decoding, resampling, WAV/MP3/FLAC/AIFF export, crash-safe WAV recording, waveform peaks | engine, GUI |
 | `peel-project` | `.peelproj` save/load, atomic writes, asset collection | engine, GUI |
 | `peel-midi` | Standard MIDI File import/export | engine, GUI |
 | `peel-midi-io` | Hardware MIDI input: port discovery and hotplug, message parsing | engine, GUI, document |

@@ -1473,3 +1473,52 @@ fn chopping_an_audio_clip_cuts_it_at_each_hit() {
     assert_eq!(h.session().doc.undo_label(), Some("Chop at hits"));
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn export_controls_follow_the_codec_and_keep_valid_settings() {
+    use peel_media::AudioFormat;
+    let mut h = Harness::new();
+    h.studio.export();
+    h.frames(2);
+    h.click(W::new("export-bits").with(2usize));
+    h.click(W::new("export-rate").with(3usize));
+    assert_eq!(h.studio.ws.export_bits, 32);
+    assert_eq!(h.studio.ws.export_rate, 96_000);
+    h.click(W::new("export-format").with(1usize));
+    h.frames(2);
+    assert_eq!(h.studio.ws.export_format, AudioFormat::Mp3);
+    assert_eq!(h.studio.ws.export_rate, 48_000);
+    assert_eq!(h.studio.ws.export_bits, 24);
+    assert!(
+        h.ui.widget_rect(W::new("export-bits").with(0usize))
+            .is_none()
+    );
+    assert!(
+        h.ui.widget_rect(W::new("export-dither").with(0usize))
+            .is_none()
+    );
+    h.click(W::new("export-bitrate").with(1usize));
+    assert_eq!(h.studio.ws.export_bitrate, 192);
+    h.click(W::new("export-channels").with(1usize));
+    h.click(W::new("export-normalize").with(1usize));
+    h.click(W::new("export-stems").with(1usize));
+    assert!(h.studio.ws.export_mono && h.studio.ws.export_normalize && h.studio.ws.export_stems);
+    h.click(W::new("export-format").with(2usize));
+    h.frames(2);
+    assert_eq!(h.studio.ws.export_format, AudioFormat::Flac);
+    assert!(
+        h.ui.widget_rect(W::new("export-bits").with(2usize))
+            .is_none()
+    );
+    assert!(
+        h.ui.widget_rect(W::new("export-dither").with(0usize))
+            .is_some()
+    );
+    assert!(
+        h.ui.widget_rect(W::new("export-bitrate").with(0usize))
+            .is_none()
+    );
+    let export = h.rect(W::new("export-audio"));
+    assert!(export.bottom() <= 900.0);
+    assert!(export.right() <= 1440.0);
+}

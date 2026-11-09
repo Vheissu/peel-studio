@@ -18,7 +18,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Cmd scroll", "Zoom"),
     ("Right click", "Erase notes, clip menu"),
     ("Cmd S  /  Cmd O", "Save / open"),
-    ("Cmd E", "Export WAV"),
+    ("Cmd E", "Export audio"),
 ];
 
 /// Draws key caps and descriptions in `r`; returns the height used.

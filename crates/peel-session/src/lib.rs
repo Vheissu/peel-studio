@@ -30,7 +30,10 @@ pub use compile::{
     CompileContext, PlanIndex, PlayMode, clip_source_start_seconds, compile, same_structure,
     stretch_ratio, stretched_key,
 };
-pub use export::{ExportJob, ExportSettings, render as render_to_wav, stem_tracks};
+pub use export::{
+    AudioExportSettings, ExportJob, ExportSettings, render as render_to_wav, render_audio,
+    stem_tracks,
+};
 pub use io::{
     LiveTiming, MidiPortInfo, OutputDeviceInfo, PortSelection, RecordedMidi, list_output_devices,
 };
@@ -907,19 +910,24 @@ impl Session {
         self.sync();
     }
 
-    /// Renders one WAV per mixer track that carries sound (each track
+    /// Renders one audio file per mixer track that carries sound (each track
     /// soloed, so it keeps its buses and returns) on a background thread.
-    /// Files go next to `settings.path` as `<name> - <track>.wav`.
-    pub fn export_stems(&mut self, settings: ExportSettings) -> ExportJob {
+    /// Files go next to `settings.render.path` as `<name> - <track>.<format>`.
+    pub fn export_stems(&mut self, settings: impl Into<AudioExportSettings>) -> ExportJob {
+        let settings = settings.into();
+        if let Err(error) = settings.validate() {
+            return ExportJob::failed(error);
+        }
         self.capture_plugin_states();
         let project = self.doc.project().clone();
-        let base = settings.path.with_extension("");
+        let base = settings.render.path.with_extension("");
         let stem = base
             .file_name()
             .map_or("Export".to_string(), |s| s.to_string_lossy().into_owned());
         let dir = base.parent().map(Path::to_path_buf).unwrap_or_default();
         let mut renders = Vec::new();
         let mut handles = Vec::new();
+        let mut used_names = std::collections::HashSet::new();
         for track in export::stem_tracks(&project) {
             let mut p = project.clone();
             for t in &mut p.mixer.tracks {
@@ -929,14 +937,24 @@ impl Session {
                 .mixer
                 .track(track)
                 .map_or("Track".to_string(), |t| t.name.clone());
-            let path = dir.join(format!("{stem} - {}.wav", export::file_safe(&name)));
-            let (prebuilt, mut h) = self.offline_plugins(&p, settings.sample_rate);
+            let name = export::file_safe(&name);
+            let mut unique = name.clone();
+            let mut suffix = 2;
+            while !used_names.insert(unique.to_lowercase()) {
+                unique = format!("{name} ({suffix})");
+                suffix += 1;
+            }
+            let path = dir.join(format!("{stem} - {unique}.{}", settings.format.extension()));
+            let (prebuilt, mut h) = self.offline_plugins(&p, settings.render.sample_rate);
             handles.append(&mut h);
             renders.push(export::Render {
                 project: p,
                 prebuilt,
-                settings: ExportSettings {
-                    path,
+                settings: AudioExportSettings {
+                    render: ExportSettings {
+                        path,
+                        ..settings.render.clone()
+                    },
                     ..settings.clone()
                 },
             });
@@ -947,7 +965,7 @@ impl Session {
             samples,
             self.export_loads(),
             handles,
-            settings.sample_rate,
+            settings.render.sample_rate,
             Some(dir),
         )
     }
@@ -988,13 +1006,17 @@ impl Session {
             .collect()
     }
 
-    /// Renders the arrangement to a WAV file on a background thread.
-    pub fn export(&mut self, settings: ExportSettings) -> ExportJob {
+    /// Renders the arrangement to an audio file on a background thread.
+    pub fn export(&mut self, settings: impl Into<AudioExportSettings>) -> ExportJob {
+        let settings = settings.into();
+        if let Err(error) = settings.validate() {
+            return ExportJob::failed(error);
+        }
         // Plugins get their own instances, built here on the main thread
         // from their current state.
         self.capture_plugin_states();
         let project = self.doc.project().clone();
-        let (prebuilt, handles) = self.offline_plugins(&project, settings.sample_rate);
+        let (prebuilt, handles) = self.offline_plugins(&project, settings.render.sample_rate);
         let samples = self.cached_project_samples();
         ExportJob::start(
             project,

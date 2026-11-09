@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use peel_document::Id;
-use peel_session::{ExportSettings, PlayMode, Session};
+use peel_session::{AudioExportSettings, ExportSettings, PlayMode, Session};
 use peel_ui::Id as W;
 use peel_ui::{Align, App, KeyCode, NamedKey, Rect, Ui, WindowControl};
 
@@ -660,20 +660,33 @@ impl Studio {
         self.ws.export_panel = true;
     }
 
-    /// Renders the arrangement to WAV with the panel's settings.
+    /// Renders the arrangement with the panel's audio settings.
     pub fn export_audio(&mut self) {
         if self.ws.export.is_some() {
             return;
         }
-        let name = format!("{}.wav", self.session.project().meta.title);
-        let Some(path) = crate::dialogs::save(&name, "WAV audio", &["wav"]) else {
+        let format = self.ws.export_format;
+        let name = format!(
+            "{}.{}",
+            self.session.project().meta.title,
+            format.extension()
+        );
+        let filter = format!("{} audio", format.label());
+        let Some(path) = crate::dialogs::save(&name, &filter, &[format.extension()]) else {
             return;
         };
-        let settings = ExportSettings {
-            path,
-            sample_rate: self.ws.export_rate,
-            bits: self.ws.export_bits,
-            tail_seconds: self.ws.export_tail,
+        let settings = AudioExportSettings {
+            render: ExportSettings {
+                path,
+                sample_rate: self.ws.export_rate,
+                bits: self.ws.export_bits,
+                tail_seconds: self.ws.export_tail,
+            },
+            format,
+            bitrate_kbps: self.ws.export_bitrate,
+            dither: self.ws.export_dither,
+            mono: self.ws.export_mono,
+            normalize: self.ws.export_normalize,
         };
         self.ws.export = Some(if self.ws.export_stems {
             self.session.export_stems(settings)
@@ -771,6 +784,12 @@ impl Studio {
                     t.text_dim,
                     Align::Start,
                 );
+                if ui
+                    .button(W::new("cancel-export"), row.cut_left(64.0), "Cancel")
+                    .clicked
+                {
+                    job.cancel();
+                }
                 ui.request_repaint();
             }
         }

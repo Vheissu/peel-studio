@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use peel_document::{Id, Time};
+use peel_media::AudioFormat;
 use peel_session::ExportJob;
 use peel_ui::KeyCode;
 
@@ -103,6 +104,11 @@ pub struct Workspace {
     pub clipboard: Vec<peel_document::Note>,
     pub export_panel: bool,
     pub export_bits: u16,
+    pub export_format: AudioFormat,
+    pub export_bitrate: u16,
+    pub export_dither: bool,
+    pub export_mono: bool,
+    pub export_normalize: bool,
     pub export_rate: u32,
     pub export_tail: f32,
     /// Export one file per mixer track instead of the mix.
@@ -156,6 +162,11 @@ impl Default for Workspace {
             clipboard: Vec::new(),
             export_panel: false,
             export_bits: 24,
+            export_format: AudioFormat::Wav,
+            export_bitrate: 320,
+            export_dither: true,
+            export_mono: false,
+            export_normalize: false,
             export_rate: 48_000,
             export_tail: 3.0,
             export_stems: false,

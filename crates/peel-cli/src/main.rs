@@ -8,13 +8,22 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32};
 
 use peel_document::validate;
-use peel_session::{ExportSettings, render_to_wav, template};
+use peel_session::{AudioExportSettings, ExportSettings, render_audio, template};
 
 const USAGE: &str = "usage:
   peel info <project.peelproj>
   peel validate <project.peelproj>
-  peel render <project.peelproj | --demo> <out.wav> [--rate 48000] [--bits 24]
-  peel devices";
+  peel render <project.peelproj | --demo> <out.wav|mp3|flac|aiff> [options]
+  peel devices
+
+render options:
+  --rate <Hz>       Sample rate (default: 48000)
+  --bits <16|24|32> PCM bit depth; 32-bit float is WAV only (default: 24)
+  --bitrate <kbps>  MP3 CBR bitrate: 128, 192, 256, 320 (default: 320)
+  --tail <seconds>  Effect tail, 0 to 60 seconds (default: 3)
+  --mono           Downmix to mono
+  --normalize      Normalize each file to -1 dBFS peak
+  --no-dither      Disable TPDF dither for integer PCM";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -90,30 +99,50 @@ fn check(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn render(args: &[String]) -> Result<(), String> {
-    let src = args.first().ok_or(USAGE)?;
-    let out = PathBuf::from(args.get(1).ok_or(USAGE)?);
-    let mut rate = 48_000;
-    let mut bits = 24;
+fn render_options(args: &[String]) -> Result<(&str, AudioExportSettings), String> {
+    let src = args.first().ok_or(USAGE)?.as_str();
+    let path = PathBuf::from(args.get(1).ok_or(USAGE)?);
+    let format = peel_media::AudioFormat::from_extension(&path).map_err(|e| e.to_string())?;
+    let mut settings = AudioExportSettings {
+        render: ExportSettings {
+            path,
+            ..ExportSettings::default()
+        },
+        format,
+        ..AudioExportSettings::default()
+    };
     let mut i = 2;
     while i < args.len() {
-        match args[i].as_str() {
-            "--rate" => {
-                rate = args
-                    .get(i + 1)
-                    .and_then(|v| v.parse().ok())
-                    .ok_or("bad --rate")?
+        let option = args[i].as_str();
+        match option {
+            "--mono" => settings.mono = true,
+            "--normalize" => settings.normalize = true,
+            "--no-dither" => settings.dither = false,
+            "--rate" | "--bits" | "--bitrate" | "--tail" => {
+                i += 1;
+                let value = args
+                    .get(i)
+                    .ok_or_else(|| format!("Missing value for {option}"))?;
+                let bad = || format!("Invalid value for {option}: {value}");
+                match option {
+                    "--rate" => settings.render.sample_rate = value.parse().map_err(|_| bad())?,
+                    "--bits" => settings.render.bits = value.parse().map_err(|_| bad())?,
+                    "--bitrate" => settings.bitrate_kbps = value.parse().map_err(|_| bad())?,
+                    "--tail" => settings.render.tail_seconds = value.parse().map_err(|_| bad())?,
+                    _ => unreachable!(),
+                }
             }
-            "--bits" => {
-                bits = args
-                    .get(i + 1)
-                    .and_then(|v| v.parse().ok())
-                    .ok_or("bad --bits")?
-            }
-            other => return Err(format!("unknown option {other}")),
+            other => return Err(format!("Unknown option {other}")),
         }
-        i += 2;
+        i += 1;
     }
+    settings.validate()?;
+    Ok((src, settings))
+}
+
+fn render(args: &[String]) -> Result<(), String> {
+    let (src, settings) = render_options(args)?;
+    let rate = settings.render.sample_rate;
     let project = load(src)?;
     // Decode sample assets for sample-based devices.
     let base = (src != "--demo").then(|| PathBuf::from(src));
@@ -130,20 +159,65 @@ fn render(args: &[String]) -> Result<(), String> {
             Err(e) => eprintln!("warning: could not load {}: {e}", path.display()),
         }
     }
-    let settings = ExportSettings {
-        path: out.clone(),
-        sample_rate: rate,
-        bits,
-        tail_seconds: 3.0,
-    };
     let progress = AtomicU32::new(0);
     let cancel = AtomicBool::new(false);
     let started = std::time::Instant::now();
-    render_to_wav(&project, &samples, &settings, &progress, &cancel)?;
+    render_audio(&project, &samples, &settings, &progress, &cancel)?;
     println!(
         "rendered {} in {:.2} s",
-        out.display(),
+        settings.render.path.display(),
         started.elapsed().as_secs_f32()
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn options(args: &[&str]) -> Result<AudioExportSettings, String> {
+        let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        render_options(&args).map(|(_, options)| options)
+    }
+
+    #[test]
+    fn format_comes_from_extension_and_flags_are_not_positional() {
+        let o = options(&[
+            "--demo",
+            "song.MP3",
+            "--mono",
+            "--bitrate",
+            "192",
+            "--normalize",
+            "--rate",
+            "44100",
+            "--tail",
+            "0",
+        ])
+        .unwrap();
+        assert_eq!(o.format, peel_media::AudioFormat::Mp3);
+        assert_eq!(o.bitrate_kbps, 192);
+        assert_eq!(o.render.sample_rate, 44_100);
+        assert_eq!(o.render.tail_seconds, 0.0);
+        assert!(o.mono && o.normalize);
+        let o = options(&["--demo", "song.flac", "--bits", "16", "--no-dither"]).unwrap();
+        assert_eq!(o.render.bits, 16);
+        assert!(!o.dither);
+    }
+
+    #[test]
+    fn invalid_options_fail_before_loading_the_project() {
+        for args in [
+            vec!["missing.peelproj", "song.mp3", "--rate", "96000"],
+            vec!["--demo", "song.flac", "--bits", "32"],
+            vec!["--demo", "song.wav", "--tail", "NaN"],
+            vec!["--demo", "song.wav", "--tail", "-1"],
+            vec!["--demo", "song.mp3", "--bitrate", "123"],
+            vec!["--demo", "song.wav", "--bits"],
+            vec!["--demo", "song.wav", "--wat"],
+            vec!["--demo", "song.unknown"],
+        ] {
+            assert!(options(&args).is_err(), "{args:?}");
+        }
+    }
 }
