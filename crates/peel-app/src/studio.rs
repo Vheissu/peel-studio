@@ -976,9 +976,13 @@ impl Studio {
             &peel_midi::ExportOptions::default(),
         ) {
             Ok(out) => match std::fs::write(&path, &out.bytes) {
-                Ok(()) => self
-                    .session
-                    .notify(format!("Exported {}", path.display()), false),
+                Ok(()) => self.session.notify(
+                    out.report.warnings.first().map_or_else(
+                        || format!("Exported {}", path.display()),
+                        |warning| format!("Exported MIDI: {warning}"),
+                    ),
+                    false,
+                ),
                 Err(e) => self
                     .session
                     .notify(format!("Could not write MIDI: {e}"), true),

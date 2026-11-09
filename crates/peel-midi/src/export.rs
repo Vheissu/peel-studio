@@ -197,12 +197,27 @@ impl<'a> Flattener<'a> {
     }
 }
 
+const EXPRESSION_WARNING: &str =
+    "Note expression was omitted; save a Peel project or export audio to preserve it.";
+
+fn warn_expression(report: &mut ExportReport, pattern: &peel_document::Pattern) {
+    if pattern
+        .expression
+        .iter()
+        .any(|e| !e.pitch.is_empty() || !e.pressure.is_empty() || !e.timbre.is_empty())
+        && !report.warnings.iter().any(|w| w == EXPRESSION_WARNING)
+    {
+        report.warnings.push(EXPRESSION_WARNING.into());
+    }
+}
+
 /// Exports one pattern as it plays in pattern mode: from its start, once.
 pub fn export_pattern(project: &Project, pattern: Id, opts: &ExportOptions) -> Result<MidiExport> {
     let source = project
         .pattern(pattern)
         .ok_or(MidiError::UnknownPattern(pattern))?;
     let mut fl = Flattener::new(project, opts);
+    warn_expression(&mut fl.report, source);
     for note in &source.notes {
         let end = note.start.checked_add(note.length).map_err(overflow)?;
         fl.push(note, note.start, end, 0);
@@ -239,6 +254,7 @@ pub fn export_arrangement(project: &Project, opts: &ExportOptions) -> Result<Mid
         let Some(pattern) = project.pattern(pattern_id) else {
             continue;
         };
+        warn_expression(&mut fl.report, pattern);
         let plen = pattern.length;
         if !plen.is_positive() || !clip.length.is_positive() {
             continue;

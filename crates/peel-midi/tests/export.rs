@@ -297,6 +297,25 @@ fn per_note_expression_and_audio_are_reported_as_lost() {
     n.pan = 0.5;
     n.fine = 25.0;
     let pat = add_pattern(&mut p, "P", Time::beats(4), vec![n]);
+    p.pattern_mut(pat)
+        .unwrap()
+        .expression
+        .push(peel_document::NoteExpression {
+            note: n.id,
+            pitch: vec![peel_document::ExpressionPoint {
+                offset: Time::ZERO,
+                value: 3.0,
+            }],
+            ..Default::default()
+        });
+    let pattern_export = export_pattern(&p, pat, &ExportOptions::default()).unwrap();
+    assert!(
+        pattern_export
+            .report
+            .warnings
+            .iter()
+            .any(|w| w.contains("Note expression"))
+    );
     let lane = p.arrangement().tracks[0].id;
     let master = p.mixer.tracks[0].id;
     let asset = Id::new();
@@ -335,6 +354,13 @@ fn per_note_expression_and_audio_are_reported_as_lost() {
     assert_eq!(out.report.audio_clips_omitted, 1);
     assert!(out.report.warnings.iter().any(|w| w.contains("pan")));
     assert!(out.report.warnings.iter().any(|w| w.contains("audio")));
+    assert!(
+        out.report
+            .warnings
+            .iter()
+            .any(|w| w.contains("Note expression"))
+    );
+    assert_eq!(out.report.notes, 1);
     // The song still ends where the arrangement does (8 beats).
     let (_, tracks) = parse(&out.bytes);
     assert_eq!(tracks[0].last().unwrap().0, 8 * 960);
