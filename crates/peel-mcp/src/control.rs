@@ -234,7 +234,7 @@ impl Control {
                 let version = device_version(s, &type_id, DeviceKind::Instrument)?;
                 let root_key = match type_id.as_str() {
                     "peel.drum.acoustic" => 36,
-                    "peel.guitar.recorded" => 40,
+                    "peel.guitar.recorded" | "peel.guitar.palm_muted" => 40,
                     "peel.bass.recorded" => 28,
                     _ => 60,
                 };

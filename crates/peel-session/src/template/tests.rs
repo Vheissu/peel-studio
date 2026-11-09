@@ -670,10 +670,15 @@ fn rock_metal_has_distorted_guitar_and_bass_that_change_by_section() {
     let presets: BTreeSet<&str> = p
         .channels
         .iter()
-        .filter(|c| c.device.type_id == "peel.guitar.recorded")
+        .filter(|c| {
+            matches!(
+                c.device.type_id.as_str(),
+                "peel.guitar.recorded" | "peel.guitar.palm_muted"
+            )
+        })
         .filter_map(|c| c.device.preset.as_deref())
         .collect();
-    assert_eq!(presets, BTreeSet::from(["High Gain", "Palm Mute"]));
+    assert_eq!(presets, BTreeSet::from(["High Gain", "Metal Chugs"]));
 
     // Chorus power chords: root, fifth and octave struck together.
     let chorus = in_section(&p, "Chorus", "peel.guitar.recorded");
@@ -693,6 +698,7 @@ fn rock_metal_has_distorted_guitar_and_bass_that_change_by_section() {
         let (a, _) = section(&p, name, 0);
         let gtr: BTreeSet<(i64, u8)> = in_section(&p, name, "peel.guitar.recorded")
             .iter()
+            .chain(in_section(&p, name, "peel.guitar.palm_muted").iter())
             .filter(|h| h.beat < a + 8.0)
             .map(|h| (((h.beat - a) * 12.0).round() as i64, h.key))
             .collect();
@@ -708,7 +714,7 @@ fn rock_metal_has_distorted_guitar_and_bass_that_change_by_section() {
     }
 
     // The breakdown kick locks to the chugs.
-    let chugs: BTreeSet<i64> = in_section(&p, "Breakdown", "peel.guitar.recorded")
+    let chugs: BTreeSet<i64> = in_section(&p, "Breakdown", "peel.guitar.palm_muted")
         .iter()
         .map(|h| (h.beat * 12.0).round() as i64)
         .collect();

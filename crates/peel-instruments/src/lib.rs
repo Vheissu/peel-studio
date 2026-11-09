@@ -17,6 +17,7 @@
 //! | `peel.wind.sax`    | Sax     | Wind     | Saxophone: reed and breath model, legato     |
 //! | `peel.guitar.electric` | Guitar | Guitar | Plucked string through pickup, amp and cabinet |
 //! | `peel.guitar.recorded` | Recorded Guitar | Guitar | Recorded sustained and muted notes through amp and cabinet |
+//! | `peel.guitar.palm_muted` | Palm-Muted Guitar | Guitar | Recorded palm-muted notes through amp and cabinet |
 //! | `peel.bass.recorded` | Recorded Bass | Guitar | Recorded picked bass: velocity layers, alternate takes |
 //! | `peel.sampler`     | Sampler | Sampler  | Pitched one-shot / looping sample player     |
 //! | `peel.strings.violin` | Violin | Strings | Bowed-string waveguide, body, ensemble, pizzicato |
@@ -90,7 +91,7 @@ mod zither;
 
 use peel_dsp::{Device, DeviceDescriptor, Preset};
 
-static ALL: [&DeviceDescriptor; 19] = [
+static ALL: [&DeviceDescriptor; 20] = [
     &kick::DESC,
     &snare::DESC,
     &hat::DESC,
@@ -105,6 +106,7 @@ static ALL: [&DeviceDescriptor; 19] = [
     &grand::DESC,
     &guitar::DESC,
     &recorded_strings::GUITAR_DESC,
+    &recorded_strings::PALM_DESC,
     &recorded_strings::BASS_DESC,
     &sampler::DESC,
     &sax::DESC,
@@ -135,6 +137,7 @@ pub fn create(type_id: &str) -> Option<Box<dyn Device>> {
         "peel.keys.grand" => Some(grand::create()),
         "peel.guitar.electric" => Some(guitar::create()),
         "peel.guitar.recorded" => Some(recorded_strings::create_guitar()),
+        "peel.guitar.palm_muted" => Some(recorded_strings::create_palm_guitar()),
         "peel.bass.recorded" => Some(recorded_strings::create_bass()),
         "peel.sampler" => Some(sampler::create()),
         "peel.wind.sax" => Some(sax::create()),
@@ -162,6 +165,7 @@ pub fn presets(type_id: &str) -> &'static [Preset] {
         "peel.keys.grand" => &grand::PRESETS,
         "peel.guitar.electric" => &guitar::PRESETS,
         "peel.guitar.recorded" => &recorded_strings::GUITAR_PRESETS,
+        "peel.guitar.palm_muted" => &recorded_strings::PALM_PRESETS,
         "peel.bass.recorded" => &recorded_strings::BASS_PRESETS,
         "peel.sampler" => &sampler::PRESETS,
         "peel.wind.sax" => &sax::PRESETS,

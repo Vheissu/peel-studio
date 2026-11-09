@@ -1,0 +1,23 @@
+Guitar-TECHS palm-muted guitar recordings
+
+Creators: Hegel Emmanuel Pedroza Villalobos, Termeh Taheri, Wallace Abreu,
+Ryan Corey and Iran R. Roman.
+Source: Guitar-TECHS v1, https://zenodo.org/records/14963133
+License: Creative Commons Attribution 4.0 International (CC BY 4.0)
+https://creativecommons.org/licenses/by/4.0/
+
+Adapted by Peel Studio from Player 2's EVH Wolfgang neck-pickup direct
+recordings. Changes: extracted individual notes, converted to mono PCM,
+reduced background noise, aligned attacks, trimmed tails and applied fades
+and a shared gain. Playback may change pitch, level and amp/cabinet tone.
+
+Paper: Hegel Pedroza, Wallace Abreu, Ryan M. Corey and Iran R. Roman,
+"Guitar-TECHS: An Electric Guitar Dataset Covering Techniques, Musical
+Excerpts, Chords and Scales Using a Diverse Array of Hardware."
+ICASSP 2025. https://guitar-techs.github.io/
+
+Keep this credit when sharing audio that uses these recordings, including
+processed or mixed recordings. It does not license your original song or
+imply endorsement by the dataset creators.
+
+Peel-Sample-Credit: guitar-techs-14963133-palm-v1

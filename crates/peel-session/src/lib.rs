@@ -8,6 +8,7 @@
 mod audio;
 mod bounce;
 mod compile;
+mod credits;
 pub mod editing;
 mod export;
 mod io;
@@ -31,6 +32,7 @@ pub use compile::{
     CompileContext, PlanIndex, PlayMode, clip_source_start_seconds, compile, same_structure,
     stretch_ratio, stretched_key,
 };
+pub use credits::inherit_audio_credits;
 pub use export::{
     AudioExportSettings, ExportJob, ExportSettings, render as render_to_wav, render_audio,
     stem_tracks,
@@ -1254,7 +1256,11 @@ impl Session {
         let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
         let hash = blake3::hash(&bytes).to_hex().to_string();
         if let Some(existing) = self.doc.project().assets.iter().find(|a| a.hash == hash) {
-            return Ok(existing.clone());
+            let mut asset = existing.clone();
+            // Keep the incoming path available for sidecar attribution even
+            // when the bytes are already registered under another path.
+            asset.path = path.to_string_lossy().into_owned();
+            return Ok(asset);
         }
         let name = path
             .file_name()

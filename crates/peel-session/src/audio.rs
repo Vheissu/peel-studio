@@ -182,7 +182,10 @@ impl Session {
         let mut placed = Vec::new();
         self.doc.edit(label, |p| {
             if let Some(a) = new_asset {
-                p.assets.push(a);
+                crate::inherit_audio_credits(p, &a);
+                if p.asset(a.id).is_none() {
+                    p.assets.push(a);
+                }
             }
             for (pl, id) in placements.iter().zip(&ids) {
                 let Some((name, color)) = p
@@ -256,7 +259,7 @@ impl Session {
         let asset_id = asset.id;
         let placed = self.place_audio_clips(
             "Add audio clip",
-            (!known).then_some(asset),
+            Some(asset),
             asset_id,
             &[Placement {
                 lane: track_lane,

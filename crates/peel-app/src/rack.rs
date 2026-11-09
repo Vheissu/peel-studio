@@ -1191,7 +1191,7 @@ pub fn add_instrument_preset(s: &mut Session, type_id: &str, preset: Option<&str
     // steps on the kick; per-piece presets use the usual C5 root.
     let root = match type_id {
         "peel.drum.acoustic" if preset.is_none_or(|p| p == "Full Kit") => 36,
-        "peel.guitar.recorded" => 40,
+        "peel.guitar.recorded" | "peel.guitar.palm_muted" => 40,
         "peel.bass.recorded" => 28,
         _ => 60,
     };
@@ -1236,6 +1236,7 @@ pub fn add_sample_channel(s: &mut Session, path: &Path) -> Option<Id> {
         .unwrap_or_else(|| "Sample".into());
     let mut new_id = None;
     s.doc.edit(format!("Add {name}"), |p| {
+        peel_session::inherit_audio_credits(p, &asset);
         if p.asset(asset.id).is_none() {
             p.assets.push(asset.clone());
         }
@@ -1431,7 +1432,11 @@ pub(crate) mod tests {
     #[test]
     fn recorded_strings_start_on_their_low_e_notes() {
         let mut s = Session::new_silent(template::empty());
-        for (kind, root) in [("peel.guitar.recorded", 40), ("peel.bass.recorded", 28)] {
+        for (kind, root) in [
+            ("peel.guitar.recorded", 40),
+            ("peel.guitar.palm_muted", 40),
+            ("peel.bass.recorded", 28),
+        ] {
             let id = super::add_instrument(&mut s, kind).unwrap();
             assert_eq!(s.project().channel(id).unwrap().root_key, root);
         }

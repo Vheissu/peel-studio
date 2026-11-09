@@ -26,6 +26,8 @@ mkdir -p "$APP/Contents/Resources/sound-licenses"
 cp assets/drums/big-rusty/LICENSE.txt assets/drums/big-rusty/README.md assets/drums/big-rusty/manifest.json "$APP/Contents/Resources/sound-licenses/"
 mkdir -p "$APP/Contents/Resources/sound-licenses/strings"
 cp assets/strings/recorded/LICENSE-guitar.txt assets/strings/recorded/LICENSE-bass.txt assets/strings/recorded/README.md assets/strings/recorded/manifest.json "$APP/Contents/Resources/sound-licenses/strings/"
+mkdir -p "$APP/Contents/Resources/sound-licenses/palm-muted"
+cp assets/strings/palm-muted/{LICENSE.txt,NOTICE.txt,README.md,manifest.json} "$APP/Contents/Resources/sound-licenses/palm-muted/"
 
 # Icon set from the generated PNGs.
 cp assets/icons/peel-16.png dist/iconset/icon_16x16.png

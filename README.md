@@ -19,7 +19,7 @@ effects. There is no web view.
 - Pattern workflow: a Channel Rack step sequencer (with a velocity graph)
   and a Piano Roll edit the same notes; patterns are painted into the
   Playlist as linked clips, and Make unique splits one off.
-- Nineteen native instruments: a recorded acoustic kit, recorded guitar and bass, five synthesized drums, Mallet modal percussion,
+- Twenty native instruments: a recorded acoustic kit, sustained and palm-muted guitars, recorded bass, five synthesized drums, Mallet modal percussion,
   Poly and Cross synths, a mono bass, tine electric piano, acoustic piano,
   electric guitar with amp and cabinet, bowed violin, Zither plucked strings,
   saxophone and sampler. Nineteen effects cover EQ, dynamics, delay, reverb,
@@ -93,10 +93,13 @@ Acoustic Kit plays real recordings of kick, snare, closed/open hats, ride,
 crash and toms, with four velocity layers and three alternate takes per
 piece. Choose its Full Kit preset for a GM drum keyboard, or a piece preset
 for a Channel Rack row. New Rock / Metal songs use the recorded kit.
-They also use Recorded Guitar for sustained power chords and short muted
-riffs, and Recorded Bass for a picked bass line. These instruments use
+They also use Recorded Guitar for sustained power chords, Palm-Muted Guitar
+for chugs and Recorded Bass for a picked bass line. These instruments use
 bundled multisamples, with alternate takes, velocity response and no
-external sample files. The guitar includes clean and amplified sounds.
+external sample files. The guitars include clean and amplified sounds.
+Palm-Muted Guitar uses dedicated palm-muted recordings from Guitar-TECHS
+under CC BY 4.0. Exports include a `.credits.txt` file to keep with audio you
+publish. See [sample credits](assets/strings/palm-muted/README.md).
 Kick, Snare, Hat and Tom also offer modeled acoustic and 808/909 circuit
 sounds. Existing projects and older presets retain their sound.
 

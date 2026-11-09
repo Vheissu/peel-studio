@@ -1,7 +1,7 @@
-//! `peel.guitar.recorded` and `peel.bass.recorded`: recorded electric guitar
-//! and bass.
+//! `peel.guitar.recorded`, `peel.guitar.palm_muted` and `peel.bass.recorded`:
+//! recorded electric guitar, palm-muted guitar and bass.
 //!
-//! Both play multisampled DI recordings embedded in the binary (Karoryfer
+//! The legacy guitar and bass play DI recordings embedded in the binary (Karoryfer
 //! Black And Green Guitars, green guitar, and Black And Blue Basses, blue
 //! solid-body bass played with a pick; both CC0). Every note plays its real
 //! MIDI pitch from the nearest recorded note.
@@ -21,6 +21,16 @@
 //!   darkens them further for palm-muted chugs.
 //! - Guitar release: the sound of each string being stopped, two takes,
 //!   played at note-off of a sustained note (`Fret Noise`).
+//! - Palm-muted guitar (`peel.guitar.palm_muted`, its own instrument):
+//!   genuinely palm-muted DI notes from Guitar-TECHS (P2, an EVH Wolfgang on
+//!   the neck pickup, CC BY 4.0), one layer, chromatic across the neck with
+//!   as many separate strikes per note as were recorded (one for some low
+//!   notes). `palm_assets.rs` lists them; any number of notes and takes per
+//!   note is accepted. This instrument plays only these recordings, never the
+//!   sustain, muted or fret-noise sets, and adds no damping or darkening:
+//!   velocity follows the sustain curve but only scales the level. Takes
+//!   rotate deterministically and never repeat back to back on a note that
+//!   has more than one.
 //! - Bass: 14 notes from B0 (key 23) to D4 (key 62) every three semitones,
 //!   two velocity layers, three takes each.
 //!
@@ -264,6 +274,54 @@ static BASS_PARAMS: [ParamDescriptor; 7] = [
     velocity_param(0.8),
 ];
 
+static PALM_PARAMS: [ParamDescriptor; 9] = [
+    release_param(0.025),
+    ParamDescriptor::choice(OUTPUT, "amp.output", "Output", "Amp", OUTPUTS, 0),
+    ParamDescriptor::linear(
+        AMP_GAIN,
+        "amp.gain",
+        "Gain",
+        "Amp",
+        0.0,
+        1.0,
+        0.85,
+        Unit::Percent,
+    ),
+    ParamDescriptor::linear(
+        AMP_BASS,
+        "amp.bass",
+        "Bass",
+        "Amp",
+        -12.0,
+        12.0,
+        2.0,
+        Unit::Decibels,
+    ),
+    ParamDescriptor::linear(
+        AMP_MID,
+        "amp.mid",
+        "Mid",
+        "Amp",
+        -12.0,
+        12.0,
+        -1.0,
+        Unit::Decibels,
+    ),
+    ParamDescriptor::linear(
+        AMP_TREBLE,
+        "amp.treble",
+        "Treble",
+        "Amp",
+        -12.0,
+        12.0,
+        0.0,
+        Unit::Decibels,
+    ),
+    ParamDescriptor::choice(CAB_TYPE, "cab.type", "Cabinet", "Amp", CABS, 2),
+    level_param(),
+    velocity_param(0.6),
+];
+
 pub static GUITAR_DESC: DeviceDescriptor = DeviceDescriptor {
     type_id: "peel.guitar.recorded",
     name: "Recorded Guitar",
@@ -272,6 +330,16 @@ pub static GUITAR_DESC: DeviceDescriptor = DeviceDescriptor {
     kind: DeviceKind::Instrument,
     version: 1,
     params: &GUITAR_PARAMS,
+};
+
+pub static PALM_DESC: DeviceDescriptor = DeviceDescriptor {
+    type_id: "peel.guitar.palm_muted",
+    name: "Palm-Muted Guitar",
+    description: "Recorded palm-muted electric guitar through an amp and cabinet",
+    category: "Guitar",
+    kind: DeviceKind::Instrument,
+    version: 1,
+    params: &PALM_PARAMS,
 };
 
 pub static BASS_DESC: DeviceDescriptor = DeviceDescriptor {
@@ -326,6 +394,38 @@ pub static GUITAR_PRESETS: [Preset; 5] = [
         gain: 0.12, bass: 0.0, mid: 0.0, treble: 0.0, cab: 0.0, level: 0.0, velocity: 0.8),
 ];
 
+macro_rules! palm_preset {
+    (
+        $name:literal, release: $rel:literal, output: $out:literal, gain: $gain:literal,
+        bass: $bass:literal, mid: $mid:literal, treble: $treble:literal, cab: $cab:literal,
+        level: $level:literal, velocity: $vel:literal
+    ) => {
+        Preset {
+            name: $name,
+            params: &[
+                ("play.release", $rel),
+                ("amp.output", $out),
+                ("amp.gain", $gain),
+                ("amp.bass", $bass),
+                ("amp.mid", $mid),
+                ("amp.treble", $treble),
+                ("cab.type", $cab),
+                ("out.level", $level),
+                ("out.velocity", $vel),
+            ],
+        }
+    };
+}
+
+pub static PALM_PRESETS: [Preset; 3] = [
+    palm_preset!("Metal Chugs", release: 0.025, output: 0.0, gain: 0.85, bass: 2.0, mid: -1.0,
+        treble: 0.0, cab: 2.0, level: 0.0, velocity: 0.6),
+    palm_preset!("Clean Palm Mute", release: 0.08, output: 0.0, gain: 0.12, bass: 0.0, mid: 0.0,
+        treble: 0.0, cab: 0.0, level: 0.0, velocity: 0.8),
+    palm_preset!("Direct", release: 0.08, output: 1.0, gain: 0.12, bass: 0.0, mid: 0.0,
+        treble: 0.0, cab: 0.0, level: 0.0, velocity: 0.8),
+];
+
 macro_rules! bass_preset {
     (
         $name:literal, mono: $mono:literal, mute: $mute:literal, release: $rel:literal,
@@ -356,11 +456,21 @@ pub static BASS_PRESETS: [Preset; 3] = [
 ];
 
 pub(crate) fn create_guitar() -> Box<dyn Device> {
-    Box::new(Instrument::new(&GUITAR_DESC, Strings::new(Kind::Guitar)))
+    Box::new(Instrument::new(
+        &GUITAR_DESC,
+        Strings::new(Kind::Guitar, false),
+    ))
+}
+
+pub(crate) fn create_palm_guitar() -> Box<dyn Device> {
+    Box::new(Instrument::new(
+        &PALM_DESC,
+        Strings::new(Kind::Guitar, true),
+    ))
 }
 
 pub(crate) fn create_bass() -> Box<dyn Device> {
-    Box::new(Instrument::new(&BASS_DESC, Strings::new(Kind::Bass)))
+    Box::new(Instrument::new(&BASS_DESC, Strings::new(Kind::Bass, false)))
 }
 
 // ---------------------------------------------------------------------------
@@ -442,6 +552,10 @@ static B_PICK_FILES: Files<B_LAYERS, B_TAKES, 14> = b_pick!(
     "23", "26", "29", "32", "35", "38", "41", "44", "47", "50", "53", "56", "59", "62"
 );
 
+// Palm-muted recordings: `PALM_FILES`, a list of (root key, takes), written
+// by the asset preparation script.
+include!("palm_assets.rs");
+
 /// Velocities at which each layer plays at its own (averaged) level.
 const G_SUSTAIN_VEL: [f32; G_LAYERS] = [0.35, 0.65, 0.95];
 const B_PICK_VEL: [f32; B_LAYERS] = [0.6, 0.95];
@@ -462,6 +576,9 @@ const GUITAR_DB: f32 = 0.0;
 const BASS_DB: f32 = -6.0;
 /// Muted notes relative to the sustain curve at the same velocity.
 const MUTE_TRIM_DB: f32 = -1.0;
+/// Palm-muted notes relative to the sustain curve at the same velocity
+/// (measured: their attack then matches the muted set within 0.1 dB).
+const PALM_TRIM_DB: f32 = -1.0;
 /// Fret noise relative to its recorded level (as recorded next to the
 /// sustained notes, the stop is about as loud as a medium attack).
 const RELEASE_TRIM_DB: f32 = -10.0;
@@ -612,11 +729,88 @@ impl<const L: usize, const T: usize, const R: usize> Set<L, T, R> {
     }
 }
 
+/// One palm-muted note: its separate strikes, each with the gain in dB that
+/// brings it towards the neck average.
+struct PalmZone {
+    root: u8,
+    takes: Vec<Take>,
+    correction_db: Vec<f32>,
+}
+
+/// The palm-muted notes, sorted by root: however many notes and takes the
+/// asset list holds. Built once, off the audio thread.
+struct PalmSet {
+    zones: Vec<PalmZone>,
+}
+
+impl PalmSet {
+    fn load(files: &'static [(u8, &'static [&'static [u8]])]) -> PalmSet {
+        let mut zones: Vec<PalmZone> = Vec::with_capacity(files.len());
+        for &(root, takes) in files {
+            let parsed: Vec<Take> = takes
+                .iter()
+                .filter_map(|b| parse_wav(b))
+                .filter(|t| t.frames >= 4)
+                .collect();
+            if root > 127 || parsed.is_empty() || zones.iter().any(|z| z.root == root) {
+                continue;
+            }
+            // Attack level in dB for now; turned into a correction below.
+            let correction_db = parsed
+                .iter()
+                .map(|t| 20.0 * t.attack_rms().max(1.0e-6).log10())
+                .collect();
+            zones.push(PalmZone {
+                root,
+                takes: parsed,
+                correction_db,
+            });
+        }
+        let all: Vec<f32> = zones
+            .iter()
+            .flat_map(|z| z.correction_db.iter().copied())
+            .collect();
+        let avg = all.iter().sum::<f32>() / all.len().max(1) as f32;
+        for z in &mut zones {
+            for db in &mut z.correction_db {
+                // A weak/noisy recording must not receive unbounded gain.
+                // Keep take balancing within 6 dB of the bank's common gain.
+                *db = -avg + (LEVEL_CORRECTION * (avg - *db)).clamp(-6.0, 6.0);
+            }
+        }
+        zones.sort_by_key(|z| z.root);
+        PalmSet { zones }
+    }
+
+    /// The zone for `key` and its distance in semitones: the nearest
+    /// recorded root (the upper one on a tie), or `None` for a key more than
+    /// [`EDGE_SEMIS`] outside the recorded range.
+    fn nearest(&self, key: u8) -> Option<(usize, i32)> {
+        let (first, last) = (self.zones.first()?, self.zones.last()?);
+        let k = key as i32;
+        if k < first.root as i32 - EDGE_SEMIS || k > last.root as i32 + EDGE_SEMIS {
+            return None;
+        }
+        let idx = self.zones.partition_point(|z| (z.root as i32) < k);
+        let best = if idx == 0 {
+            0
+        } else if idx == self.zones.len() {
+            idx - 1
+        } else {
+            let below = k - self.zones[idx - 1].root as i32;
+            let above = self.zones[idx].root as i32 - k;
+            if below < above { idx - 1 } else { idx }
+        };
+        Some((best, k - self.zones[best].root as i32))
+    }
+}
+
 /// Every recording, parsed once per process.
 struct Bank {
     g_sustain: Set<G_LAYERS, G_TAKES, 16>,
     g_mute: Set<1, G_TAKES, 16>,
     g_release: Set<1, G_TAKES, 16>,
+    g_palm: PalmSet,
     bass: Set<B_LAYERS, B_TAKES, 14>,
 }
 
@@ -629,6 +823,7 @@ fn bank() -> &'static Bank {
         g_sustain: Set::load(&G_SUSTAIN_FILES),
         g_mute: Set::load(&G_MUTE_FILES),
         g_release: Set::load(&G_RELEASE_FILES),
+        g_palm: PalmSet::load(PALM_FILES),
         bass: Set::load(&B_PICK_FILES),
     })
 }
@@ -988,6 +1183,10 @@ pub(crate) struct Strings {
     pool: Pool<Voice>,
     hits: u32,
     last_take: [usize; 16],
+    /// Palm-muted guitar: plays only the palm-muted recordings.
+    palm: bool,
+    /// Last palm-muted take played on each recorded root key.
+    palm_last: [u8; 128],
     tail: usize,
     // Settings.
     muted: bool,
@@ -1025,7 +1224,7 @@ pub(crate) struct Strings {
 }
 
 impl Strings {
-    fn new(kind: Kind) -> Strings {
+    fn new(kind: Kind, palm: bool) -> Strings {
         let (cap, poly) = match kind {
             Kind::Guitar => (40, 32),
             Kind::Bass => (16, 12),
@@ -1040,6 +1239,8 @@ impl Strings {
             pool: Pool::new(cap, poly, StealPolicy::Quietest, 48_000.0, Voice::new),
             hits: 0,
             last_take: [0; 16],
+            palm,
+            palm_last: [0; 128],
             tail: 0,
             muted: false,
             mono: kind == Kind::Bass,
@@ -1202,7 +1403,8 @@ impl Strings {
         let x = self.expr.voice(id, key);
         let base_step = (SOURCE_RATE / self.sr as f64) * st_ratio(semis) as f64;
         let (m, sr) = (self.mute.get(), self.sr);
-        let muted = self.muted && self.kind == Kind::Guitar && !one_shot;
+        // Palm-muted notes count as muted: no fret noise at note-off.
+        let muted = (self.muted || self.palm) && self.kind == Kind::Guitar && !one_shot;
         let slot = self.pool.begin(key, id);
         if one_shot {
             // Fret noise belongs to no held note.
@@ -1248,6 +1450,10 @@ impl Strings {
     }
 
     fn guitar_note(&mut self, key: u8, velocity: f32, id: u32) {
+        if self.palm {
+            self.palm_note(key, velocity, id);
+            return;
+        }
         let Some((zone, semis)) = nearest(&G_ROOTS, key) else {
             return;
         };
@@ -1312,6 +1518,40 @@ impl Strings {
             false,
             vel_tone,
         );
+    }
+
+    /// Plays the nearest palm-muted recording as recorded: velocity follows
+    /// the sustain curve but only sets the level.
+    fn palm_note(&mut self, key: u8, velocity: f32, id: u32) {
+        let set = &self.bank.g_palm;
+        let Some((zone, semis)) = set.nearest(key) else {
+            return;
+        };
+        let sus = &self.bank.g_sustain.target_db;
+        let natural = velocity_db(sus, &G_SUSTAIN_VEL, velocity);
+        let top = sus[G_LAYERS - 1];
+        let level = top + self.vel_sens * (natural - top);
+        if level < top - 90.0 {
+            return;
+        }
+        let z = &set.zones[zone];
+        let count = z.takes.len();
+        self.hits = self.hits.wrapping_add(1);
+        let mut rng = HitRng::new(self.hits, 0x9A1A_0000 + z.root as u32);
+        let last = self.palm_last[z.root as usize] as usize;
+        // Any take but the last one, chosen deterministically from the hit
+        // count.
+        let t = if count > 1 {
+            let skip = (0.5 * (rng.next() + 1.0) * (count - 1) as f32) as usize;
+            (last + 1 + skip.min(count - 2)) % count
+        } else {
+            0
+        };
+        self.palm_last[z.root as usize] = t as u8;
+        let take = z.takes[t];
+        let gain_db = level + z.correction_db[t] + PALM_TRIM_DB;
+        self.damp_where(RETRIGGER_T60, |v| v.key == key);
+        self.start(key, id, take, semis as f32, db_to_gain(gain_db), false, 0.0);
     }
 
     fn bass_note(&mut self, key: u8, velocity: f32, id: u32) {
@@ -1401,6 +1641,7 @@ impl Synth for Strings {
         self.ctrl = 0;
         self.hits = 0;
         self.last_take = [0; 16];
+        self.palm_last = [0; 128];
         self.tail = 0;
     }
 
@@ -1645,5 +1886,36 @@ mod tests {
         for z in &b.bass.zones {
             z.takes.iter().flatten().for_each(check);
         }
+    }
+
+    #[test]
+    fn every_palm_recording_loads() {
+        let palm = &bank().g_palm;
+        assert_eq!(palm.zones.len(), PALM_FILES.len());
+        for (z, (root, files)) in palm.zones.iter().zip(PALM_FILES) {
+            assert_eq!(z.root, *root);
+            assert_eq!(z.takes.len(), files.len(), "root {root}");
+            assert!(z.takes.iter().all(|t| t.frames > 2_400), "root {root}");
+            assert!(z.correction_db.iter().all(|g| g.is_finite()));
+        }
+        let gains: Vec<f32> = palm
+            .zones
+            .iter()
+            .flat_map(|z| z.correction_db.iter().copied())
+            .collect();
+        let lo = gains.iter().copied().fold(f32::INFINITY, f32::min);
+        let hi = gains.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        assert!(hi - lo <= 12.001, "palm take gain must remain bounded");
+        assert!(palm.zones.windows(2).all(|w| w[0].root < w[1].root));
+        // Exact roots, nearest otherwise, silent past an octave.
+        for z in &palm.zones {
+            assert_eq!(
+                palm.nearest(z.root).map(|(i, s)| (palm.zones[i].root, s)),
+                Some((z.root, 0))
+            );
+        }
+        let lo = palm.zones[0].root;
+        assert_eq!(palm.nearest(lo - 12).map(|x| x.1), Some(-12));
+        assert_eq!(palm.nearest(lo - 13), None);
     }
 }

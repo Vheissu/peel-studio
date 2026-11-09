@@ -155,3 +155,108 @@ fn stems_use_selected_format_and_disambiguate_track_names() {
         assert!(decode_file(path).is_ok());
     }
 }
+
+#[test]
+fn palm_exports_carry_credit_through_import_and_personal_template() {
+    use peel_document::{Clip, ClipContent, Id, Note, Time};
+    use std::sync::Arc;
+
+    let dir = Dir::new();
+    let mut project = template::empty();
+    let ch = template::add_channel(
+        &mut project,
+        "Chug",
+        0,
+        template::device("peel.guitar.palm_muted", Some("Metal Chugs")),
+        40,
+    );
+    let pattern = Arc::make_mut(&mut project.patterns[0]);
+    pattern.length = Time::beats(1);
+    pattern
+        .notes
+        .push(Note::new(ch, Time::ZERO, Time::new(1, 4), 40, 0.8));
+    let id = pattern.id;
+    let lane = project.arrangement().tracks[0].id;
+    project.arrangement_mut().clips.push(Clip {
+        id: Id::new(),
+        track: lane,
+        start: Time::ZERO,
+        length: Time::beats(1),
+        offset: Time::ZERO,
+        muted: false,
+        content: ClipContent::Pattern { pattern: id },
+    });
+    let output = dir.file("chug.wav");
+    render_audio(
+        &project,
+        &HashMap::new(),
+        &settings(&output, AudioFormat::Wav),
+        &AtomicU32::new(0),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    let credit = dir.file("chug.wav.credits.txt");
+    let notice = std::fs::read_to_string(&credit).unwrap();
+    assert!(notice.contains("Guitar-TECHS"));
+    assert!(notice.contains("CC BY 4.0"));
+    assert!(
+        decode_file(&output).unwrap().channels[0]
+            .iter()
+            .any(|s| s.abs() > 0.01)
+    );
+
+    // A sidecar supplied later must also be inherited on content-hash dedupe.
+    std::fs::remove_file(&credit).unwrap();
+    let mut deduped = Session::new_silent(template::empty());
+    let lane = deduped.project().arrangement().tracks[0].id;
+    deduped.add_audio_clip(lane, Time::ZERO, &output).unwrap();
+    assert!(deduped.project().extensions.is_empty());
+    let duplicate = dir.file("same-bytes.wav");
+    std::fs::copy(&output, &duplicate).unwrap();
+    let revised = notice
+        .replace(
+            "Guitar-TECHS palm-muted guitar recordings",
+            "Guitar-TECHS sample credits, revised",
+        )
+        .replace("\n", "\r\n");
+    std::fs::write(dir.file("same-bytes.wav.credits.txt"), revised).unwrap();
+    deduped
+        .add_audio_clip(lane, Time::beats(1), &duplicate)
+        .unwrap();
+    assert_eq!(deduped.project().assets.len(), 1);
+    assert!(!deduped.project().extensions.is_empty());
+    deduped.doc.undo();
+    assert!(deduped.project().extensions.is_empty());
+    std::fs::write(&credit, &notice).unwrap();
+
+    let mut session = Session::new_silent(template::empty());
+    let lane = session.project().arrangement().tracks[0].id;
+    session.add_audio_clip(lane, Time::ZERO, &output).unwrap();
+    let extensions = session.project().extensions.clone();
+    assert!(!extensions.is_empty());
+    session.doc.undo();
+    assert!(
+        session.project().extensions.is_empty(),
+        "credit import is one undo step"
+    );
+    session.doc.redo();
+    let tpl = session
+        .save_template(&dir.file("Templates"), "Chugs")
+        .unwrap();
+    let loaded = peel_project::load_template(&tpl).unwrap().project;
+    assert_eq!(loaded.extensions, extensions);
+    assert_eq!(loaded.assets[0].hash, session.project().assets[0].hash);
+    assert_ne!(loaded.assets[0].path, session.project().assets[0].path);
+
+    let legacy = dir.file("legacy.wav");
+    project.channels[0].device = template::device("peel.guitar.recorded", Some("Palm Mute"));
+    render_audio(
+        &project,
+        &HashMap::new(),
+        &settings(&legacy, AudioFormat::Wav),
+        &AtomicU32::new(0),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert!(!dir.file("legacy.wav.credits.txt").exists());
+}

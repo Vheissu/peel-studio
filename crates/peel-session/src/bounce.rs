@@ -180,6 +180,7 @@ impl Session {
         let asset_id = asset.id;
         let lane_name = format!("{name} audio");
         self.doc.edit("Render to audio", |p| {
+            crate::inherit_audio_credits(p, &asset);
             if p.asset(asset_id).is_none() {
                 p.assets.push(asset);
             }

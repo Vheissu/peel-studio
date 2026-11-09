@@ -11,7 +11,7 @@ asset in the same commit that adds it.
 | `drums/big-rusty/*.wav` (96 recordings) | [Karoryfer Samples, Big Rusty Drums](https://shop.karoryfer.com/pages/free-big-rusty-drums), [source](https://github.com/sfzinstruments/karoryfer.big-rusty-drums) | `f07ce00df34a46b6b08375be56fe116cf15782bc`, fetched 2026-11-10; source files and processing in `drums/big-rusty/manifest.json` | CC0-1.0 (`drums/big-rusty/LICENSE.txt`) | Embedded recorded acoustic kit |
 | `strings/recorded/guitar-*.wav` (160 recordings) | [Karoryfer Samples, Black And Green Guitars](https://shop.karoryfer.com/pages/free-black-and-green-guitars) | `b3b3249d37dc977a1a297bd2dc053e6d9b6b805c`, fetched 2026-11-10; details in `strings/recorded/manifest.json` | CC0-1.0 (`strings/recorded/LICENSE-guitar.txt`) | Embedded sustained, staccato and release guitar recordings |
 | `strings/recorded/bass-*.wav` (84 recordings) | [Karoryfer Samples, Black And Blue Basses](https://shop.karoryfer.com/pages/free-black-and-blue-basses) | `6e7d674cdb41be7a54dbccb15472401ad01099b9`, fetched 2026-11-10; details in `strings/recorded/manifest.json` | CC0-1.0 (`strings/recorded/LICENSE-bass.txt`) | Embedded picked bass recordings |
-
+| `strings/palm-muted/palm-*.wav` (133 recordings) | [Guitar-TECHS v1](https://zenodo.org/records/14963133), Player 2 | `P2_techniques.zip`, fetched 2026-11-10; member CRCs, hashes and processing in `strings/palm-muted/manifest.json` | CC-BY-4.0 (`strings/palm-muted/LICENSE.txt`, attribution in `NOTICE.txt`) | Embedded palm-muted guitar recordings; retain credit in published audio |
 | `scripts/*.js`, `scripts/*.lua`, `scripts/*.py` | Written for Peel Studio | API 1 | GPL-3.0-or-later (project code) | Factory scripting actions |
 
 Release packages also include a private CPython runtime and Python packages:
@@ -25,5 +25,5 @@ Release packages also include a private CPython runtime and Python packages:
 See [packaging/python/README.md](../packaging/python/README.md) for runtime
 sources, dependency pins and build instructions.
 
-Acoustic Kit, Recorded Guitar and Recorded Bass use bundled recordings.
+Acoustic Kit, Recorded Guitar, Palm-Muted Guitar and Recorded Bass use bundled recordings.
 The other native instruments synthesize their factory sounds at runtime.

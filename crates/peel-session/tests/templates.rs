@@ -148,7 +148,7 @@ fn recorded_instrument_templates_need_no_external_sample_files() {
     }
     for (name, kind, preset, root) in [
         ("Guitar", "peel.guitar.recorded", "High Gain", 40),
-        ("Chug", "peel.guitar.recorded", "Palm Mute", 40),
+        ("Chug", "peel.guitar.palm_muted", "Metal Chugs", 40),
         ("Bass", "peel.bass.recorded", "Rock Pick", 28),
     ] {
         let channel = loaded
