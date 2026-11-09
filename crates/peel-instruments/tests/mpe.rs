@@ -503,7 +503,8 @@ fn reset_expression_keeps_curves_but_panic_and_reset_end_them() {
             run(id, &reset, 20_000, 256),
             "{id}"
         );
-        for reset in [EventKind::AllSoundOff] {
+        {
+            let reset = EventKind::AllSoundOff;
             // A snapshot waiting for its note is dropped.
             let a = run(
                 id,
