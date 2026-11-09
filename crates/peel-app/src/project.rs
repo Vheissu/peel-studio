@@ -13,6 +13,7 @@ use peel_session::template;
 use peel_ui::{Align, Id as W, LayerId, NamedKey, Rect, Ui, vec2};
 
 use crate::studio::Studio;
+use crate::workspace::{DockTab, Focus};
 
 /// A change that replaces or closes the current project.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -133,7 +134,12 @@ impl Studio {
         match change {
             Change::New => self.start(template::empty()),
             Change::Template(i) => match template::templates().get(i) {
-                Some((_, make)) => self.start(make()),
+                Some((name, make)) => {
+                    self.start(make());
+                    if let Some(starter) = template::starter(name) {
+                        self.show_starter(starter);
+                    }
+                }
                 None => return false,
             },
             Change::Demo => match demo_index() {
@@ -179,6 +185,29 @@ impl Studio {
         self.session.replace_project(project);
         self.reset_workspace();
         self.welcome = false;
+    }
+
+    /// Opens Channels on a template's starting pattern and channel with
+    /// its grid. Song mode stays on for the arrangement.
+    fn show_starter(&mut self, starter: template::Starter) {
+        let p = self.session.project();
+        let pattern = p.patterns.iter().find(|x| x.name == starter.pattern);
+        let channel = p.channels.iter().find(|c| c.name == starter.channel);
+        let (pattern, channel) = (pattern.map(|x| x.id), channel.map(|c| c.id));
+        if let Some(id) = pattern {
+            self.session.select_pattern(id);
+        }
+        if let Some(id) = channel {
+            self.ws.selected_channel = Some(id);
+            self.ws.focus = Some(Focus::Channel(id));
+        }
+        self.ws.rack_step = starter.grid;
+        self.ws.roll.snap = starter.grid;
+        self.ws.dock = DockTab::Rack;
+        if !self.prefs.show_editor {
+            self.prefs.show_editor = true;
+            self.prefs.save();
+        }
     }
 
     /// Stops everything sounding before the project goes: playback,

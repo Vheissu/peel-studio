@@ -9,7 +9,7 @@ mod tests;
 use std::sync::Arc;
 
 pub use showcase::showcase;
-pub use songs::{edm, hip_hop, rap, synthwave, trap};
+pub use songs::{edm, hip_hop, rap, rock_metal, synthwave, trap};
 
 use peel_document::{
     Arrangement, Channel, Clip, ClipContent, DeviceInstance, Id, MixerTrack, Note, PALETTE,
@@ -455,7 +455,31 @@ pub fn templates() -> Vec<Template> {
         ("Trap", trap),
         ("Synthwave", synthwave),
         ("EDM", edm),
+        (ROCK_METAL, rock_metal),
     ]
+}
+
+/// Catalog name of the rock / metal song.
+const ROCK_METAL: &str = "Rock / Metal";
+
+/// Where the editor opens on a template that has a groove to show first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Starter {
+    /// Pattern shown in Channels.
+    pub pattern: &'static str,
+    /// Channel selected in it.
+    pub channel: &'static str,
+    /// Step and note grid for the Channel Rack and Piano Roll.
+    pub grid: Time,
+}
+
+/// The starting view for the template called `name`, if it has one.
+pub fn starter(name: &str) -> Option<Starter> {
+    (name == ROCK_METAL).then_some(Starter {
+        pattern: "Double kick",
+        channel: "Kick",
+        grid: Time::new(1, 6),
+    })
 }
 
 /// A blank project: one empty pattern, no channels, no clips and no

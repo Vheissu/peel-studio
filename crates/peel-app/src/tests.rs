@@ -4087,6 +4087,39 @@ mod lifecycle {
     }
 
     #[test]
+    fn rock_metal_opens_on_its_double_kick_groove() {
+        let mut h = Harness::new();
+        h.studio.ws.dock = DockTab::Mixer;
+        h.studio.prefs.show_editor = false;
+        h.studio.ws.browser_w = 311.0;
+        h.frame();
+        assert_eq!(h.studio.prefs.browser_w, Some(311.0));
+        menu(&mut h, Command::Template(style("Rock / Metal")));
+        h.frame();
+
+        let p = h.session().project();
+        let pattern = p.pattern(h.session().selected_pattern()).unwrap();
+        assert_eq!(pattern.name, "Double kick");
+        assert_eq!(pattern.id, p.patterns[0].id);
+        let kick = p.channels.iter().find(|c| c.name == "Kick").unwrap().id;
+        assert_eq!(h.studio.ws.selected_channel, Some(kick));
+        assert_eq!(h.studio.ws.rack_step, Time::new(1, 6));
+        assert_eq!(h.studio.ws.roll.snap, Time::new(1, 6));
+        assert_eq!(h.studio.ws.dock, DockTab::Rack, "Channels shows it");
+        assert!(h.studio.prefs.show_editor);
+        assert_eq!(h.studio.ws.browser_w, 311.0, "pane sizes stay the user's");
+        assert_eq!(h.session().mode(), PlayMode::Song, "the song still plays");
+        assert!(h.session().path.is_none());
+        assert!(!h.session().doc.is_dirty());
+        assert!(h.session().doc.undo_label().is_none());
+
+        // Other templates open on the default grid.
+        menu(&mut h, Command::Template(style("Synthwave")));
+        assert_eq!(h.studio.ws.rack_step, Time::new(1, 4));
+        assert_eq!(h.studio.ws.roll.snap, Time::new(1, 4));
+    }
+
+    #[test]
     fn the_start_screen_offers_blank_styles_and_the_demo() {
         let mut h = Harness::new();
         h.studio.welcome = true;

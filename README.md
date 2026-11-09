@@ -64,8 +64,11 @@ effects. There is no web view.
 ## Projects
 
 File > New project starts blank, with no instruments or notes. File > New
-from template offers Rap, Trap, Hip-hop, Synthwave and EDM song starters,
-alongside House and Beat and melody. The demo song is a separate choice.
+from template offers Rap, Trap, Hip-hop, Synthwave, EDM and Rock / Metal
+song starters, alongside House and Beat and melody. Rock / Metal opens
+Channels on a one-bar Double kick pattern with the step grid at 1/16T, so
+the six-kick bursts on beats one and three line up with the steps. The demo
+song is a separate choice.
 File > Close project returns to the start screen. New, Open and Close ask
 before replacing unsaved work; cancelling Save As keeps the current project.
 

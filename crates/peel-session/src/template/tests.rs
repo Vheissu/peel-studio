@@ -1,16 +1,17 @@
 use std::collections::{BTreeSet, HashMap};
 
-use peel_document::{ClipContent, DeviceInstance, Id, Project};
+use peel_document::{ClipContent, DeviceInstance, Id, Project, Time};
 use peel_engine::{EngineCommand, EngineConfig, OfflineEngine, Slot};
 
 use crate::compile::{CompileContext, PlayMode, compile};
 
-const SONGS: [super::Template; 5] = [
+const SONGS: [super::Template; 6] = [
     ("Rap", super::rap),
     ("Trap", super::trap),
     ("Hip-hop", super::hip_hop),
     ("Synthwave", super::synthwave),
     ("EDM", super::edm),
+    ("Rock / Metal", super::rock_metal),
 ];
 
 fn is_real(dev: &DeviceInstance) -> Result<(), String> {
@@ -115,7 +116,7 @@ fn onsets_per_bar(p: &Project, name: &str) -> f64 {
 /// The main section: where each style is at its fullest.
 fn peak_section(name: &str) -> &'static str {
     match name {
-        "Synthwave" => "Chorus",
+        "Synthwave" | "Rock / Metal" => "Chorus",
         "EDM" => "Drop",
         _ => "Hook",
     }
@@ -139,6 +140,11 @@ fn catalog_keeps_its_order_and_offers_every_style() {
     for style in ["Rap", "Trap", "Synthwave", "EDM"] {
         assert!(names.contains(&style), "{style}");
     }
+    assert_eq!(
+        names.last(),
+        Some(&"Rock / Metal"),
+        "appended, not inserted"
+    );
 }
 
 #[test]
@@ -529,4 +535,153 @@ fn every_song_section_sounds_with_headroom() {
             );
         }
     }
+}
+
+/// Notes of the pattern called `name` on the channel called `channel`.
+fn pattern_notes(p: &Project, name: &str, channel: &str) -> Vec<(Time, Time)> {
+    let pat = p.patterns.iter().find(|x| x.name == name).unwrap();
+    let ch = p.channels.iter().find(|c| c.name == channel).unwrap().id;
+    let mut v: Vec<_> = pat
+        .notes
+        .iter()
+        .filter(|n| n.channel == ch)
+        .map(|n| (n.start, n.length))
+        .collect();
+    v.sort();
+    v
+}
+
+#[test]
+fn rock_metal_starts_on_a_sixteenth_triplet_double_kick() {
+    let p = super::rock_metal();
+    assert_eq!(p.bpm(), 108.0);
+    assert_eq!(p.swing, 0.0);
+    assert_eq!(
+        (p.time_signature.numerator, p.time_signature.denominator),
+        (4, 4)
+    );
+
+    // The first pattern is the one-bar groove the editor opens on.
+    let first = &p.patterns[0];
+    assert_eq!(first.name, "Double kick");
+    assert_eq!(first.length, Time::beats(4));
+    let starter = super::starter("Rock / Metal").unwrap();
+    assert_eq!(starter.pattern, first.name);
+    assert_eq!(starter.grid, Time::new(1, 6));
+    assert!(p.channels.iter().any(|c| c.name == starter.channel));
+    assert!(super::starter("Synthwave").is_none());
+
+    // Six kicks a sixteenth triplet apart on beats one and three.
+    let triplet = Time::new(1, 6);
+    let want: Vec<(Time, Time)> = [0, 2]
+        .into_iter()
+        .flat_map(|beat| (0..6).map(move |i| (Time::beats(beat) + triplet.mul_int(i), triplet)))
+        .collect();
+    assert_eq!(pattern_notes(&p, "Double kick", "Kick"), want);
+
+    let at = |beats: &[i64]| -> Vec<Time> { beats.iter().map(|&b| Time::beats(b)).collect() };
+    let starts = |ch: &str| -> Vec<Time> {
+        pattern_notes(&p, "Double kick", ch)
+            .into_iter()
+            .map(|n| n.0)
+            .collect()
+    };
+    assert_eq!(starts("Snare"), at(&[1, 3]), "snare on two and four");
+    assert_eq!(starts("Hat"), at(&[0, 1, 2, 3]), "a hat on every beat");
+    let used: BTreeSet<&str> = first
+        .notes
+        .iter()
+        .map(|n| p.channel(n.channel).unwrap().name.as_str())
+        .collect();
+    assert_eq!(used, BTreeSet::from(["Kick", "Snare", "Hat"]));
+
+    // The chorus plays it: twelve kicks a bar.
+    let (a, b) = section(&p, "Chorus", 0);
+    let kicks = in_section(&p, "Chorus", "peel.drum.kick");
+    assert_eq!(kicks.len() as f64, (b - a) / 4.0 * 12.0);
+}
+
+#[test]
+fn rock_metal_verse_is_a_simpler_rock_beat() {
+    let p = super::rock_metal();
+    let (a, b) = section(&p, "Verse", 0);
+    let bars = (b - a) / 4.0;
+    let kicks = in_section(&p, "Verse", "peel.drum.kick");
+    assert!(!kicks.is_empty());
+    assert!(
+        (kicks.len() as f64) < bars * 6.0,
+        "{} kicks over {bars} bars",
+        kicks.len()
+    );
+    assert!(
+        kicks.iter().all(|h| (h.beat * 4.0).fract() == 0.0),
+        "verse kicks stay on the sixteenth grid"
+    );
+    let snares = in_section(&p, "Verse", "peel.drum.snare");
+    let backbeat = snares
+        .iter()
+        .filter(|h| [1.0, 3.0].contains(&beat_in_bar(h)))
+        .count();
+    assert!(backbeat * 10 >= snares.len() * 8, "snare on two and four");
+    let hats = in_section(&p, "Verse", "peel.drum.hat");
+    assert!(
+        hats.iter().all(|h| (h.beat * 2.0).fract() == 0.0),
+        "eighth hats"
+    );
+    assert!(hats.len() as f64 >= bars * 7.0);
+}
+
+#[test]
+fn rock_metal_has_distorted_guitar_and_bass_that_change_by_section() {
+    let p = super::rock_metal();
+    let presets: BTreeSet<&str> = p
+        .channels
+        .iter()
+        .filter(|c| c.device.type_id == "peel.guitar.electric")
+        .filter_map(|c| c.device.preset.as_deref())
+        .collect();
+    assert_eq!(presets, BTreeSet::from(["High Gain", "Palm Mute"]));
+
+    // Chorus power chords: root, fifth and octave struck together.
+    let chorus = in_section(&p, "Chorus", "peel.guitar.electric");
+    let power = chorus.iter().any(|h| {
+        let stack: BTreeSet<u8> = chorus
+            .iter()
+            .filter(|o| (o.beat - h.beat).abs() < 1e-9)
+            .map(|o| o.key)
+            .collect();
+        stack == BTreeSet::from([h.key, h.key + 7, h.key + 12])
+    });
+    assert!(power, "no power chords in the chorus");
+
+    // Each main section has its own guitar part and a bass under it.
+    let mut parts = Vec::new();
+    for name in ["Verse", "Chorus", "Breakdown"] {
+        let (a, _) = section(&p, name, 0);
+        let gtr: BTreeSet<(i64, u8)> = in_section(&p, name, "peel.guitar.electric")
+            .iter()
+            .filter(|h| h.beat < a + 8.0)
+            .map(|h| (((h.beat - a) * 12.0).round() as i64, h.key))
+            .collect();
+        assert!(!gtr.is_empty(), "{name}: no guitar");
+        let bass = in_section(&p, name, "peel.synth.bass");
+        assert!(bass.iter().any(|h| h.key < 40), "{name}: no low bass");
+        parts.push((name, gtr));
+    }
+    for i in 0..parts.len() {
+        for j in i + 1..parts.len() {
+            assert_ne!(parts[i].1, parts[j].1, "{} and {}", parts[i].0, parts[j].0);
+        }
+    }
+
+    // The breakdown kick locks to the chugs.
+    let chugs: BTreeSet<i64> = in_section(&p, "Breakdown", "peel.guitar.electric")
+        .iter()
+        .map(|h| (h.beat * 12.0).round() as i64)
+        .collect();
+    let kicks: BTreeSet<i64> = in_section(&p, "Breakdown", "peel.drum.kick")
+        .iter()
+        .map(|h| (h.beat * 12.0).round() as i64)
+        .collect();
+    assert_eq!(kicks, chugs);
 }

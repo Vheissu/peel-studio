@@ -759,3 +759,168 @@ pub fn edm() -> Project {
         (28, "Outro"),
     ])
 }
+
+/// Rock / metal at 108 BPM in E minor. The chorus rides a double kick in
+/// sixteenth triplets under ringing power chords; the verse is a simpler
+/// rock beat with a palm-muted riff, and the breakdown locks the kick to
+/// half-time chugs.
+pub fn rock_metal() -> Project {
+    let mut s = Song::new(108.0, 0.0, &["Drums", "Bass", "Rhythm", "Chug"]);
+    let kick = s.part("Kick", 0, "peel.drum.kick", "Tight", HIT, -10.0);
+    let snare = s.part("Snare", 9, "peel.drum.snare", "Crack", HIT, -9.0);
+    let hat = s.part("Hat", 2, "peel.drum.hat", "Closed", HIT, -16.0);
+    let crash = s.part("Crash", 3, "peel.drum.hat", "Crash", HIT, -20.0);
+    let tom = s.part("Toms", 8, "peel.drum.tom", "Floor", HIT, -12.0);
+    let bass = s.part("Bass", 6, "peel.synth.bass", "Fingered", 28, -8.0);
+    let gtr = s.part("Guitar", 4, "peel.guitar.electric", "High Gain", 40, -14.0);
+    let chug = s.part("Chug", 5, "peel.guitar.electric", "Palm Mute", 40, -12.0);
+    s.fx(snare, "peel.fx.reverb", "Drum Room");
+    s.fx(gtr, "peel.fx.reverb", "Tight Ambience");
+
+    // E5 - C5 - A5 - B5 as root, fifth and octave.
+    let prog: [&[u8]; 4] = [&[40, 47, 52], &[48, 55, 60], &[45, 52, 57], &[47, 54, 59]];
+    let roots = [28, 36, 33, 35];
+
+    // The starting groove: six sixteenth-triplet kicks on beats one and
+    // three, snare on two and four, a hat on every beat.
+    let triplet = Time::new(1, 6);
+    let mut double = roll(kick, HIT, Time::ZERO, triplet, 6, (0.95, 0.8));
+    double.extend(roll(kick, HIT, Time::beats(2), triplet, 6, (0.95, 0.8)));
+    double.extend(grid(snare, "....X.......X..."));
+    double.extend(grid(hat, "x...x...x...x..."));
+    let double = s.pattern("Double kick", 0, 1, double);
+
+    let rock = "X.....x.X.x.....|X.....x.X.......";
+    let mut beat = grid(kick, rock);
+    beat.extend(grid(snare, "....X.......X...|....X.......X..."));
+    beat.extend(grid(hat, "x.x.x.x.x.x.x.x.|x.x.x.x.x.x.x.x."));
+    let beat = s.pattern("Rock beat", 1, 2, beat);
+
+    // The rock beat with a floor-tom run into the chorus.
+    let mut fill = grid(kick, "X.....x.X.x.....|X.....x.........");
+    fill.extend(grid(snare, "....X.......X...|....X...x.x.X.XX"));
+    fill.extend(grid(hat, "x.x.x.x.x.x.x.x.|x.x.x.x........."));
+    for (i, key) in [67u8, 64, 60, 55].into_iter().enumerate() {
+        fill.push(n16(tom, 25 + 2 * i as i64, 1, key, 0.7 + 0.06 * i as f32));
+    }
+    let fill = s.pattern("Rock fill", 1, 2, fill);
+
+    // Half time: the kick doubles the chugs, a crash marks each bar.
+    let chugs: [(i64, i64, u8); 12] = [
+        (0, 2, 40),
+        (3, 1, 40),
+        (6, 2, 40),
+        (10, 1, 40),
+        (11, 1, 40),
+        (14, 2, 46),
+        (16, 3, 40),
+        (19, 1, 40),
+        (22, 2, 40),
+        (24, 1, 40),
+        (26, 2, 43),
+        (28, 4, 40),
+    ];
+    let mut down = Vec::new();
+    for &(step, _, _) in &chugs {
+        down.push(n16(
+            kick,
+            step,
+            1,
+            HIT,
+            if step % 4 == 0 { 0.95 } else { 0.8 },
+        ));
+    }
+    down.extend(grid(snare, "........X.......|........X......."));
+    down.extend(grid(crash, "x...............|x..............."));
+    down.extend(grid(hat, "....x.......x...|....x.......x..."));
+    let down = s.pattern("Breakdown beat", 9, 2, down);
+    let down_gtr = s.pattern("Breakdown chug", 5, 2, line(chug, &chugs, 0.85));
+    let low: Vec<(i64, i64, u8)> = chugs.iter().map(|&(s, l, k)| (s, l, k - 12)).collect();
+    let down_bass = s.pattern("Breakdown bass", 6, 2, line(bass, &low, 0.85));
+
+    // Verse riff: open-string chugs answered by G, A and a flat fifth.
+    let riff: [(i64, i64, u8); 21] = [
+        (0, 1, 40),
+        (1, 1, 40),
+        (2, 2, 40),
+        (4, 1, 40),
+        (5, 1, 40),
+        (6, 2, 43),
+        (8, 1, 40),
+        (9, 1, 40),
+        (10, 2, 40),
+        (12, 2, 45),
+        (14, 2, 43),
+        (16, 1, 40),
+        (17, 1, 40),
+        (18, 2, 40),
+        (20, 1, 40),
+        (21, 1, 40),
+        (22, 2, 46),
+        (24, 2, 45),
+        (26, 2, 43),
+        (28, 2, 40),
+        (30, 2, 38),
+    ];
+    let verse_gtr = s.pattern("Verse riff", 5, 2, line(chug, &riff, 0.8));
+    let verse_bass: Vec<(i64, i64, u8)> = riff
+        .iter()
+        .filter(|&&(s, _, _)| s % 2 == 0)
+        .map(|&(s, l, k)| (s, l.max(2), k - 12))
+        .collect();
+    let verse_bass = s.pattern("Verse bass", 6, 2, line(bass, &verse_bass, 0.85));
+
+    // Chorus chords pushed in a 3-3-2 figure; the bass pumps eighths.
+    let chorus_gtr = s.pattern(
+        "Chorus chords",
+        4,
+        4,
+        chords(
+            gtr,
+            &prog,
+            &[(0, 3), (3, 3), (6, 2), (8, 4), (12, 2), (14, 2)],
+            0.8,
+            false,
+        ),
+    );
+    let eighths: Vec<(i64, i64, u8)> = (0..8).map(|i| (i * 2, 2, 0)).collect();
+    let chorus_bass = s.pattern("Chorus bass", 6, 4, bassline(bass, &roots, &eighths, 0.8));
+    let ring = s.pattern(
+        "Ringing chords",
+        4,
+        4,
+        chords(gtr, &prog, &[(0, 16)], 0.75, false),
+    );
+    let ring_bass = s.pattern(
+        "Long bass",
+        6,
+        4,
+        bassline(bass, &roots, &[(0, 16, 0)], 0.75),
+    );
+
+    s.place(&[
+        (2, ring, 0, 4),
+        (1, ring_bass, 0, 4),
+        (0, beat, 2, 2),
+        (0, beat, 4, 6),
+        (0, fill, 10, 2),
+        (1, verse_bass, 4, 8),
+        (3, verse_gtr, 4, 8),
+        (0, double, 12, 8),
+        (1, chorus_bass, 12, 8),
+        (2, chorus_gtr, 12, 8),
+        (0, down, 20, 8),
+        (1, down_bass, 20, 8),
+        (3, down_gtr, 20, 8),
+        (0, double, 28, 3),
+        (1, ring_bass, 28, 4),
+        (2, ring, 28, 4),
+    ]);
+    s.sections(&[
+        (0, "Intro"),
+        (4, "Verse"),
+        (12, "Chorus"),
+        (20, "Breakdown"),
+        (28, "Outro"),
+    ])
+}
