@@ -289,3 +289,18 @@ fn pitched_drum_bodies_follow_bend_and_noise_drums_do_not() {
         assert_eq!(a, b, "{id}");
     }
 }
+
+#[test]
+fn new_strikes_clear_stale_poly_pressure_and_inherit_channel_pressure_and_bend() {
+    for (id, key) in PITCHED {
+        let common = [bend(0, 2.0), channel(0, 0.5), note_on(6_000, key, 0.8, 9)];
+        let mut clean = fresh(id);
+        let expected = render(clean.as_mut(), &common, 20_000, 256).0;
+        let mut pressed = fresh(id);
+        let mut events = common.to_vec();
+        events.push(poly(100, key, 1.0));
+        events.sort_by_key(|e| e.0);
+        let actual = render(pressed.as_mut(), &events, 20_000, 256).0;
+        assert_eq!(actual, expected, "{id}: a new strike inherited stale poly pressure");
+    }
+}

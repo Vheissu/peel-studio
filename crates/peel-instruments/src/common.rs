@@ -104,6 +104,9 @@ impl<S: Synth> Instrument<S> {
                 } else {
                     0.0
                 };
+                // A new strike inherits channel pressure, not a previous
+                // strike's per-key aftertouch (including its smoothing tail).
+                self.synth.expression().clear_key(key);
                 self.synth.note_on(key.min(127), vel, voice);
             }
             EventKind::NoteOff {
@@ -481,6 +484,14 @@ impl Expression {
         self.live |= 1u128 << i;
     }
 
+    fn clear_key(&mut self, key: u8) {
+        let i = key.min(127) as usize;
+        self.key_t[i] = 0.0;
+        self.key[i] = 0.0;
+        self.moving &= !(1u128 << i);
+        self.live &= !(1u128 << i);
+    }
+
     /// Back to centre and zero pressure at once.
     pub(crate) fn reset(&mut self) {
         *self = Expression {
@@ -565,7 +576,11 @@ impl Expression {
 
 #[inline]
 fn unit(v: f32) -> f32 {
-    if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 }
+    if v.is_finite() {
+        v.clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
 }
 
 #[inline]
