@@ -23,7 +23,9 @@
 //! the block at their sample offsets, and output is kept finite. Voices are
 //! preallocated in `prepare`; nothing allocates while rendering.
 
+mod analog;
 mod common;
+mod minblep_table;
 
 mod bass;
 mod clap;

@@ -1419,3 +1419,313 @@ fn violin_phrase_analysis() {
     );
     assert!(all_finite(&l) && w(28, 30) > 0.5 * w(1, 2) && w(28, 30) < 2.0 * w(1, 2));
 }
+
+// ------------------------------------------- synth realism pass (poly, bass)
+
+/// Level (dB re `fund`) of the strongest alias line of a saw at `f0`: the
+/// folded images `SR - k * f0` of the harmonics above Nyquist.
+fn worst_alias_db(buf: &[f32], f0: f32) -> f32 {
+    let fund = tone_level(buf, f0);
+    let mut worst = 0.0f32;
+    let mut k = (SR / 2.0 / f0).ceil() as u32;
+    while (k as f32) * f0 < SR {
+        let alias = SR - k as f32 * f0;
+        // Skip lines that land on (or next to) a true harmonic.
+        let near = (alias / f0 - (alias / f0).round()).abs() * f0;
+        if alias > 200.0 && near > 150.0 {
+            worst = worst.max(tone_level(buf, alias));
+        }
+        k += 1;
+    }
+    20.0 * (worst / fund).log10()
+}
+
+#[test]
+fn poly_saw_is_alias_free_up_to_the_top_octaves() {
+    for key in [84u8, 96, 105] {
+        let mut d = fresh("peel.synth.poly");
+        for (k, v) in [
+            ("unison.voices", 0.0),
+            ("osc.mix", 0.0),
+            ("filter.type", 0.0),
+            ("filter.cutoff", 20_000.0),
+            ("filter.env_amount", 0.0),
+            ("filter.key_track", 0.0),
+            ("filter.velocity", 0.0),
+            ("out.velocity", 0.0),
+            ("analog.drift", 0.0),
+            ("amp.attack", 0.001),
+            ("amp.sustain", 1.0),
+        ] {
+            set(d.as_mut(), k, v);
+        }
+        let (l, _) = render(d.as_mut(), &[note_on(0, key, 1.0, 1)], 30_000, 256);
+        let f0 = 440.0 * ((key as f32 - 69.0) / 12.0).exp2();
+        let db = worst_alias_db(&l[10_000..26_096], f0);
+        // The previous 2-point PolyBLEP saw measured -45 dB (C5) to -29 dB
+        // (A7) on this kind of test.
+        assert!(db < -62.0, "key {key}: worst alias line {db} dB");
+    }
+}
+
+#[test]
+fn poly_supersaw_is_wide_but_keeps_its_mono_sum() {
+    let mut d = fresh("peel.synth.poly");
+    for (k, v) in [
+        ("unison.voices", 6.0),
+        ("unison.type", 1.0),
+        ("unison.detune", 55.0),
+        ("unison.spread", 1.0),
+        ("unison.lowcut", 1.0),
+        ("osc.mix", 0.0),
+        ("amp.sustain", 1.0),
+    ] {
+        set(d.as_mut(), k, v);
+    }
+    let (l, r) = render(d.as_mut(), &[note_on(0, 55, 0.9, 1)], 60_000, 256);
+    let (l, r) = (&l[12_000..], &r[12_000..]);
+    let corr = {
+        let (mut ll, mut rr, mut lr) = (0.0f64, 0.0f64, 0.0f64);
+        for (a, b) in l.iter().zip(r) {
+            ll += (*a as f64).powi(2);
+            rr += (*b as f64).powi(2);
+            lr += *a as f64 * *b as f64;
+        }
+        lr / (ll * rr).sqrt()
+    };
+    let mono: Vec<f32> = l.iter().zip(r).map(|(a, b)| 0.5 * (a + b)).collect();
+    let loss_db = 20.0 * (rms(&mono) / (0.5 * (rms(l) + rms(r)))).log10();
+    assert!(corr < 0.85, "supersaw should be wide, correlation {corr}");
+    assert!(
+        loss_db > -3.0,
+        "supersaw collapses in mono: {loss_db} dB (correlation {corr})"
+    );
+}
+
+#[test]
+fn poly_every_unison_setting_plays_sanely() {
+    for kind in [0.0, 1.0] {
+        for voices in 0..9 {
+            let mut d = fresh("peel.synth.poly");
+            set(d.as_mut(), "unison.type", kind);
+            set(d.as_mut(), "unison.voices", voices as f32);
+            set(d.as_mut(), "unison.lowcut", 0.8);
+            let events = [
+                note_on(0, 48, 0.9, 1),
+                note_on(0, 55, 0.9, 2),
+                note_on(0, 64, 0.9, 3),
+            ];
+            let (l, r) = render(d.as_mut(), &events, 24_000, 256);
+            let pk = peak(&l).max(peak(&r));
+            assert!(all_finite(&l) && all_finite(&r));
+            assert!(
+                (0.05..2.0).contains(&pk),
+                "type {kind} voices {}: peak {pk}",
+                voices + 1
+            );
+        }
+    }
+}
+
+#[test]
+fn poly_legato_holds_one_voice_glides_and_falls_back() {
+    let mut d = fresh("peel.synth.poly");
+    for (k, v) in [
+        ("voice.mode", 2.0),
+        ("voice.glide", 0.25),
+        ("unison.voices", 0.0),
+        ("osc.mix", 0.0),
+        ("osc1.wave", 0.0),
+        ("filter.type", 0.0),
+        ("filter.cutoff", 12_000.0),
+        ("filter.env_amount", 0.0),
+        ("filter.key_track", 0.0),
+        ("analog.drift", 0.0),
+        ("amp.attack", 0.005),
+        ("amp.sustain", 1.0),
+        ("amp.release", 0.02),
+    ] {
+        set(d.as_mut(), k, v);
+    }
+    let events = [
+        note_on(0, 48, 0.9, 1),
+        note_on(20_000, 60, 0.9, 2),
+        note_off(40_000, 60, 2),
+        note_off(70_000, 48, 1),
+    ];
+    let (l, _) = render(d.as_mut(), &events, 80_000, 256);
+    let before = detect_pitch(&l[12_000..19_000], SR);
+    let gliding = detect_pitch(&l[21_000..24_000], SR);
+    let arrived = detect_pitch(&l[33_000..39_000], SR);
+    let back = detect_pitch(&l[58_000..66_000], SR);
+    assert!((before / 130.81 - 1.0).abs() < 0.03, "first note {before}");
+    assert!(
+        gliding > 135.0 && gliding < 255.0,
+        "legato should glide, got {gliding}"
+    );
+    assert!((arrived / 261.63 - 1.0).abs() < 0.04, "arrived {arrived}");
+    assert!(
+        (back / 130.81 - 1.0).abs() < 0.04,
+        "releasing the top note falls back to the held one: {back}"
+    );
+    // No retrigger dip when the second note joins.
+    let hold = rms(&l[18_000..20_000]);
+    let join = rms_windows(&l[20_000..23_000], 240)
+        .into_iter()
+        .fold(f32::MAX, f32::min);
+    assert!(join > 0.7 * hold, "legato dipped: {join} vs {hold}");
+    assert!(rms(&l[76_000..]) < 1e-3, "released at the end");
+}
+
+#[test]
+fn poly_pitch_envelope_dives_from_above() {
+    let mut d = fresh("peel.synth.poly");
+    for (k, v) in [
+        ("unison.voices", 0.0),
+        ("osc.mix", 0.0),
+        ("osc1.wave", 0.0),
+        ("filter.type", 0.0),
+        ("filter.cutoff", 12_000.0),
+        ("filter.env_amount", 0.0),
+        ("filter.key_track", 0.0),
+        ("analog.drift", 0.0),
+        ("amp.attack", 0.001),
+        ("amp.sustain", 1.0),
+        ("pitch.env_amount", 12.0),
+        ("pitch.env_decay", 0.5),
+    ] {
+        set(d.as_mut(), k, v);
+    }
+    let (l, _) = render(d.as_mut(), &[note_on(0, 48, 0.9, 1)], 48_000, 256);
+    let early = detect_pitch(&l[300..2_800], SR);
+    let late = detect_pitch(&l[40_000..46_000], SR);
+    assert!(
+        (late / 130.81 - 1.0).abs() < 0.03,
+        "settles on the note: {late}"
+    );
+    assert!(early > late * 1.4, "starts high: {early} vs {late}");
+}
+
+#[test]
+fn poly_resonant_drive_survives_audio_rate_cutoff_modulation() {
+    for filter in [0.0, 1.0, 2.0] {
+        let mut d = fresh("peel.synth.poly");
+        for (k, v) in [
+            ("filter.type", filter),
+            ("filter.resonance", 1.0),
+            ("filter.drive", 1.0),
+            ("filter.cutoff", 400.0),
+            ("lfo.rate", 30.0),
+            ("lfo.depth", 1.0),
+            ("lfo.target", 1.0),
+            ("lfo.shape", 3.0),
+            ("amp.sustain", 1.0),
+        ] {
+            set(d.as_mut(), k, v);
+        }
+        let events = [note_on(0, 36, 1.0, 1), note_on(0, 60, 1.0, 2)];
+        let (l, r) = render(d.as_mut(), &events, 48_000, 128);
+        assert!(all_finite(&l) && all_finite(&r), "filter {filter}");
+        assert!(peak(&l).max(peak(&r)) < 3.0, "filter {filter} blew up");
+    }
+}
+
+#[test]
+fn bass_sub_is_mono_clean_and_starts_at_zero_phase() {
+    let mut d = fresh("peel.synth.bass");
+    set(d.as_mut(), "osc.sub", 0.6);
+    let (l, r) = render(d.as_mut(), &[note_on(100, 33, 0.9, 1)], 48_000, 256);
+    assert_eq!(max_diff(&l, &r), 0.0, "bass must stay mono");
+    // The sub starts at its zero crossing, so the very first samples are tiny.
+    assert!(
+        l[100..120].iter().all(|v| v.abs() < 0.01),
+        "click at note start: {:?}",
+        &l[100..110]
+    );
+    let mean = l[8_000..].iter().sum::<f32>() / (l.len() - 8_000) as f32;
+    assert!(mean.abs() < 0.003, "dc offset {mean}");
+}
+
+#[test]
+fn bass_reese_and_pulse_are_dc_free() {
+    for (wave, pw) in [(0.0, 0.5), (1.0, 0.3)] {
+        let mut d = fresh("peel.synth.bass");
+        for (k, v) in [
+            ("osc.wave", wave),
+            ("osc.pw", pw),
+            ("osc2.level", 0.9),
+            ("osc2.voices", 2.0),
+            ("filter.drive", 0.8),
+            ("dist.amount", 0.4),
+            ("amp.sustain", 1.0),
+        ] {
+            set(d.as_mut(), k, v);
+        }
+        let (l, _) = render(d.as_mut(), &[note_on(0, 36, 0.9, 1)], 48_000, 256);
+        let mean = l[12_000..].iter().sum::<f32>() / (l.len() - 12_000) as f32;
+        assert!(mean.abs() < 0.01, "wave {wave}: dc {mean}");
+    }
+}
+
+#[test]
+fn bass_pitch_envelope_gives_an_808_dive() {
+    let mut d = fresh("peel.synth.bass");
+    for (k, v) in [
+        ("osc.wave", 3.0),
+        ("osc.sub", 0.0),
+        ("analog.drift", 0.0),
+        ("filter.cutoff", 4_000.0),
+        ("filter.env_amount", 0.0),
+        ("pitch.env_amount", 12.0),
+        ("pitch.env_decay", 0.5),
+        ("amp.sustain", 1.0),
+    ] {
+        set(d.as_mut(), k, v);
+    }
+    let (l, _) = render(d.as_mut(), &[note_on(0, 36, 0.9, 1)], 48_000, 256);
+    let early = detect_pitch(&l[300..2_800], SR);
+    let late = detect_pitch(&l[40_000..46_000], SR);
+    assert!((late / 65.41 - 1.0).abs() < 0.03, "late {late}");
+    assert!(early > late * 1.5, "early {early} late {late}");
+}
+
+#[test]
+fn bass_drive_is_oversampled_and_stays_alias_free() {
+    let mut d = fresh("peel.synth.bass");
+    for (k, v) in [
+        ("osc.wave", 0.0),
+        ("osc.sub", 0.0),
+        ("analog.drift", 0.0),
+        ("filter.cutoff", 8_000.0),
+        ("filter.env_amount", 0.0),
+        ("filter.key_track", 0.0),
+        ("filter.velocity", 0.0),
+        ("filter.accent", 0.0),
+        ("filter.drive", 1.0),
+        ("out.velocity", 0.0),
+        ("amp.sustain", 1.0),
+    ] {
+        set(d.as_mut(), k, v);
+    }
+    let (l, _) = render(d.as_mut(), &[note_on(0, 81, 1.0, 1)], 30_000, 256);
+    let db = worst_alias_db(&l[10_000..26_096], 880.0);
+    // The previous ladder ran at 1x and folded back well above the fundamental.
+    assert!(db < -60.0, "driven bass alias line {db} dB");
+}
+
+#[test]
+fn bass_every_growl_type_is_bounded() {
+    for kind in 0..3 {
+        let mut d = fresh("peel.synth.bass");
+        set(d.as_mut(), "dist.type", kind as f32);
+        set(d.as_mut(), "dist.amount", 1.0);
+        set(d.as_mut(), "filter.drive", 1.0);
+        set(d.as_mut(), "filter.resonance", 0.9);
+        set(d.as_mut(), "osc.wave", 0.0);
+        set(d.as_mut(), "osc2.level", 1.0);
+        let (l, _) = render(d.as_mut(), &[note_on(0, 33, 1.0, 1)], 24_000, 256);
+        assert!(all_finite(&l));
+        assert!(peak(&l) < 2.0, "type {kind}: peak {}", peak(&l));
+        assert!(peak(&l) > 0.05, "type {kind} is silent");
+    }
+}
