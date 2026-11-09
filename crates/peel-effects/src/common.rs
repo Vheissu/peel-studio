@@ -1,6 +1,7 @@
 //! Shared plumbing for every effect: parameter storage, sample-accurate
 //! event splitting, and a few small DSP helpers.
 
+use peel_dsp::delay::Lfo;
 use peel_dsp::device::{DeviceDescriptor, DeviceEvent, EventKind, ProcessContext};
 use peel_dsp::param::ParamId;
 
@@ -328,6 +329,135 @@ pub(crate) fn snap_beats(beats: f32) -> f32 {
         }
     }
     best
+}
+
+/// Points an LFO at a tempo-synced period of `beats` quarter notes
+/// (snapped to a musical value). The LFO free-runs at the synced rate; while
+/// the transport plays its phase is locked to the song position.
+pub(crate) fn lfo_follow_tempo(lfo: &mut Lfo, ctx: &ProcessContext, beats: f32) {
+    let period = f64::from(snap_beats(beats));
+    let inc = ctx.tempo_bpm / (60.0 * f64::from(ctx.sample_rate) * period);
+    lfo.set_increment(inc as f32);
+    if ctx.playing {
+        let p = ctx.beat_position / period;
+        let frac = (p - p.floor()) as f32;
+        lfo.phase = if frac >= 1.0 { 0.0 } else { frac };
+    }
+}
+
+/// Triangle wave in `-1..=1` for a phase in turns (starts at 0, rising).
+#[inline]
+pub(crate) fn tri_turns(phase: f32) -> f32 {
+    let p = phase - phase.floor();
+    if p < 0.25 {
+        4.0 * p
+    } else if p < 0.75 {
+        2.0 - 4.0 * p
+    } else {
+        4.0 * p - 4.0
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod testing {
+    //! Helpers shared by the unit tests of the modulation effects.
+    use peel_dsp::device::{Device, ProcessContext};
+
+    pub const SR: f32 = 48_000.0;
+
+    pub fn sine(freq: f64, i: usize, amp: f32) -> f32 {
+        amp * (std::f64::consts::TAU * (i as f64 * freq / f64::from(SR)).fract()).sin() as f32
+    }
+
+    /// Deterministic noise in -1..1.
+    pub struct Rng(pub u32);
+    impl Rng {
+        pub fn next(&mut self) -> f32 {
+            self.0 = self.0.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (self.0 >> 8) as f32 / (1u32 << 24) as f32 * 2.0 - 1.0
+        }
+    }
+
+    /// Applies a preset by key to a freshly defaulted, prepared device.
+    pub fn with_preset(type_id: &str, preset: &peel_dsp::Preset) -> Box<dyn Device> {
+        let mut d = crate::create(type_id).unwrap();
+        peel_dsp::device::apply_defaults(d.as_mut());
+        for (key, v) in preset.params {
+            let id = d.descriptor().param_by_key(key).unwrap().id;
+            d.set_param(id, *v);
+        }
+        d.prepare(SR, 256);
+        d
+    }
+
+    /// Every preset yields finite, bounded audio on a noisy stereo signal.
+    pub fn presets_are_finite(type_id: &str) {
+        for preset in crate::presets(type_id) {
+            let mut d = with_preset(type_id, preset);
+            let mut rng = Rng(7);
+            let ctx = ProcessContext::new(SR);
+            for block in 0..120 {
+                let mut l: Vec<f32> = (0..256)
+                    .map(|i| sine(110.0, block * 256 + i, 0.5) + 0.2 * rng.next())
+                    .collect();
+                let mut r: Vec<f32> = l.iter().map(|v| v * 0.8).collect();
+                d.process(&ctx, &[], &mut l, &mut r);
+                assert!(
+                    l.iter()
+                        .chain(r.iter())
+                        .all(|v| v.is_finite() && v.abs() < 8.0),
+                    "{type_id}/{}",
+                    preset.name
+                );
+            }
+        }
+    }
+
+    /// Sweeps every parameter between 10% and 90% of its range every 480
+    /// samples while a sine plays; no sample-to-sample step may be large.
+    pub fn automation_is_click_free(type_id: &str, limit: f32) {
+        let desc = crate::descriptors()
+            .iter()
+            .find(|d| d.type_id == type_id)
+            .unwrap();
+        for p in desc.params {
+            let mut d = crate::create(type_id).unwrap();
+            peel_dsp::device::apply_defaults(d.as_mut());
+            d.prepare(SR, 480);
+            let ctx = ProcessContext::new(SR);
+            let mut prev = 0.0f32;
+            let mut worst = 0.0f32;
+            for block in 0..80 {
+                let norm = if block % 2 == 0 { 0.1 } else { 0.9 };
+                d.set_param(p.id, p.from_normalized(norm));
+                let mut l: Vec<f32> = (0..480)
+                    .map(|i| sine(220.0, block * 480 + i, 0.5))
+                    .collect();
+                let mut r = l.clone();
+                d.process(&ctx, &[], &mut l, &mut r);
+                if block >= 10 {
+                    for v in &l {
+                        worst = worst.max((v - prev).abs());
+                        prev = *v;
+                    }
+                } else {
+                    prev = *l.last().unwrap();
+                }
+            }
+            assert!(worst < limit, "{type_id}.{}: step {worst}", p.key);
+        }
+    }
+
+    /// Goertzel magnitude of `x` at `freq`.
+    pub fn tone_level(x: &[f32], freq: f64) -> f64 {
+        let w = std::f64::consts::TAU * freq / f64::from(SR);
+        let (mut re, mut im) = (0.0, 0.0);
+        for (i, v) in x.iter().enumerate() {
+            re += f64::from(*v) * (w * i as f64).cos();
+            im += f64::from(*v) * (w * i as f64).sin();
+        }
+        (re * re + im * im).sqrt() * 2.0 / x.len() as f64
+    }
 }
 
 #[cfg(test)]
