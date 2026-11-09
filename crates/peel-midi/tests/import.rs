@@ -382,8 +382,8 @@ fn every_ignored_event_is_counted() {
     assert_eq!(count(r, "Control Change 10 (Pan)"), 1);
     assert_eq!(count(r, "Control Change 64 (Sustain Pedal)"), 1);
     assert_eq!(count(r, "Control Change 0 (Bank Select MSB)"), 1);
-    assert_eq!(count(r, "Pitch Bend"), 2);
-    assert_eq!(count(r, "Channel Aftertouch"), 1);
+    assert_eq!(count(r, "Pitch Bend"), 0);
+    assert_eq!(count(r, "Channel Aftertouch"), 0);
     assert_eq!(count(r, "System Exclusive"), 1);
     assert_eq!(
         count(r, "Program Change (reported per channel, not applied)"),
@@ -411,7 +411,8 @@ fn every_ignored_event_is_counted() {
     );
     // The report prints.
     let text = r.to_string();
-    assert!(text.contains("Pitch Bend x2"), "{text}");
+    assert!(!text.contains("Pitch Bend x2"), "{text}");
+    assert!(!import.patterns[0].expression.is_empty());
     assert!(
         text.contains("1 notes") || text.contains("1 notes in"),
         "{text}"
