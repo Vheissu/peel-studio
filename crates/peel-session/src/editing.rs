@@ -66,6 +66,12 @@ pub fn check_changed_times(value: &Value, before: &Value, key: Option<&str>) -> 
     Ok(())
 }
 pub fn validate_edit(p: &Project) -> Result<(), String> {
+    if p.mixer.tracks.len() > peel_engine::MAX_TRACKS {
+        return Err(format!(
+            "At most {} mixer tracks are supported",
+            peel_engine::MAX_TRACKS
+        ));
+    }
     let errors = peel_document::validate(p)
         .into_iter()
         .filter(|i| i.is_error())

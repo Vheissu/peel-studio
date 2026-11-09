@@ -87,7 +87,8 @@ pub fn compile(p: &Project, ctx: &CompileContext) -> (RenderPlan, PlanIndex) {
                 pan: t.pan,
                 muted: t.muted || solo_muted,
                 output,
-                meter: ctx.meters.get(&t.id).copied().unwrap_or(0),
+                // Unallocated tracks must never alias the master meter or cue source.
+                meter: ctx.meters.get(&t.id).copied().unwrap_or(u16::MAX),
                 key_source: p.mixer.sidechain_targets(t.id).next().is_some(),
                 keys: t
                     .inserts

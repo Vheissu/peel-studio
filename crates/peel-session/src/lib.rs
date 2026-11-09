@@ -48,6 +48,36 @@ pub use plugins::{PluginRegistry, type_id_for as plugin_type_id};
 pub use record::{MonitorStatus, RecordingStatus};
 pub use samples::SampleLoader;
 
+/// Retain each live track's meter, reclaim removed tracks and allocate only
+/// free indices. Lifetime track churn must never wrap into another live bus.
+fn reconcile_track_meters(project: &Project, meters: &mut HashMap<Id, u16>) {
+    let active: std::collections::HashSet<_> = project.mixer.tracks.iter().map(|t| t.id).collect();
+    meters.retain(|id, _| active.contains(id));
+    let mut used = [false; peel_engine::telemetry::MAX_METERS];
+    for track in &project.mixer.tracks {
+        if let Some(&meter) = meters.get(&track.id) {
+            if let Some(taken) = used.get_mut(usize::from(meter))
+                && !*taken
+            {
+                *taken = true;
+            } else {
+                meters.remove(&track.id);
+            }
+        }
+    }
+    let mut free = used
+        .iter()
+        .enumerate()
+        .filter_map(|(i, &taken)| (!taken).then_some(i as u16));
+    for track in &project.mixer.tracks {
+        if let std::collections::hash_map::Entry::Vacant(entry) = meters.entry(track.id)
+            && let Some(meter) = free.next()
+        {
+            entry.insert(meter);
+        }
+    }
+}
+
 struct DeviceSlot {
     slot: Slot,
     type_id: String,
@@ -72,7 +102,6 @@ pub struct Session {
     free_slots: Vec<Slot>,
     next_slot: Slot,
     meters: HashMap<Id, u16>,
-    next_meter: u16,
     analysis_device: Option<Id>,
     analysis_state: Option<(Slot, bool)>,
     plan: Option<RenderPlan>,
@@ -169,7 +198,6 @@ impl Session {
             free_slots: Vec::new(),
             next_slot: 0,
             meters: HashMap::new(),
-            next_meter: 0,
             analysis_device: None,
             analysis_state: None,
             plan: None,
@@ -318,13 +346,7 @@ impl Session {
                 _ => self.install_device(inst, &project),
             }
         }
-        for t in &project.mixer.tracks {
-            if !self.meters.contains_key(&t.id) {
-                self.meters.insert(t.id, self.next_meter);
-                self.next_meter =
-                    self.next_meter.wrapping_add(1) % peel_engine::telemetry::MAX_METERS as u16;
-            }
-        }
+        reconcile_track_meters(&project, &mut self.meters);
     }
 
     /// A native device, or a CLAP plugin restored from its saved state.
@@ -1773,3 +1795,6 @@ mod tests {
 
 #[cfg(test)]
 mod sync_tests;
+
+#[cfg(test)]
+mod meter_tests;

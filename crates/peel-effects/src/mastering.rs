@@ -3,7 +3,8 @@
 //! Input trim feeds broad tone controls, linked Glue compression, mid/side
 //! width and the lookahead limiter. Simple and advanced editors use these
 //! same parameters; changing editor mode never rewrites the sound. The
-//! limiter reports its fixed latency for the engine's delay compensation.
+//! limiter reports its fixed latency; the engine does not yet align parallel
+//! processing chains. Use this finishing chain on the master output.
 
 use peel_dsp::util::{Smoothed, db_to_gain};
 use peel_dsp::{
