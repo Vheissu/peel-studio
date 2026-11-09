@@ -853,8 +853,28 @@ fn lane_menu_inserts_and_deletes_lanes() {
 /// project invalid. Seeded so failures reproduce.
 #[test]
 fn monkey_input_keeps_the_project_valid() {
-    for seed in [1u64, 7, 42] {
+    monkey(&[1u64, 7, 42, 3, 99]);
+}
+
+/// Many more seeds; run with `cargo test -p peel-app -- --ignored monkey_long`.
+#[test]
+#[ignore = "long"]
+fn monkey_long() {
+    let seeds: Vec<u64> = (100..160).collect();
+    monkey(&seeds);
+}
+
+fn monkey(seeds: &[u64]) {
+    for &seed in seeds {
         let mut h = Harness::new();
+        // Later seeds work on the House project with the tempo strip open.
+        if seed % 2 == 1 && seed != 1 && seed != 7 {
+            h.studio
+                .session
+                .replace_project(peel_session::template::house());
+            h.studio.ws.playlist.show_tempo = true;
+            h.frames(2);
+        }
         let mut state = seed
             .wrapping_mul(6364136223846793005)
             .wrapping_add(1442695040888963407);
@@ -872,6 +892,7 @@ fn monkey_input_keeps_the_project_valid() {
             peel_ui::NamedKey::F6,
             peel_ui::NamedKey::F7,
             peel_ui::NamedKey::F9,
+            peel_ui::NamedKey::F10,
         ];
         for step in 0..600 {
             let p = vec2(rnd() * 1440.0, rnd() * 900.0);
@@ -905,6 +926,13 @@ fn monkey_input_keeps_the_project_valid() {
                 8 => {
                     h.studio.session.doc.undo();
                     h.frame();
+                }
+                9 if rnd() < 0.5 => {
+                    h.move_to(p);
+                    h.move_to(p);
+                    h.ui.input.double_clicked = true;
+                    h.press(0);
+                    h.release(0);
                 }
                 _ => h.frames(2),
             }
