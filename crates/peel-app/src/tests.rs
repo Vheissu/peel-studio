@@ -3250,7 +3250,11 @@ fn the_bend_range_picker_reaches_the_session_and_preferences() {
     h.click(W::new("inst-bend-range"));
     h.frames(2);
     // Off, ±1, ±2, ±3, ±5, ±7, ±12 ...: item 5 is ±7.
-    h.click(W::new("inst-bend-range").with("menu").with(("item", 5usize)));
+    h.click(
+        W::new("inst-bend-range")
+            .with("menu")
+            .with(("item", 5usize)),
+    );
     assert_eq!(h.session().pitch_bend_range(), 7.0);
     assert_eq!(h.studio.prefs.pitch_bend_range, 7.0);
     // A new session picks the saved range up again.
@@ -3280,7 +3284,6 @@ fn wait_for(h: &mut Harness, mut done: impl FnMut(&Harness) -> bool) {
     panic!("the engine never drained the live queue");
 }
 
-
 /// Bends with the mouse, fills the live queue and lets go, retrying the
 /// scenario if the engine drained the queue first. Leaves a refused reset
 /// owed.
@@ -3304,7 +3307,10 @@ fn a_refused_release_stays_owed_and_is_retried_until_it_lands() {
     open_instrument(&mut h);
     // The queue is full when the mouse lets go: the neutral is refused.
     release_into_a_full_queue(&mut h);
-    assert!(h.session().pitch_bend_value() > 0.9, "nothing was centred yet");
+    assert!(
+        h.session().pitch_bend_value() > 0.9,
+        "nothing was centred yet"
+    );
     // Closing the editor does not drop it; the per-frame retry lands it.
     crate::instrument_editor::close(&mut h.studio.session, &mut h.studio.ws);
     wait_for(&mut h, |h| h.session().pitch_bend_value() == 0.0);
@@ -3350,7 +3356,10 @@ fn a_pending_reset_does_not_neutralize_a_new_target() {
     }
     assert!(accepted);
     h.frames(30);
-    assert!(!h.studio.ws.inst.expr.bend.neutral_due(), "owed reset dropped");
+    assert!(
+        !h.studio.ws.inst.expr.bend.neutral_due(),
+        "owed reset dropped"
+    );
     assert!((h.session().pitch_bend_value() - 0.5).abs() < 1.0e-6);
 }
 

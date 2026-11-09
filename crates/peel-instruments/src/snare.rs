@@ -13,8 +13,8 @@ use peel_dsp::voice::StealPolicy;
 use peel_dsp::{Device, DeviceDescriptor, DeviceKind, ParamId, Preset, ProcessContext};
 
 use crate::common::{
-    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, TIMBRE_OCTAVES, Vx,
-    drive_curve, key_offset, lerp, ramp_coef, shape, st_ratio, vel_gain,
+    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth,
+    TIMBRE_OCTAVES, Vx, drive_curve, key_offset, lerp, ramp_coef, shape, st_ratio, vel_gain,
 };
 
 const PITCH: ParamId = 1;
@@ -369,8 +369,11 @@ impl SnareVoice {
     fn set_tone(&mut self, x: &Vx, sr: f32) {
         if x.tone != self.tone {
             self.tone = x.tone;
-            self.band
-                .set_q((self.band_hz * x.tone_ratio(TIMBRE_OCTAVES)).min(0.4 * sr), 0.8, sr);
+            self.band.set_q(
+                (self.band_hz * x.tone_ratio(TIMBRE_OCTAVES)).min(0.4 * sr),
+                0.8,
+                sr,
+            );
         }
     }
 

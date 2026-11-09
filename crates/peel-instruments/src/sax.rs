@@ -36,7 +36,8 @@ use peel_dsp::voice::StealPolicy;
 use peel_dsp::{Device, DeviceDescriptor, DeviceKind, ParamId, Preset, ProcessContext};
 
 use crate::common::{
-    CTRL, Expression, safe_bend, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, ramp_coef,
+    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, ramp_coef,
+    safe_bend,
 };
 
 const MODE: ParamId = 1;

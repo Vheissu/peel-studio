@@ -26,8 +26,8 @@ use peel_dsp::voice::StealPolicy;
 use peel_dsp::{Device, DeviceDescriptor, DeviceKind, ParamId, Preset, ProcessContext};
 
 use crate::common::{
-    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, Synth, TIMBRE_OCTAVES, Vx, key_offset, lerp,
-    ramp_coef, st_ratio, vel_gain,
+    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, Synth, TIMBRE_OCTAVES, Vx,
+    key_offset, lerp, ramp_coef, st_ratio, vel_gain,
 };
 
 const TUNE: ParamId = 1;

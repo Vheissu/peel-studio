@@ -911,7 +911,12 @@ fn midi_status(
     );
     let range = s.pitch_bend_range();
     let id = W::new("inst-bend-range");
-    let resp = ui.dropdown(id, row, &crate::expression::range_text(range), "Pitch bend range");
+    let resp = ui.dropdown(
+        id,
+        row,
+        &crate::expression::range_text(range),
+        "Pitch bend range",
+    );
     if resp.clicked {
         ui.open_popup(id.with("menu"), row);
     }
@@ -989,7 +994,13 @@ fn pick_row(
 ) -> (Option<usize>, peel_ui::Response) {
     let t = ui.theme.clone();
     let mut row = rows.row(28.0);
-    ui.text(row.cut_left(70.0), label, t.caption, t.text_faint, Align::Start);
+    ui.text(
+        row.cut_left(70.0),
+        label,
+        t.caption,
+        t.text_faint,
+        Align::Start,
+    );
     let resp = ui.dropdown(id, row, value, a11y);
     if resp.clicked {
         ui.open_popup(id.with("menu"), row);
@@ -1053,7 +1064,10 @@ fn mpe_rows(ui: &mut Ui, rows: &mut Rows, s: &mut Session, prefs: &mut Prefs) ->
         &items,
     );
     let manager = if c.mode == MpeMode::Upper { 16 } else { 1 };
-    ui.tooltip(&resp, &format!("Member channels; channel {manager} is the zone's manager"));
+    ui.tooltip(
+        &resp,
+        &format!("Member channels; channel {manager} is the zone's manager"),
+    );
     if let Some(i) = pick {
         set_mpe(s, prefs, |c| c.members = i as u8 + 1);
     }
@@ -1061,7 +1075,9 @@ fn mpe_rows(ui: &mut Ui, rows: &mut Rows, s: &mut Session, prefs: &mut Prefs) ->
     let range_items = |choices: &[f32], cur: f32| -> Vec<MenuItem> {
         choices
             .iter()
-            .map(|v| MenuItem::new(crate::expression::range_text(*v)).checked((v - cur).abs() < 0.01))
+            .map(|v| {
+                MenuItem::new(crate::expression::range_text(*v)).checked((v - cur).abs() < 0.01)
+            })
             .collect()
     };
     let (pick, resp) = pick_row(
@@ -1086,7 +1102,10 @@ fn mpe_rows(ui: &mut Ui, rows: &mut Rows, s: &mut Session, prefs: &mut Prefs) ->
         "MPE zone bend range",
         &range_items(&ZONE_BENDS, c.manager_bend_range),
     );
-    ui.tooltip(&resp, "Bend range of the manager channel, which moves every note in the zone");
+    ui.tooltip(
+        &resp,
+        "Bend range of the manager channel, which moves every note in the zone",
+    );
     if let Some(i) = pick {
         set_mpe(s, prefs, |c| c.manager_bend_range = ZONE_BENDS[i]);
     }

@@ -46,8 +46,8 @@ use peel_dsp::voice::StealPolicy;
 use peel_dsp::{Device, DeviceDescriptor, DeviceKind, ParamId, Preset, ProcessContext};
 
 use crate::common::{
-    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, Vx, lerp, ramp_coef,
-    vel_gain,
+    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, Vx, lerp,
+    ramp_coef, vel_gain,
 };
 
 const DECAY: ParamId = 1;
@@ -873,9 +873,8 @@ impl GuitarVoice {
     fn tune(&mut self, sr: f32, p: &StringParams, lfo: f32) {
         let age = self.age as f32;
         let onset = ((age - 0.2 * sr) / (0.5 * sr)).clamp(0.0, 1.0);
-        let cents = p.vib_depth * lfo * onset
-            + self.bend * (-age / (0.18 * sr)).exp()
-            + p.bend_cents;
+        let cents =
+            p.vib_depth * lfo * onset + self.bend * (-age / (0.18 * sr)).exp() + p.bend_cents;
         let f = (self.f_cur * (cents * (LN_2 / 1200.0)).exp()).max(MIN_HZ);
         let mute = p.palm.max(self.ghost);
 

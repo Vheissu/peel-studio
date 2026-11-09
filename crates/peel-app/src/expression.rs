@@ -159,7 +159,12 @@ fn spring(
         FocusKind::Activate,
         Semantics::new(Role::Slider)
             .label(name)
-            .numeric(f64::from(shown), if bipolar { -1.0 } else { 0.0 }, 1.0, 0.01)
+            .numeric(
+                f64::from(shown),
+                if bipolar { -1.0 } else { 0.0 },
+                1.0,
+                0.01,
+            )
             .value(value_text),
     );
     let holding = resp.pressed || resp.dragging || (resp.active && ui.input.down[0]);

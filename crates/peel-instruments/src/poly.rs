@@ -26,7 +26,8 @@ use crate::analog::{
     advance, cents_ratio, ratio, soft_ceiling,
 };
 use crate::common::{
-    CTRL, Expression, safe_bend, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, ramp_coef, vel_gain,
+    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, ramp_coef,
+    safe_bend, vel_gain,
 };
 
 const OSC1_WAVE: ParamId = 1;
@@ -1625,7 +1626,15 @@ impl Poly {
 
     /// Initializes `slot` for a new note. With `fresh` false the voice keeps
     /// sounding (legato): only pitch target and velocity change.
-    fn start_voice(&mut self, slot: usize, key: u8, id: u32, velocity: f32, fresh: bool, retrigger: bool) {
+    fn start_voice(
+        &mut self,
+        slot: usize,
+        key: u8,
+        id: u32,
+        velocity: f32,
+        fresh: bool,
+        retrigger: bool,
+    ) {
         self.notes = self.notes.wrapping_add(1);
         let target = key as f32;
         let glide_from = if self.m.glide_k < 1.0 {

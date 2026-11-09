@@ -31,7 +31,8 @@ use peel_dsp::voice::{StealPolicy, VoiceState};
 use peel_dsp::{Device, DeviceDescriptor, DeviceKind, ParamId, Preset, ProcessContext};
 
 use crate::common::{
-    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, Tilt, lerp, ramp_coef,
+    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, Tilt, lerp,
+    ramp_coef,
 };
 
 const TONE: ParamId = 1;
@@ -983,7 +984,11 @@ impl GrandVoice {
         for c in 0..self.chunks.min(CHUNKS) {
             for l in 0..LANES {
                 let w = self.ang[c][l];
-                let a = if ratio == 1.0 { w } else { (w * ratio).min(top.max(w)) };
+                let a = if ratio == 1.0 {
+                    w
+                } else {
+                    (w * ratio).min(top.max(w))
+                };
                 self.a1[c][l] = self.two_r[c][l] * a.cos();
             }
         }

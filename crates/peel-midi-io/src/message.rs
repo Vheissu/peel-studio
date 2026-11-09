@@ -191,7 +191,11 @@ fn decode(status: u8, d0: u8, d1: u8) -> Option<MidiEvent> {
             key: d0,
             velocity: d1,
         },
-        0xA0 => MidiEvent::PolyPressure { channel, key: d0, value: d1 },
+        0xA0 => MidiEvent::PolyPressure {
+            channel,
+            key: d0,
+            value: d1,
+        },
         0xD0 => MidiEvent::ChannelPressure { channel, value: d0 },
         0xB0 => match d0 {
             64 => MidiEvent::Sustain {
@@ -464,15 +468,34 @@ mod tests {
     }
     #[test]
     fn aftertouch_preserves_channels_running_status_and_realtime_interleaving() {
-        assert_eq!(parse(&[0xD5, 0, 64, 0xF8, 127, 0xA3, 60, 30, 61, 0xFE, 100]),vec![
-            MidiEvent::ChannelPressure{channel:5,value:0},
-            MidiEvent::ChannelPressure{channel:5,value:64},
-            MidiEvent::ChannelPressure{channel:5,value:127},
-            MidiEvent::PolyPressure{channel:3,key:60,value:30},
-            MidiEvent::PolyPressure{channel:3,key:61,value:100},
-        ]);
-        assert!(parse(&[0xA0,60]).is_empty());
+        assert_eq!(
+            parse(&[0xD5, 0, 64, 0xF8, 127, 0xA3, 60, 30, 61, 0xFE, 100]),
+            vec![
+                MidiEvent::ChannelPressure {
+                    channel: 5,
+                    value: 0
+                },
+                MidiEvent::ChannelPressure {
+                    channel: 5,
+                    value: 64
+                },
+                MidiEvent::ChannelPressure {
+                    channel: 5,
+                    value: 127
+                },
+                MidiEvent::PolyPressure {
+                    channel: 3,
+                    key: 60,
+                    value: 30
+                },
+                MidiEvent::PolyPressure {
+                    channel: 3,
+                    key: 61,
+                    value: 100
+                },
+            ]
+        );
+        assert!(parse(&[0xA0, 60]).is_empty());
         assert!(parse(&[0xD0]).is_empty());
     }
-
 }

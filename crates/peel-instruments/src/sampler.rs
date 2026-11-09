@@ -19,8 +19,8 @@ use peel_dsp::{
 };
 
 use crate::common::{
-    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, Tilt, ramp_coef,
-    st_ratio, vel_gain,
+    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, Tilt,
+    ramp_coef, st_ratio, vel_gain,
 };
 
 /// Fastest playback, in source frames per output sample. Far above any
@@ -347,7 +347,8 @@ impl SamplerVoice {
             return;
         }
         self.applied = ratio;
-        self.step = self.step.signum() * (self.base_step * ratio as f64).min(MAX_STEP.max(self.base_step));
+        self.step =
+            self.step.signum() * (self.base_step * ratio as f64).min(MAX_STEP.max(self.base_step));
     }
 
     #[inline]

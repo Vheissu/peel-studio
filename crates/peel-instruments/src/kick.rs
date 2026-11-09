@@ -15,8 +15,8 @@ use peel_dsp::voice::StealPolicy;
 use peel_dsp::{Device, DeviceDescriptor, DeviceKind, ParamId, Preset, ProcessContext};
 
 use crate::common::{
-    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth, TIMBRE_OCTAVES,
-    drive_curve, key_offset, lerp, ramp_coef, shape, st_ratio, vel_gain,
+    CTRL, Expression, Fade, Instrument, Pool, PoolVoice, Ramp, STEAL_FADE_MS, Synth,
+    TIMBRE_OCTAVES, drive_curve, key_offset, lerp, ramp_coef, shape, st_ratio, vel_gain,
 };
 
 const PITCH: ParamId = 1;
@@ -408,7 +408,8 @@ impl KickVoice {
 
     #[inline]
     fn tick(&mut self, sr_inv: f32, p: &Stage) -> f32 {
-        let freq = (self.f0 + self.f_span * self.pitch_env + self.f_snap * self.snap_env) * self.bend;
+        let freq =
+            (self.f0 + self.f_span * self.pitch_env + self.f_snap * self.snap_env) * self.bend;
         self.pitch_env *= self.pitch_coef;
         self.snap_env *= self.snap_coef;
         // Read the phase before advancing it so the first sample is exactly 0.

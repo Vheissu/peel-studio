@@ -26,7 +26,7 @@ use crate::analog::{
     BlOsc, DcBlock, Down2, Drift, Env, LadderCoef, PitchEnv, SatLadder, Up2, advance, cents_ratio,
     ratio, shape_by, soft_ceiling,
 };
-use crate::common::{CTRL, Expression, safe_bend, Instrument, Ramp, Synth, ramp_coef, vel_gain};
+use crate::common::{CTRL, Expression, Instrument, Ramp, Synth, ramp_coef, safe_bend, vel_gain};
 
 const WAVE: ParamId = 1;
 const PW: ParamId = 2;
@@ -1231,7 +1231,9 @@ impl Synth for Bass {
             if self.sub_clean {
                 y += sub * 0.7;
             }
-            let out = soft_ceiling(self.dc.tick(y) * 0.75 * amp * self.vel_level * self.out_gain * self.xgain);
+            let out = soft_ceiling(
+                self.dc.tick(y) * 0.75 * amp * self.vel_level * self.out_gain * self.xgain,
+            );
             left[n] = out;
             right[n] = out;
             if self.amp_env.is_idle() {

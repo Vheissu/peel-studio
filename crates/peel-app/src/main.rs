@@ -37,9 +37,9 @@ mod welcome;
 mod workspace;
 
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
 mod mpe_tests;
+#[cfg(test)]
+mod tests;
 
 #[cfg(test)]
 use inspector::reaches as inspector_reaches;
