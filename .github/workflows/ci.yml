@@ -35,5 +35,12 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --workspace --all-targets
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: "0.11.7"
+      - name: Bundle Python and PyTheory
+        run: uv run --no-project --python 3.12.13 scripts/bundle-python.py target/debug/python --replace
       - run: cargo test --workspace
+      - name: Verify bundled Python without system Python
+        run: cargo test -p peel-cli --test bundled_python -- --ignored
       - run: cargo clippy --workspace --all-targets -- -D warnings

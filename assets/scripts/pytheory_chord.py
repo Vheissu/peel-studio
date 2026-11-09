@@ -1,4 +1,4 @@
-# Requires PyTheory in the Python environment selected with PEEL_PYTHON.
+# PyTheory is included in packaged Peel Studio releases.
 from pytheory import TonedScale
 
 pattern = next((p for p in peel.project["patterns"] if p["id"] == peel.context["pattern"]), None)

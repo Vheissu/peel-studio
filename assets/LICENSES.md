@@ -11,5 +11,16 @@ asset in the same commit that adds it.
 
 | `scripts/*.js`, `scripts/*.lua`, `scripts/*.py` | Written for Peel Studio | API 1 | GPL-3.0-or-later (project code) | Factory scripting actions |
 
+Release packages also include a private CPython runtime and Python packages:
+
+| Component | Version | Notices |
+| --- | --- | --- |
+| CPython / python-build-standalone | 3.12.13 / 20260414 | PSF and component notices in the runtime's LICENSE files and `licenses/`; source notices are in `packaging/python/licenses/` |
+| PyTheory | 0.57.13 | MIT; retained in its `.dist-info` metadata |
+| NumPy, SciPy, sounddevice, CFFI, Rich and their dependencies | Pinned in `packaging/python/requirements.lock` | Each wheel retains its own license files and notices |
+
+See [packaging/python/README.md](../packaging/python/README.md) for runtime
+sources, dependency pins and build instructions.
+
 Factory sounds are synthesized by the native instruments at runtime; no
 sample recordings are bundled yet.

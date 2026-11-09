@@ -18,6 +18,10 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" dist/iconset
 cp target/release/peel-studio "$APP/Contents/MacOS/peel-studio"
 # Plugin scanner: a crashing plugin takes down this helper, not the app.
 cp target/release/peel-clap-scan "$APP/Contents/MacOS/peel-clap-scan"
+# Python and packages ship in the app; nothing is installed at first launch.
+uv run --no-project --python 3.12.13 scripts/bundle-python.py "$APP/Contents/Resources/python"
+cp LICENSE README.md assets/LICENSES.md "$APP/Contents/Resources/"
+cp docs/SCRIPTING.md "$APP/Contents/Resources/"
 
 # Icon set from the generated PNGs.
 cp assets/icons/peel-16.png dist/iconset/icon_16x16.png
@@ -71,8 +75,10 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-codesign --force --options runtime --timestamp=none -s "${SIGN_ID:--}" "$APP"
-codesign --verify --verbose=1 "$APP"
+uv run --no-project --python 3.12.13 scripts/sign-macos.py "$APP"
+# Check the signed, relocated interpreter before making the disk image.
+"$APP/Contents/Resources/python/bin/python3" -I -B -c 'from pytheory import TonedScale; assert [t.midi for t in TonedScale(tonic="C4")["major"].triad().tones] == [60,64,67]'
+codesign --verify --deep --strict --verbose=1 "$APP"
 
 DMG="dist/Peel-Studio-${VERSION}-macos-$(uname -m).dmg"
 rm -f "$DMG"

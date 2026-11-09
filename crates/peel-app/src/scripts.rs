@@ -462,7 +462,7 @@ pub fn panel(ui: &mut Ui, studio: &mut Studio) {
         .python
         .as_ref()
         .map(|p| p.display().to_string())
-        .unwrap_or_else(|| "System Python".into());
+        .unwrap_or_else(|| peel_extensions::default_python_label().into());
     ui.popup_panel(PANEL, r, |ui, r| {
         ui.describe_node(
             PANEL.with("a11y-panel"),
@@ -506,7 +506,7 @@ pub fn panel(ui: &mut Ui, studio: &mut Studio) {
                 .button(
                     W::new("scripts-python-system"),
                     row.cut_right(60.0),
-                    "System",
+                    "Default",
                 )
                 .clicked;
             row.cut_right(8.0);

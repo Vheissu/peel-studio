@@ -4,6 +4,7 @@ mod lua;
 mod process;
 mod python;
 mod worker;
+pub use python::{bundled_python, default_python_label};
 pub use worker::dispatch as dispatch_worker;
 
 use std::fmt;

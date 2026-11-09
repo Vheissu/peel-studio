@@ -40,7 +40,7 @@ the specification each crate owns.
 | `peel-ui` | GPU renderer, text, input, theme, widgets | document, engine |
 | `peel-app` | The desktop application and its editors | — |
 | `peel-cli` | Headless validation and rendering | GUI |
-| `peel-extensions` | Isolated JavaScript/Lua actions and trusted Python process bridge | GUI |
+| `peel-extensions` | Isolated JavaScript/Lua actions and bundled Python/PyTheory process bridge | GUI |
 | `peel-mcp` | Stdio MCP server, agent tools, validated edits, headless host | GUI |
 
 ## Data flow

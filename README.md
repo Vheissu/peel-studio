@@ -122,8 +122,9 @@ See [docs/MCP.md](docs/MCP.md) for client configuration, tools and examples.
 
 Run JavaScript, Lua and Python actions from **Scripts** in the status bar
 or **F8**. Actions edit a project snapshot and apply successful changes as
-one undo step. JavaScript and Lua are bundled; Python uses your chosen
-interpreter and can import packages such as PyTheory. Factory examples,
+one undo step. Releases bundle JavaScript, Lua and a private Python runtime
+with PyTheory, so no extra installation is needed. A custom Python
+interpreter can be selected for additional packages. Factory examples,
 installation and the API are in [docs/SCRIPTING.md](docs/SCRIPTING.md).
 
 ## Export

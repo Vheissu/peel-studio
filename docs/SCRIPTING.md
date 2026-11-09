@@ -102,11 +102,17 @@ explicit JSON null. Use `{}` for a new object.
 
 ## Python
 
-Python is optional and runs in a separate process. Install Python 3.10 or
-newer, then select a `.py` action. **Choose…** selects an interpreter,
-including one inside a virtual environment; Peel remembers that choice.
-**System** clears it. If no interpreter is selected, Peel uses
-`PEEL_PYTHON`, then `python3` (`python` on Windows) from the launch environment.
+Packaged Peel Studio releases include a private Python 3.12 runtime,
+PyTheory and its dependencies. Python actions run locally in a separate
+process; no Python installation, package installation or first-run download
+is needed. Select **PyTheory: C major chord** and press **Run**.
+
+**Choose…** selects a custom interpreter for scripts that need other packages.
+Peel remembers that choice. **Default** restores automatic selection: a custom
+`PEEL_PYTHON` environment setting takes precedence, followed by the bundled
+runtime. Development builds without a bundle fall back to `python3`
+(`python` on Windows). Create a developer bundle with the command in
+[packaging/python/README.md](../packaging/python/README.md).
 
 Python scripts have normal local access to files, the network and processes.
 Only run Python files you trust. Undo restores project edits; it cannot
@@ -126,17 +132,11 @@ peel.log("Shortened notes in the current pattern.")
 
 ### PyTheory
 
-[PyTheory](https://pytheory.org/) can be imported from a Python action.
-Install it in a virtual environment, then choose that environment's Python
-in the Scripts panel:
+[PyTheory](https://pytheory.org/) is ready to import in the bundled runtime:
 
-```sh
-python3 -m venv ~/.peel-python
-~/.peel-python/bin/python -m pip install pytheory
+```python
+from pytheory import TonedScale
 ```
-
-On Windows, use `py -3 -m venv .peel-python` and
-`.peel-python\Scripts\python.exe -m pip install pytheory`.
 
 Select a melodic instrument and a pattern, then run **PyTheory: C major
 chord**. The example calls `TonedScale(tonic="C4")["major"].triad()`, converts
@@ -146,8 +146,11 @@ The example was verified with PyTheory 0.57.13.
 
 See the full action in
 [`assets/scripts/pytheory_chord.py`](../assets/scripts/pytheory_chord.py).
-Other Python packages can be used the same way. Peel doesn't install
-packages automatically.
+For extra Python packages, choose your own virtual environment. The shipped
+runtime stays unchanged so moving the app and verifying its signature keep
+working. Optional PyTheory extras (live MIDI, Link and diagrams) aren't bundled.
+PyTheory's separate audio-playback functions may need platform libraries,
+such as PortAudio on Linux; the factory action plays notes through Peel.
 
 ## Edits
 
