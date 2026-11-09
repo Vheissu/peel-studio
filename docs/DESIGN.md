@@ -108,7 +108,13 @@ Related quiet controls share a `well` with 1 px `line_strong` dividers
 between groups (transport, time, editing tools, pattern length). A tool
 that is one of a set (Draw, Select, Erase) shows the selection the way
 the segmented control does. Tabs are text with a 2 px accent underline.
-Property rows put a 72 px caption label left of the value. LEDs are flat
+Property rows put a 72 px caption label left of the value. Knob cells
+are at least 76 px and stretch to fill the row, so a default inspector
+shows three columns with whole parameter names; a name that still does
+not fit is cut and shown in full in the knob's tooltip. When a toolbar runs
+short, names go before controls: the pattern picker shrinks to its swatch
+and the piano roll's channel to its color, both keeping the name in their
+tooltip and accessible label. LEDs are flat
 dots without a halo.
 
 ## Help

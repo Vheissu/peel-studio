@@ -44,7 +44,7 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
         // swing take the rest from the right.
         let mut row = tools;
         let toggle = row.cut_left(30.0);
-        row.cut_left(8.0);
+        row.cut_left(6.0);
         header_tools(ui, row, s, pid, &pattern);
         let b = ui.icon_button(
             W::new("rack-graph"),
@@ -402,12 +402,18 @@ fn header_tools(
             }
         });
     }
-    row.cut_right(14.0);
-    // Swing.
+    row.cut_right(8.0);
+    // Swing: the knob, its label to the left. The label is a hover target
+    // of its own (showing the amount) and goes only when there is no room
+    // for it beside the velocity toggle; the knob keeps its name and value
+    // for tooltips and screen readers either way.
     let mut swing = s.project().swing;
     let kr = row.cut_right(26.0);
     let k = ui.knob(W::new("rack-swing"), kr, &mut swing, 0.0, t.accent, false);
-    ui.tooltip(&k, &format!("Swing {:.0}%", swing * 100.0));
+    let amount = format!("Swing {:.0}%", swing * 100.0);
+    ui.name(&k, "Swing");
+    ui.value_text(&k, &format!("{:.0}%", swing * 100.0));
+    ui.tooltip(&k, &amount);
     if k.changed {
         s.doc
             .edit_gesture(k.id.0, "Change swing", |p| p.swing = swing);
@@ -415,17 +421,13 @@ fn header_tools(
     if k.released {
         s.doc.end_gesture();
     }
-    // The label goes first when the header is short; the knob keeps its
-    // name and value for tooltips and screen readers.
-    ui.name(&k, "Swing");
-    if row.w >= 48.0 {
-        ui.text(
-            row.cut_right(44.0),
-            "Swing",
-            t.caption,
-            t.text_faint,
-            Align::End,
-        );
+    let label_w = ui.measure("Swing", t.caption).x + 2.0;
+    if row.w >= label_w + 6.0 {
+        row.cut_right(6.0);
+        let lr = row.cut_right(label_w);
+        let lresp = ui.interact(W::new("rack-swing-label"), lr);
+        ui.text(lr, "Swing", t.caption, t.text_faint, Align::End);
+        ui.tooltip(&lresp, &amount);
     }
 }
 

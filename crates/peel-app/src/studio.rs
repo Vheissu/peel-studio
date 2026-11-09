@@ -1207,9 +1207,10 @@ fn dock(ui: &mut Ui, r: Rect, studio: &mut Studio) {
         .sum();
     let has_picker = matches!(studio.ws.dock, DockTab::Rack | DockTab::PianoRoll);
     let picker_w = if has_picker { 196.0 } else { 0.0 };
+    // What each editor's header tools take (see the editors' `header`).
     let tools_need = match studio.ws.dock {
-        DockTab::Rack => 250.0,
-        DockTab::PianoRoll => 470.0,
+        DockTab::Rack => 230.0,
+        DockTab::PianoRoll => 360.0,
         DockTab::Mixer => 0.0,
         DockTab::Perform => 300.0,
     };
@@ -1218,7 +1219,7 @@ fn dock(ui: &mut Ui, r: Rect, studio: &mut Studio) {
         let w = if show_labels {
             ui.tab_width(label)
         } else {
-            36.0
+            32.0
         };
         let cell = head.cut_left(w);
         let on = shown && studio.ws.dock == tab;
@@ -1242,12 +1243,15 @@ fn dock(ui: &mut Ui, r: Rect, studio: &mut Studio) {
     // The pattern being edited sits with the editors that edit it.
     let mut tools = head.shrink2(0.0, 6.0);
     if has_picker {
-        tools.cut_left(10.0);
+        tools.cut_left(8.0);
         ui.divider_v(tools.cut_left(1.0));
-        tools.cut_left(10.0);
-        let w = (tools.w - tools_need).clamp(110.0, 160.0);
+        tools.cut_left(8.0);
+        // The picker yields room before the tools do: down to 96 px with
+        // its name, then to a swatch and caret (name in its tooltip).
+        let room = tools.w - tools_need - 50.0;
+        let w = if room >= 96.0 { room.min(160.0) } else { 44.0 };
         transport::pattern_picker(ui, &mut tools, studio, w);
-        tools.cut_left(12.0);
+        tools.cut_left(8.0);
     }
     let content = body.shrink2(0.0, 0.0);
     match studio.ws.dock {

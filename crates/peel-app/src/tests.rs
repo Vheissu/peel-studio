@@ -1779,9 +1779,33 @@ fn python_action_shows_interpreter_controls_and_installs_py_files() {
     h.click(W::new(("script-factory", index)));
     h.frame();
     assert_eq!(h.studio.scripts.selected, Some(Pick::Factory(index)));
-    h.rect(W::new("scripts-python"));
-    h.rect(W::new("scripts-python-system"));
     h.rect(W::new("scripts-run"));
+    h.rect(W::new("scripts-python-warning"));
+    // One interpreter control; its menu holds the choices.
+    let menu = W::new("scripts-python-menu");
+    h.click(W::new("scripts-python"));
+    assert!(h.ui.is_popup_open(menu));
+    h.rect(menu.with(("item", 1usize)));
+    // Bundled is already in use, so choosing it does nothing.
+    h.click(menu.with(("item", 0usize)));
+    assert!(h.studio.scripts.python.is_none());
+    if h.ui.is_popup_open(menu) {
+        h.ui.close_popup();
+    }
+    // With another interpreter set, Bundled Python switches back.
+    let custom = std::path::PathBuf::from("/opt/custom/python3");
+    h.studio.scripts.python = Some(custom.clone());
+    h.studio.prefs.python = Some(custom);
+    h.frames(2);
+    h.click(W::new("scripts-python"));
+    h.click(menu.with(("item", 0usize)));
+    assert!(
+        h.studio.scripts.python.is_none(),
+        "back to the bundled Python"
+    );
+    assert!(h.studio.prefs.python.is_none());
+    h.frames(2);
+    h.rect(W::new("scripts-python-warning"));
     let source_dir = temp_scripts_dir("python-source");
     std::fs::create_dir_all(&source_dir).unwrap();
     let source = source_dir.join("summary.py");
@@ -2104,4 +2128,126 @@ fn open_requests_and_script_panel_changes_apply_on_the_next_frame() {
     assert!(h.ui.widget_rect(W::new("inspector-hide")).is_none());
     assert!(h.ui.widget_rect(W::new("rack-len-plus")).is_none());
     h.rect(W::new(("dock-tab", "Channels")));
+}
+
+#[test]
+fn the_channels_toolbar_never_overlaps_at_small_sizes() {
+    // 1200 x 720 is the window's minimum; 1024 x 700 is the harness floor.
+    for (w, h_px, label_expected) in [(1200.0, 720.0, true), (1024.0, 700.0, false)] {
+        let mut h = Harness::new();
+        h.size = vec2(w, h_px);
+        h.frames(3);
+        assert_eq!(h.studio.ws.dock, DockTab::Rack);
+        let label = h.ui.widget_rect(W::new("rack-swing-label"));
+        if label_expected {
+            assert!(
+                label.is_some(),
+                "{w}: the Swing label shows at the minimum window"
+            );
+        }
+        let mut ids = vec!["pattern-picker", "pattern-add", "rack-graph"];
+        if label.is_some() {
+            ids.push("rack-swing-label");
+        }
+        ids.extend([
+            "rack-swing",
+            "rack-len-minus",
+            "rack-len-plus",
+            "dock-toggle",
+        ]);
+        let rects: Vec<(&str, Rect)> = ids
+            .iter()
+            .map(|id| {
+                let r = h.ui.widget_rect(W::new(*id));
+                (
+                    *id,
+                    r.unwrap_or_else(|| panic!("{w}x{h_px}: {id} is on screen")),
+                )
+            })
+            .collect();
+        for pair in rects.windows(2) {
+            let ((a, ra), (b, rb)) = (pair[0], pair[1]);
+            assert!(
+                ra.right() <= rb.x + 0.01,
+                "{w}x{h_px}: {a} {ra:?} overlaps {b} {rb:?}"
+            );
+        }
+        let dock_right = h.rect(W::new("dock-toggle")).right();
+        let right_col = h.rect(W::new("inspector-hide")).x;
+        assert!(
+            dock_right < right_col,
+            "{w}: the dock header stays inside the dock"
+        );
+    }
+}
+
+#[test]
+fn the_piano_roll_toolbar_never_overlaps_down_to_the_minimum_window() {
+    // 1200 x 720 is the smallest window the app allows.
+    for (w, h_px) in [(1440.0, 900.0), (1200.0, 720.0)] {
+        let mut h = Harness::new();
+        h.size = vec2(w, h_px);
+        h.frames(2);
+        h.click(W::new(("dock-tab", "Piano roll")));
+        h.frames(2);
+        let ids = [
+            W::new("pattern-add"),
+            W::new(("roll-tool", "Draw")),
+            W::new(("roll-tool", "Select")),
+            W::new(("roll-tool", "Erase")),
+            W::new("roll-quantize"),
+            W::new("roll-note-tools"),
+            W::new("roll-scale"),
+            W::new("roll-chord"),
+            W::new("roll-snap"),
+            W::new("roll-ghost"),
+            W::new("dock-toggle"),
+        ];
+        let rects: Vec<Rect> = ids
+            .iter()
+            .enumerate()
+            .map(|(i, id)| {
+                h.ui.widget_rect(*id)
+                    .unwrap_or_else(|| panic!("{w}x{h_px}: control {i} is on screen"))
+            })
+            .collect();
+        for (i, pair) in rects.windows(2).enumerate() {
+            assert!(
+                pair[0].right() <= pair[1].x + 0.01,
+                "{w}x{h_px}: control {i} {:?} overlaps {:?}",
+                pair[0],
+                pair[1]
+            );
+        }
+    }
+}
+
+#[test]
+fn inspector_knob_labels_fit_at_the_default_width() {
+    let mut h = Harness::new();
+    h.frames(2);
+    let crate::workspace::Focus::Channel(id) = h.studio.ws.focus.unwrap() else {
+        panic!("a channel is focused");
+    };
+    let dev = h.session().project().channel(id).unwrap().device.clone();
+    let desc = peel_devices::descriptor(&dev.type_id).unwrap();
+    // Knob centers in the first row give the cell width.
+    let knobs: Vec<Rect> = desc
+        .params
+        .iter()
+        .filter(|p| !p.is_choice())
+        .filter_map(|p| h.ui.widget_rect(W::new(("param", dev.id, p.id))))
+        .collect();
+    assert!(knobs.len() >= 2);
+    let cell = knobs[1].center().x - knobs[0].center().x;
+    assert!(cell >= 76.0, "cells are at least the minimum: {cell}");
+    let caption = h.ui.theme.caption;
+    for p in desc.params.iter().filter(|p| !p.is_choice()) {
+        let w = h.ui.measure(p.name, caption).x;
+        assert!(
+            w <= cell - 2.0,
+            "{} ({w:.0} px) fits a {cell:.0} px cell",
+            p.name
+        );
+    }
 }

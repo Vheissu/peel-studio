@@ -342,8 +342,17 @@ fn header(ui: &mut Ui, tools: Rect, ch: &Channel, ws: &mut Workspace) -> HeaderA
     // Narrow docks drop the chord and scale names (icons stay, tinted when
     // active) before anything else.
     let compact = row.w < 600.0;
+    // Tighter still (the minimum window): the channel shows as its swatch,
+    // its name in the tooltip and accessible label.
+    let tight = row.w < 470.0;
+    // Cell width of the icon controls.
+    let cw = if tight { 28.0 } else { 30.0 };
     // The channel being edited: swatch and name, quiet.
-    let chip_w = (ui.measure(&ch.name, t.label).x + 26.0).min(if compact { 96.0 } else { 140.0 });
+    let chip_w = if tight {
+        18.0
+    } else {
+        (ui.measure(&ch.name, t.label).x + 26.0).min(if compact { 96.0 } else { 140.0 })
+    };
     let chip = row.cut_right(chip_w);
     let mut cr = chip;
     let sw = cr.cut_left(10.0);
@@ -352,18 +361,23 @@ fn header(ui: &mut Ui, tools: Rect, ch: &Channel, ws: &mut Workspace) -> HeaderA
         3.0,
         col(ch.color),
     );
-    cr.cut_left(8.0);
-    let name = ui.fit_text(&ch.name, t.label, cr.w);
-    ui.text(cr, &name, t.label, t.text, Align::Start);
+    if tight {
+        let resp = ui.interact(W::new("roll-channel-chip"), chip);
+        ui.tooltip(&resp, &format!("Editing {}", ch.name));
+    } else {
+        cr.cut_left(8.0);
+        let name = ui.fit_text(&ch.name, t.label, cr.w);
+        ui.text(cr, &name, t.label, t.text, Align::Start);
+    }
     ui.describe_label(W::new("roll-channel"), chip, &ch.name);
-    row.cut_right(8.0);
+    row.cut_right(if tight { 6.0 } else { 8.0 });
     ui.divider_v(row.cut_right(1.0));
     row.cut_right(6.0);
 
     // Ghosts, grid, chord stamp and scale.
     let g = ui.icon_button(
         W::new("roll-ghost"),
-        row.cut_right(30.0),
+        row.cut_right(cw),
         icons::SQUARES,
         ws.roll.ghosts,
         None,
@@ -374,15 +388,31 @@ fn header(ui: &mut Ui, tools: Rect, ch: &Channel, ws: &mut Workspace) -> HeaderA
         ws.roll.ghosts = !ws.roll.ghosts;
     }
     row.cut_right(2.0);
-    let snap_r = row.cut_right(62.0);
-    let sresp = ui.value_button(
-        W::new("roll-snap"),
-        snap_r,
-        icons::MAGNET,
-        &format_length(ws.roll.snap),
-        "Grid",
-        false,
-    );
+    let snap_r = row.cut_right(if tight { 48.0 } else { 62.0 });
+    let sresp = if tight {
+        // Value only: the magnet goes, the name stays in the tooltip.
+        let r = ui.quiet_button(
+            W::new("roll-snap"),
+            snap_r,
+            None,
+            &format_length(ws.roll.snap),
+            false,
+            ui.is_popup_open(W::new("roll-snap-menu")),
+        );
+        ui.name(&r, "Grid");
+        ui.value_text(&r, &format_length(ws.roll.snap));
+        ui.tooltip(&r, "Grid");
+        r
+    } else {
+        ui.value_button(
+            W::new("roll-snap"),
+            snap_r,
+            icons::MAGNET,
+            &format_length(ws.roll.snap),
+            "Grid",
+            false,
+        )
+    };
     if sresp.clicked {
         ui.open_popup(W::new("roll-snap-menu"), snap_r);
     }
@@ -414,7 +444,7 @@ fn header(ui: &mut Ui, tools: Rect, ch: &Channel, ws: &mut Workspace) -> HeaderA
     } else {
         "Chord"
     };
-    let chord_r = row.cut_right(if compact { 30.0 } else { 88.0 });
+    let chord_r = row.cut_right(if compact { cw } else { 88.0 });
     let cresp = ui.value_button(
         W::new("roll-chord"),
         chord_r,
@@ -447,7 +477,7 @@ fn header(ui: &mut Ui, tools: Rect, ch: &Channel, ws: &mut Workspace) -> HeaderA
         .scale
         .map(|s| s.name())
         .unwrap_or_else(|| "Scale".into());
-    let scale_r = row.cut_right(if compact { 30.0 } else { 112.0 });
+    let scale_r = row.cut_right(if compact { cw } else { 112.0 });
     let sresp = ui.value_button(
         W::new("roll-scale"),
         scale_r,
@@ -493,14 +523,18 @@ fn header(ui: &mut Ui, tools: Rect, ch: &Channel, ws: &mut Workspace) -> HeaderA
             });
         }
     }
-    row.cut_right(6.0);
-    ui.divider_v(row.cut_right(1.0));
-    row.cut_right(6.0);
+    if tight {
+        row.cut_right(4.0);
+    } else {
+        row.cut_right(6.0);
+        ui.divider_v(row.cut_right(1.0));
+        row.cut_right(6.0);
+    }
 
     // Note actions, then the editing tools in a well.
     let nt = ui.icon_button(
         W::new("roll-note-tools"),
-        row.cut_right(30.0),
+        row.cut_right(cw),
         icons::SPARKLE,
         crate::note_tools::is_open(ui),
         None,
@@ -509,26 +543,26 @@ fn header(ui: &mut Ui, tools: Rect, ch: &Channel, ws: &mut Workspace) -> HeaderA
     ui.tooltip(&nt, "Note tools: legato, chop, arpeggiate, strum and more");
     let q = ui.icon_button(
         W::new("roll-quantize"),
-        row.cut_right(30.0),
+        row.cut_right(cw),
         icons::GRID,
         false,
         None,
     );
     ui.name(&q, "Quantize");
     ui.tooltip(&q, "Quantize to the grid (selection, or all notes)");
-    row.cut_right(6.0);
+    row.cut_right(if tight { 4.0 } else { 6.0 });
     let tools = [
         (Tool::Draw, icons::PENCIL, "Draw"),
         (Tool::Select, icons::CURSOR, "Select"),
         (Tool::Erase, icons::ERASER, "Erase"),
     ];
-    let well = row.cut_right(tools.len() as f32 * 30.0 + 4.0);
+    let well = row.cut_right(tools.len() as f32 * cw + 4.0);
     ui.well(well);
     let mut cells = well.shrink(2.0);
     for (tool, icon, tip) in tools {
         let b = ui.tool_button(
             W::new(("roll-tool", tip)),
-            cells.cut_left(30.0),
+            cells.cut_left(cw),
             icon,
             tip,
             ws.roll.tool == tool,

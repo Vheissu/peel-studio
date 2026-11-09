@@ -709,19 +709,26 @@ pub fn pattern_picker(ui: &mut Ui, row: &mut Rect, studio: &mut Studio, width: f
     ui.scene
         .rect(r, t.radius_m, t.control.mix(t.control_hover, hot));
     ui.focus_ring(id, r, t.radius_m);
-    let mut inner = r.shrink2(10.0, 0.0);
+    // Narrow docks show only the swatch and caret; the name stays in the
+    // tooltip and the accessible value.
+    let compact = width < 80.0;
+    let mut inner = r.shrink2(if compact { 8.0 } else { 10.0 }, 0.0);
     let sw = inner.cut_left(12.0);
     ui.scene.rect(
         Rect::from_center(sw.center(), 12.0, 12.0),
         3.0,
         col(pat.color),
     );
-    inner.cut_left(8.0);
-    let caret = inner.cut_right(16.0);
+    let caret = inner.cut_right(if compact { 12.0 } else { 16.0 });
     ui.icon(caret, icons::CARET_DOWN, 13.0, t.text_dim);
-    let name = ui.fit_text(&pat.name, t.label, inner.w);
-    ui.text(inner, &name, t.label, t.text, Align::Start);
-    ui.tooltip(&resp, "Pattern being edited");
+    if compact {
+        ui.tooltip(&resp, &format!("Pattern being edited: {}", pat.name));
+    } else {
+        inner.cut_left(8.0);
+        let name = ui.fit_text(&pat.name, t.label, inner.w);
+        ui.text(inner, &name, t.label, t.text, Align::Start);
+        ui.tooltip(&resp, "Pattern being edited");
+    }
     if resp.clicked {
         ui.open_popup(W::new("pattern-menu"), r);
     }
@@ -771,7 +778,7 @@ pub fn pattern_picker(ui: &mut Ui, row: &mut Rect, studio: &mut Studio, width: f
             }
         });
     }
-    row.cut_left(8.0);
+    row.cut_left(if compact { 4.0 } else { 8.0 });
     let add = ui.icon_button(
         W::new("pattern-add"),
         row.cut_left(30.0),

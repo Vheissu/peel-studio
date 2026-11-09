@@ -487,27 +487,40 @@ pub fn column(ui: &mut Ui, r: Rect, studio: &mut Studio) {
         // Python: the interpreter and its file-access warning. The
         // warning is not a usage hint, so it always shows.
         if python_selected {
+            // One quiet interpreter control; its menu picks the bundled
+            // Python or another interpreter.
             let mut row = body.cut_top(28.0);
-            let choose = ui.button(W::new("scripts-python"), row.cut_right(72.0), "Choose…");
-            ui.name(&choose, "Choose Python interpreter");
-            choose_python = choose.clicked;
-            row.cut_right(4.0);
-            let sys = ui.button(
-                W::new("scripts-python-system"),
-                row.cut_right(64.0),
-                "Default",
-            );
-            ui.name(&sys, "Use the default Python");
-            system_python = sys.clicked;
-            row.cut_right(8.0);
-            let path = ui.fit_text(&python_path, t.caption, row.w);
-            ui.text(row, &path, t.caption, t.text_dim, Align::Start);
-            let info = ui.interact(W::new("scripts-python-path"), row);
-            ui.tooltip(&info, &python_path);
+            let label = row.cut_left(72.0);
+            ui.text(label, "Interpreter", t.caption, t.text_faint, Align::Start);
+            let custom = studio.scripts.python.is_some();
+            let shown = if custom {
+                python_path.clone()
+            } else {
+                "Bundled Python".to_string()
+            };
+            let menu = W::new("scripts-python-menu");
+            let pick = ui.dropdown(W::new("scripts-python"), row, &shown, "Python interpreter");
+            ui.tooltip(&pick, &python_path);
+            if pick.clicked {
+                ui.open_popup(menu, row);
+            }
+            let items = [
+                peel_ui::MenuItem::new("Bundled Python")
+                    .checked(!custom)
+                    .enabled(custom),
+                peel_ui::MenuItem::new("Choose interpreter…"),
+            ];
+            match ui.menu(menu, Ui::below(row), &items) {
+                Some(0) => system_python = true,
+                Some(1) => choose_python = true,
+                _ => {}
+            }
             body.cut_top(2.0);
             let warn = body.cut_top(22.0);
             let msg = "Python scripts have full access to your files.";
             ui.text(warn, msg, t.caption, t.warn, Align::Start);
+            // A hit region too, so tooling and tests can find it on screen.
+            ui.interact(W::new("scripts-python-warning"), warn);
             ui.describe_label(W::new("scripts-python-warning"), warn, msg);
             body.cut_top(6.0);
         }

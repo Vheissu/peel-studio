@@ -10,7 +10,10 @@ use peel_ui::{Align, Color, MenuItem, Rect, Ui, icons, vec2};
 use crate::util::{col, db_to_fader, fader_to_db, format_db, note_name};
 use crate::workspace::{Focus, Workspace};
 
-const CELL_W: f32 = 64.0;
+/// Narrowest knob cell. Cells stretch to fill the row, so a 300 px
+/// inspector lays out three 90 px columns: wide enough for names such as
+/// "Hammer Noise" without truncation. Longer names still fit-and-tooltip.
+const CELL_W: f32 = 76.0;
 const CELL_H: f32 = 66.0;
 
 #[derive(Default)]
@@ -88,6 +91,12 @@ fn object_head(ui: &mut Ui, r: Rect, color: Color) -> Rect {
 }
 
 /// The label column of a property row (72 px).
+/// Knobs per row and the stretched cell width for a body `w` wide.
+fn knob_grid(w: f32) -> (usize, f32) {
+    let per_row = ((w - 6.0) / CELL_W).floor().max(1.0) as usize;
+    (per_row, (w - 6.0) / per_row as f32)
+}
+
 fn prop_label(ui: &mut Ui, row: &mut Rect, label: &str) {
     let t = ui.theme.clone();
     let lr = row.cut_left(72.0);
@@ -200,7 +209,9 @@ fn channel(ui: &mut Ui, r: Rect, id: Id, s: &mut Session, ws: &mut Workspace) {
     // Volume and pan, then property rows: output and step key.
     let mut strip = body.cut_top(70.0);
     let mut vol = db_to_fader(ch.gain_db);
-    let vcell = strip.cut_left(CELL_W);
+    // Volume and pan line up with the device knob columns below.
+    let (_, cell_w) = knob_grid(body.w);
+    let vcell = strip.cut_left(cell_w);
     let v = knob_cell(
         ui,
         W::new(("insp-vol", id)),
@@ -220,7 +231,7 @@ fn channel(ui: &mut Ui, r: Rect, id: Id, s: &mut Session, ws: &mut Workspace) {
         });
     }
     let mut pan = (ch.pan + 1.0) * 0.5;
-    let pcell = strip.cut_left(CELL_W);
+    let pcell = strip.cut_left(cell_w);
     let pan_txt =
         peel_dsp::ParamDescriptor::linear(0, "", "", "", -1.0, 1.0, 0.0, peel_dsp::Unit::Pan)
             .format(ch.pan);
@@ -552,7 +563,7 @@ fn track(ui: &mut Ui, r: Rect, id: Id, s: &mut Session, ws: &mut Workspace) {
 }
 
 fn panel_height(desc: &DeviceDescriptor, w: f32) -> f32 {
-    let per_row = ((w - 6.0) / CELL_W).floor().max(1.0) as usize;
+    let (per_row, _) = knob_grid(w);
     let mut h = 0.0;
     if !peel_devices::presets(desc.type_id).is_empty() {
         h += 38.0;
@@ -658,9 +669,8 @@ fn device_panel(
         0.0
     };
     ui.scene.push_clip(body);
-    let per_row = ((body.w - 6.0) / CELL_W).floor().max(1.0) as usize;
     // Cells stretch to fill the row, so labels get the room there is.
-    let cell_w = (body.w - 6.0) / per_row as f32;
+    let (per_row, cell_w) = knob_grid(body.w);
     let mut y = body.y - off;
     for (gi, (group, params)) in groups(desc).into_iter().enumerate() {
         ui.group_heading(
