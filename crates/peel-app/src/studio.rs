@@ -1224,6 +1224,9 @@ impl App for Studio {
 
 impl Studio {
     fn update_inner(&mut self, ui: &mut Ui, win: &WindowControl) {
+        // Retry any bend or pressure return the live queue refused, even
+        // with the editor closed.
+        crate::expression::flush(&mut self.session, &mut self.ws.inst.expr);
         // Screenshot hook: `PEEL_BEND` (-1..1) and `PEEL_PRESSURE` (0..1) move
         // the real session expression a few frames in, once the instrument
         // is the live target, just as a hardware wheel would.
@@ -1262,9 +1265,6 @@ impl Studio {
         let m = &mut self.ws.input_meter;
         *m = ((m.0 * fall).max(l), (m.1 * fall).max(r));
         if let Some(type_id) = &self.debug_plugin
-        // Retry any bend or pressure return the live queue refused, even
-        // with the editor closed.
-        crate::expression::flush(&mut self.session, &mut self.ws.inst.expr);
             && let Some(name) = self
                 .session
                 .plugins()
