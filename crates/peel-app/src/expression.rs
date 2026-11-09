@@ -16,28 +16,104 @@ use crate::workspace::Workspace;
 /// Bend ranges offered in the picker, in semitones.
 pub const RANGES: [f32; 8] = [1.0, 2.0, 3.0, 5.0, 7.0, 12.0, 24.0, 48.0];
 
+/// One mouse-driven value (bend or pressure) and what the session still
+/// owes it. The session refuses a send when its live queue is full, so
+/// nothing here is forgotten until a send is accepted.
+#[derive(Default)]
+pub struct Axis {
+    /// The mouse is holding the control.
+    pub held: bool,
+    /// What the pointer asks for while held.
+    pub want: f32,
+    /// What the session last accepted from this control.
+    pub sent: f32,
+    /// The session holds a nonzero value this control put there.
+    owned: bool,
+    /// Live target that value went to; a target change clears it for us.
+    owner: Option<peel_document::Id>,
+    /// A return to rest is still waiting for the queue.
+    neutral_due: bool,
+}
+
+type Sender = fn(&mut Session, f32) -> bool;
+
+impl Axis {
+    /// A return to rest is waiting for the live queue.
+    pub fn neutral_due(&self) -> bool {
+        self.neutral_due
+    }
+
+    /// What the control should show.
+    pub fn shown(&self, session_value: f32) -> f32 {
+        if self.held { self.want } else { session_value }
+    }
+
+    /// Mouse is holding the control at `v`.
+    pub fn drive(&mut self, s: &mut Session, v: f32, send: Sender) {
+        self.held = true;
+        self.want = v;
+        self.neutral_due = false;
+        self.flush(s, send);
+    }
+
+    /// Mouse let go: owe the session a return to rest (only for a value this
+    /// control actually put there) and try to pay it now.
+    pub fn let_go(&mut self, s: &mut Session, send: Sender) {
+        self.held = false;
+        if self.owned {
+            self.neutral_due = true;
+        }
+        self.flush(s, send);
+    }
+
+    /// Retries whatever the session has not accepted yet. Run every frame.
+    pub fn flush(&mut self, s: &mut Session, send: Sender) {
+        let target = s.live_target();
+        if self.owned && self.owner != target {
+            // The session already centred the old target when it changed;
+            // a neutral now would wipe a hardware value on the new one.
+            self.owned = false;
+            self.sent = 0.0;
+            self.neutral_due = false;
+        }
+        if self.held {
+            if self.want != self.sent && send(s, self.want) {
+                self.sent = self.want;
+                self.owned = self.want != 0.0;
+                self.owner = target;
+            }
+        } else if self.neutral_due && send(s, 0.0) {
+            self.neutral_due = false;
+            self.owned = false;
+            self.sent = 0.0;
+        }
+    }
+}
+
 /// Mouse-held expression. Session only.
 #[derive(Default)]
 pub struct ExprState {
-    pub bend_held: bool,
-    pub bend_sent: f32,
-    pub pressure_held: bool,
-    pub pressure_sent: f32,
+    pub bend: Axis,
+    pub pressure: Axis,
 }
 
-/// Sends whatever the mouse was holding back to rest. Hardware values the
-/// editor never touched are left alone.
+fn send_bend(s: &mut Session, v: f32) -> bool {
+    s.pitch_bend(v)
+}
+fn send_pressure(s: &mut Session, v: f32) -> bool {
+    s.channel_pressure(v)
+}
+
+/// Lets go of anything the mouse held and tries to centre it now.
 pub fn release(s: &mut Session, st: &mut ExprState) {
-    if st.bend_held {
-        st.bend_held = false;
-        st.bend_sent = 0.0;
-        s.pitch_bend(0.0);
-    }
-    if st.pressure_held {
-        st.pressure_held = false;
-        st.pressure_sent = 0.0;
-        s.channel_pressure(0.0);
-    }
+    st.bend.let_go(s, send_bend);
+    st.pressure.let_go(s, send_pressure);
+}
+
+/// Per-frame retry of unsent values, whether or not the editor is open.
+pub fn flush(s: &mut Session, st: &mut ExprState) {
+    st.bend.flush(s, send_bend);
+    st.pressure.flush(s, send_pressure);
 }
 
 /// "+2.0" style readout for a bend of `norm` of the range.
@@ -157,11 +233,7 @@ pub fn rows(ui: &mut Ui, rows: &mut Rows, s: &mut Session, ws: &mut Workspace, c
     let label = row.cut_left(70.0);
     ui.text(label, "Pitch", t.caption, t.text_faint, Align::Start);
     let readout = row.cut_right(40.0);
-    let shown = if ws.inst.expr.bend_held {
-        ws.inst.expr.bend_sent
-    } else {
-        s.pitch_bend_value()
-    };
+    let shown = ws.inst.expr.bend.shown(s.pitch_bend_value());
     let text = bend_text(shown, range);
     ui.text(readout, &text, t.readout_small, t.text, Align::End);
     let held = spring(
@@ -175,18 +247,8 @@ pub fn rows(ui: &mut Ui, rows: &mut Rows, s: &mut Session, ws: &mut Workspace, c
         &text,
     );
     match held {
-        Some(v) => {
-            ws.inst.expr.bend_held = true;
-            if (v - ws.inst.expr.bend_sent).abs() > 1.0e-4 {
-                ws.inst.expr.bend_sent = v;
-                s.pitch_bend(v);
-            }
-        }
-        None if ws.inst.expr.bend_held => {
-            ws.inst.expr.bend_held = false;
-            ws.inst.expr.bend_sent = 0.0;
-            s.pitch_bend(0.0);
-        }
+        Some(v) => ws.inst.expr.bend.drive(s, v, send_bend),
+        None if ws.inst.expr.bend.held => ws.inst.expr.bend.let_go(s, send_bend),
         None => {}
     }
     rows.gap(4.0);
@@ -201,11 +263,7 @@ pub fn rows(ui: &mut Ui, rows: &mut Rows, s: &mut Session, ws: &mut Workspace, c
         Align::Start,
     );
     let readout = row.cut_right(40.0);
-    let shown = if ws.inst.expr.pressure_held {
-        ws.inst.expr.pressure_sent
-    } else {
-        s.channel_pressure_value()
-    };
+    let shown = ws.inst.expr.pressure.shown(s.channel_pressure_value());
     let text = format!("{:.0}%", shown * 100.0);
     ui.text(readout, &text, t.readout_small, t.text, Align::End);
     let held = spring(
@@ -219,18 +277,8 @@ pub fn rows(ui: &mut Ui, rows: &mut Rows, s: &mut Session, ws: &mut Workspace, c
         &text,
     );
     match held {
-        Some(v) => {
-            ws.inst.expr.pressure_held = true;
-            if (v - ws.inst.expr.pressure_sent).abs() > 1.0e-4 {
-                ws.inst.expr.pressure_sent = v;
-                s.channel_pressure(v);
-            }
-        }
-        None if ws.inst.expr.pressure_held => {
-            ws.inst.expr.pressure_held = false;
-            ws.inst.expr.pressure_sent = 0.0;
-            s.channel_pressure(0.0);
-        }
+        Some(v) => ws.inst.expr.pressure.drive(s, v, send_pressure),
+        None if ws.inst.expr.pressure.held => ws.inst.expr.pressure.let_go(s, send_pressure),
         None => {}
     }
     rows.gap(4.0);

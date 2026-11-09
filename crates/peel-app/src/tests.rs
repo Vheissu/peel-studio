@@ -3168,7 +3168,7 @@ fn the_pitch_control_bends_the_instrument_and_springs_back() {
     open_instrument(&mut h);
     let revision = h.session().doc.revision();
     held_at(&mut h, "inst-pitch", 1.0);
-    assert!(h.studio.ws.inst.expr.bend_held);
+    assert!(h.studio.ws.inst.expr.bend.held);
     assert!(
         h.session().pitch_bend_value() > 0.95,
         "full right is a full bend up"
@@ -3176,7 +3176,7 @@ fn the_pitch_control_bends_the_instrument_and_springs_back() {
     h.release(0);
     h.frame();
     assert_eq!(h.session().pitch_bend_value(), 0.0, "release centres it");
-    assert!(!h.studio.ws.inst.expr.bend_held);
+    assert!(!h.studio.ws.inst.expr.bend.held);
     assert_eq!(
         h.session().doc.revision(),
         revision,
@@ -3201,7 +3201,7 @@ fn pressure_follows_the_mouse_and_losing_focus_releases_everything() {
     h.ui.input.focus_lost = true;
     h.frames(2);
     assert_eq!(h.session().pitch_bend_value(), 0.0);
-    assert!(!h.studio.ws.inst.expr.bend_held);
+    assert!(!h.studio.ws.inst.expr.bend.held);
 }
 
 #[test]
@@ -3239,7 +3239,7 @@ fn hardware_expression_shows_and_is_not_overwritten_by_an_idle_control() {
         "the open editor must not send a stale centre"
     );
     assert!((h.session().channel_pressure_value() - 0.25).abs() < 1.0e-6);
-    assert!(!h.studio.ws.inst.expr.bend_held);
+    assert!(!h.studio.ws.inst.expr.bend.held);
 }
 
 #[test]
@@ -3257,4 +3257,99 @@ fn the_bend_range_picker_reaches_the_session_and_preferences() {
     h.studio.session.set_pitch_bend_range(2.0).unwrap();
     h.studio.apply_io_prefs();
     assert_eq!(h.session().pitch_bend_range(), 7.0);
+}
+
+/// Fills the live expression queue until the session refuses more.
+fn fill_expression_queue(s: &mut Session) {
+    for _ in 0..200_000 {
+        if !s.poly_pressure(1, 0.5) {
+            return;
+        }
+    }
+    panic!("the live queue never filled");
+}
+
+fn wait_for(h: &mut Harness, mut done: impl FnMut(&Harness) -> bool) {
+    for _ in 0..200 {
+        h.frame();
+        if done(h) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("the engine never drained the live queue");
+}
+
+
+/// Bends with the mouse, fills the live queue and lets go, retrying the
+/// scenario if the engine drained the queue first. Leaves a refused reset
+/// owed.
+fn release_into_a_full_queue(h: &mut Harness) {
+    for _ in 0..50 {
+        held_at(h, "inst-pitch", 1.0);
+        wait_for(h, |h| h.session().pitch_bend_value() > 0.9);
+        fill_expression_queue(&mut h.studio.session);
+        h.release(0);
+        if h.studio.ws.inst.expr.bend.neutral_due() {
+            return;
+        }
+        wait_for(h, |h| h.session().pitch_bend_value() == 0.0);
+    }
+    panic!("never caught the queue full on release");
+}
+
+#[test]
+fn a_refused_release_stays_owed_and_is_retried_until_it_lands() {
+    let mut h = Harness::new();
+    open_instrument(&mut h);
+    // The queue is full when the mouse lets go: the neutral is refused.
+    release_into_a_full_queue(&mut h);
+    assert!(h.session().pitch_bend_value() > 0.9, "nothing was centred yet");
+    // Closing the editor does not drop it; the per-frame retry lands it.
+    crate::instrument_editor::close(&mut h.studio.session, &mut h.studio.ws);
+    wait_for(&mut h, |h| h.session().pitch_bend_value() == 0.0);
+    assert!(!h.studio.ws.inst.expr.bend.neutral_due());
+}
+
+#[test]
+fn a_refused_drag_is_retried_while_the_mouse_holds() {
+    let mut h = Harness::new();
+    open_instrument(&mut h);
+    fill_expression_queue(&mut h.studio.session);
+    held_at(&mut h, "inst-pitch", 1.0);
+    assert!(h.studio.ws.inst.expr.bend.held, "still held");
+    wait_for(&mut h, |h| h.session().pitch_bend_value() > 0.9);
+    h.release(0);
+    wait_for(&mut h, |h| h.session().pitch_bend_value() == 0.0);
+}
+
+#[test]
+fn a_pending_reset_does_not_neutralize_a_new_target() {
+    let mut h = Harness::new();
+    let ch = open_instrument(&mut h);
+    release_into_a_full_queue(&mut h);
+    // Another instrument becomes the target, and its hardware wheel moves.
+    let other = h
+        .session()
+        .project()
+        .channels
+        .iter()
+        .find(|c| c.id != ch)
+        .unwrap()
+        .id;
+    crate::instrument_editor::open(&mut h.studio.session, &mut h.studio.ws, other);
+    h.frame();
+    assert_eq!(h.session().live_target(), Some(other));
+    let mut accepted = false;
+    for _ in 0..200 {
+        if h.studio.session.pitch_bend(0.5) {
+            accepted = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(accepted);
+    h.frames(30);
+    assert!(!h.studio.ws.inst.expr.bend.neutral_due(), "owed reset dropped");
+    assert!((h.session().pitch_bend_value() - 0.5).abs() < 1.0e-6);
 }

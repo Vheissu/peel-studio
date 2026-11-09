@@ -1224,6 +1224,9 @@ impl Studio {
         let m = &mut self.ws.input_meter;
         *m = ((m.0 * fall).max(l), (m.1 * fall).max(r));
         if let Some(type_id) = &self.debug_plugin
+        // Retry any bend or pressure return the live queue refused, even
+        // with the editor closed.
+        crate::expression::flush(&mut self.session, &mut self.ws.inst.expr);
             && let Some(name) = self
                 .session
                 .plugins()
