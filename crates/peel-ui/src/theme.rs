@@ -22,6 +22,8 @@ pub struct Theme {
     /// Separators where a value step is not enough.
     pub line: Color,
     pub line_strong: Color,
+    /// Recessed tray behind a group of related quiet controls.
+    pub well: Color,
 
     // Text.
     pub text: Color,
@@ -50,6 +52,10 @@ pub struct Theme {
     pub radius_l: f32,
     pub control_h: f32,
     pub control_h_compact: f32,
+    /// Width of the navigation rails beside the side panels.
+    pub rail_w: f32,
+    /// Height of pane headers (browser, inspector, playlist, dock).
+    pub header_h: f32,
 
     // Type.
     pub caption: TextStyle,
@@ -72,6 +78,7 @@ impl Theme {
             control_active: Color::hex(0x3B4859),
             line: Color::hex(0x262D37),
             line_strong: Color::hex(0x323B48),
+            well: Color::hex(0x171B22),
 
             text: Color::hex(0xF1F4F8),
             text_dim: Color::hex(0xACB7C7),
@@ -96,6 +103,8 @@ impl Theme {
             radius_l: 8.0,
             control_h: 28.0,
             control_h_compact: 24.0,
+            rail_w: 40.0,
+            header_h: 38.0,
 
             caption: TextStyle::ui(11.5),
             body: TextStyle::ui(13.0),

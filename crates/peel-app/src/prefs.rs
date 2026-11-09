@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::workspace::{BrowserTab, DockTab, Workspace};
+
 const MAX_RECENT: usize = 12;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -17,6 +19,16 @@ pub struct Prefs {
     pub show_scripts: bool,
     pub show_editor: bool,
     pub show_help: bool,
+    /// Master meter and load in the top bar.
+    pub show_meter: bool,
+    /// Device, sample rate and octave in the status bar.
+    pub show_status_details: bool,
+    /// Pane sizes and tabs as the user last left them.
+    pub browser_w: Option<f32>,
+    pub inspector_w: Option<f32>,
+    pub dock_h: Option<f32>,
+    pub dock_tab: Option<DockTab>,
+    pub browser_tab: Option<BrowserTab>,
     pub audio_device: Option<String>,
     pub buffer_frames: Option<u32>,
     pub octave: i32,
@@ -39,6 +51,13 @@ impl Default for Prefs {
             show_scripts: false,
             show_editor: true,
             show_help: false,
+            show_meter: true,
+            show_status_details: true,
+            browser_w: None,
+            inspector_w: None,
+            dock_h: None,
+            dock_tab: None,
+            browser_tab: None,
             audio_device: None,
             buffer_frames: None,
             octave: 4,
@@ -123,5 +142,93 @@ impl Prefs {
             peel_session::InputChannels::Mono(a) => vec![a],
             peel_session::InputChannels::Stereo(a, b) => vec![a, b],
         };
+    }
+}
+
+impl Prefs {
+    /// The right column shows the Inspector or Scripts (never both).
+    pub fn show_right(&self) -> bool {
+        self.show_inspector || self.show_scripts
+    }
+
+    /// Shows the Inspector in the right column, or hides the column.
+    pub fn set_inspector(&mut self, on: bool) {
+        self.show_inspector = on;
+        if on {
+            self.show_scripts = false;
+        }
+    }
+
+    /// Shows Scripts in the right column, or hides the column.
+    pub fn set_scripts(&mut self, on: bool) {
+        self.show_scripts = on;
+        if on {
+            self.show_inspector = false;
+        }
+    }
+
+    /// Restores the saved pane sizes and tabs into a fresh workspace.
+    pub fn apply_layout(&self, ws: &mut Workspace) {
+        if let Some(w) = self.browser_w {
+            ws.browser_w = w;
+        }
+        if let Some(w) = self.inspector_w {
+            ws.inspector_w = w;
+        }
+        if let Some(h) = self.dock_h {
+            ws.dock_h = h;
+        }
+        if let Some(t) = self.dock_tab {
+            ws.dock = t;
+        }
+        if let Some(t) = self.browser_tab {
+            ws.browser_tab = t;
+        }
+    }
+
+    /// Copies the workspace's pane sizes and tabs; true when any changed.
+    pub fn capture_layout(&mut self, ws: &Workspace) -> bool {
+        let next = (
+            Some(ws.browser_w.round()),
+            Some(ws.inspector_w.round()),
+            Some(ws.dock_h.round()),
+            Some(ws.dock),
+            Some(ws.browser_tab),
+        );
+        let now = (
+            self.browser_w,
+            self.inspector_w,
+            self.dock_h,
+            self.dock_tab,
+            self.browser_tab,
+        );
+        if next == now {
+            return false;
+        }
+        (
+            self.browser_w,
+            self.inspector_w,
+            self.dock_h,
+            self.dock_tab,
+            self.browser_tab,
+        ) = next;
+        true
+    }
+
+    /// Puts every pane, size and toggle back to its default.
+    pub fn reset_layout(&mut self) {
+        let d = Prefs::default();
+        self.show_browser = d.show_browser;
+        self.show_inspector = d.show_inspector;
+        self.show_scripts = d.show_scripts;
+        self.show_editor = d.show_editor;
+        self.show_help = d.show_help;
+        self.show_meter = d.show_meter;
+        self.show_status_details = d.show_status_details;
+        self.browser_w = None;
+        self.inspector_w = None;
+        self.dock_h = None;
+        self.dock_tab = None;
+        self.browser_tab = None;
     }
 }

@@ -1554,47 +1554,75 @@ fn wait_for_script(h: &mut Harness) {
 }
 
 #[test]
-fn f8_and_the_status_button_open_the_scripts_panel() {
+fn f8_and_the_rail_show_scripts_in_place_of_the_inspector() {
     use crate::scripts::PANEL;
     use peel_ui::{KeyCode, NamedKey};
     let mut h = Harness::new();
     h.studio.scripts = crate::scripts::Scripts::with_dir(temp_scripts_dir("scripts-open"));
-    assert!(!h.ui.is_popup_open(PANEL));
+    assert!(!h.studio.prefs.show_scripts);
+    assert!(h.studio.prefs.show_inspector);
+    h.rect(W::new("inspector-hide"));
     named_key(&mut h, NamedKey::F8, KeyCode::F8);
     h.frame();
-    assert!(h.ui.is_popup_open(PANEL), "F8 opens the panel");
+    assert!(h.studio.prefs.show_scripts, "F8 shows Scripts");
+    assert!(!h.studio.prefs.show_inspector, "in place of the Inspector");
+    assert!(
+        h.ui.widget_rect(W::new("inspector-hide")).is_none(),
+        "the Inspector is not drawn under it"
+    );
     assert!(
         !h.studio.scripts.factory.is_empty(),
         "factory scripts are listed"
     );
-    h.rect(W::new("scripts-run"));
+    let run = h.rect(W::new("scripts-run"));
+    // Not modal: the editors beside it keep working.
+    let snap = h.rect(W::new("pl-snap"));
+    assert!(
+        snap.right() <= run.x,
+        "the column sits right of the playlist"
+    );
+    assert!(!h.ui.any_popup(), "no popup holds the input");
+    h.click(W::new(("pl-tool", "Select")));
+    assert_eq!(h.studio.ws.playlist.tool, crate::workspace::Tool::Select);
     named_key(&mut h, NamedKey::F8, KeyCode::F8);
     h.frame();
-    assert!(!h.ui.is_popup_open(PANEL), "F8 closes it again");
+    assert!(!h.studio.prefs.show_scripts, "F8 hides it again");
+    assert!(h.studio.prefs.show_inspector, "and the Inspector returns");
     h.click(W::new("scripts-open"));
     h.frame();
-    assert!(h.ui.is_popup_open(PANEL), "the status bar button opens it");
+    assert!(h.studio.prefs.show_scripts, "the rail entry shows it");
     h.click(PANEL.with("close"));
     h.frame();
-    assert!(!h.ui.is_popup_open(PANEL));
+    assert!(!h.studio.prefs.show_scripts);
+    assert!(h.studio.prefs.show_inspector);
+    // Hidden Inspector stays hidden after Scripts closes.
+    h.click(W::new("rail-inspector"));
+    assert!(!h.studio.prefs.show_right());
+    h.click(W::new("scripts-open"));
+    h.frame();
+    h.click(PANEL.with("close"));
+    h.frame();
+    assert!(!h.studio.prefs.show_right(), "the column stays hidden");
 }
 
 #[test]
-fn the_scripts_button_and_panel_fit_a_small_window() {
-    use crate::scripts::PANEL;
+fn the_scripts_column_fits_a_small_window() {
     let mut h = Harness::new();
     h.studio.scripts = crate::scripts::Scripts::with_dir(temp_scripts_dir("scripts-fit"));
     h.size = vec2(1024.0, 700.0);
-    // A long notice must not take the button's space.
+    // A long notice must not push the column's controls around.
     h.studio.session.notify("x".repeat(400), true);
     h.frames(2);
     let button = h.rect(W::new("scripts-open"));
-    let help = h.rect(W::new("keys-help"));
-    assert!(button.right() <= help.x, "the button sits left of help");
-    assert!(button.x >= 0.0 && button.bottom() <= 700.0);
+    let keys = h.rect(W::new("keys-help"));
+    assert!(
+        button.bottom() <= keys.y,
+        "Scripts sits above the shortcuts entry"
+    );
+    assert!(button.x >= 0.0 && button.right() <= 1024.0 && keys.bottom() <= 700.0 - 24.0);
     h.click(W::new("scripts-open"));
     h.frame();
-    assert!(h.ui.is_popup_open(PANEL));
+    assert!(h.studio.prefs.show_scripts);
     for id in ["scripts-run", "scripts-add", "scripts-refresh"] {
         let r = h.rect(W::new(id));
         assert!(
@@ -1640,8 +1668,9 @@ fn running_a_factory_script_shows_its_result_after_closing() {
         .scripts
         .run_selected(&h.studio.session, &h.studio.ws, false);
     assert!(again.is_err(), "one script at a time");
-    // Closing the panel neither stops the job nor loses its result.
+    // Closing the column neither stops the job nor loses its result.
     h.click(PANEL.with("close"));
+    assert!(!h.studio.prefs.show_scripts);
     wait_for_script(&mut h);
     let out = h.studio.scripts.last.clone().expect("an outcome");
     assert_eq!(
@@ -1656,7 +1685,7 @@ fn running_a_factory_script_shows_its_result_after_closing() {
     );
     h.click(W::new("scripts-open"));
     h.frame();
-    assert!(h.ui.is_popup_open(PANEL));
+    assert!(h.studio.prefs.show_scripts);
     assert!(h.studio.scripts.last.is_some(), "the result is still shown");
 }
 
@@ -1792,4 +1821,257 @@ fn scripts_control_the_live_session_and_workspace_on_the_ui_thread() {
     h.studio.session.doc.undo();
     assert_eq!(h.studio.session.project().patterns.len(), patterns);
     h.studio.session.stop();
+}
+
+/// Presses Cmd/Ctrl + Option/Alt + a letter key (matched by physical key).
+fn layout_key(h: &mut Harness, code: peel_ui::KeyCode, ch: &str) {
+    let mods = peel_ui::Modifiers {
+        alt: true,
+        logo: cfg!(target_os = "macos"),
+        ctrl: !cfg!(target_os = "macos"),
+        shift: false,
+    };
+    h.ui.input.keys.push(peel_ui::input::KeyPress {
+        // Option changes the character on macOS; only the code is reliable.
+        key: peel_ui::Key::Character(ch.into()),
+        code: Some(code),
+        repeat: false,
+        modifiers: mods,
+        consumed: false,
+    });
+    h.frame();
+    h.frame();
+}
+
+#[test]
+fn panes_hide_from_their_headers_and_return_from_rails_and_shortcuts() {
+    use peel_ui::KeyCode;
+    let mut h = Harness::new();
+    let lanes = h.rect(W::new("pl-snap"));
+    let wide_before = h.rect(W::new("dock-toggle")).right() - lanes.x;
+    // Browser: hide from its header, back from the rail.
+    h.click(W::new("browser-hide"));
+    assert!(!h.studio.prefs.show_browser);
+    h.frames(2);
+    assert!(h.ui.widget_rect(W::new("browser-search")).is_none());
+    let lanes_after = h.rect(W::new("pl-snap"));
+    assert!(lanes_after.x < lanes.x, "the playlist takes the room");
+    h.click(W::new(("browser-tab", "Samples")));
+    assert!(h.studio.prefs.show_browser);
+    assert_eq!(
+        h.studio.ws.browser_tab,
+        crate::workspace::BrowserTab::Samples
+    );
+    // Clicking the showing tab hides it again.
+    h.click(W::new(("browser-tab", "Samples")));
+    assert!(!h.studio.prefs.show_browser);
+    layout_key(&mut h, KeyCode::KeyB, "∫");
+    assert!(h.studio.prefs.show_browser, "Cmd Opt B shows it");
+    // Inspector: header, then shortcut.
+    h.click(W::new("inspector-hide"));
+    assert!(!h.studio.prefs.show_right());
+    h.frames(2);
+    let wide_after = h.rect(W::new("dock-toggle")).right() - h.rect(W::new("pl-snap")).x;
+    assert!(wide_after > wide_before);
+    layout_key(&mut h, KeyCode::KeyI, "ˆ");
+    assert!(h.studio.prefs.show_inspector);
+    // Editor: the dock collapses to its header, tabs and F-keys reveal it.
+    let session_before = h.session().doc.revision();
+    layout_key(&mut h, KeyCode::KeyE, "´");
+    assert!(!h.studio.prefs.show_editor, "Cmd Opt E hides the editor");
+    h.frame();
+    assert_eq!(h.session().doc.revision(), session_before, "not an export");
+    assert!(!h.studio.ws.export_panel, "the export panel did not open");
+    h.frame();
+    assert!(h.ui.widget_rect(W::new("rack-len-plus")).is_none());
+    h.rect(W::new(("dock-tab", "Mixer")));
+    named_key(&mut h, peel_ui::NamedKey::F7, KeyCode::F7);
+    assert!(h.studio.prefs.show_editor, "F7 reveals the editor");
+    assert_eq!(h.studio.ws.dock, DockTab::PianoRoll);
+    h.frames(2);
+    h.click(W::new("dock-toggle"));
+    assert!(!h.studio.prefs.show_editor);
+    h.frames(2);
+    h.click(W::new(("dock-tab", "Channels")));
+    assert!(h.studio.prefs.show_editor, "a tab reveals it");
+    assert_eq!(h.studio.ws.dock, DockTab::Rack);
+}
+
+#[test]
+fn the_view_menu_lists_and_toggles_every_choice() {
+    use crate::layout::VIEW_MENU;
+    let mut h = Harness::new();
+    let item = |i: usize| VIEW_MENU.with(("item", i));
+    h.click(W::new("view"));
+    assert!(h.ui.is_popup_open(VIEW_MENU));
+    h.click(item(3));
+    assert!(!h.studio.prefs.show_editor, "Editor");
+    h.click(W::new("view"));
+    h.click(item(2));
+    assert!(h.studio.prefs.show_scripts, "Scripts");
+    assert!(!h.studio.prefs.show_inspector, "replaces the Inspector");
+    h.click(W::new("view"));
+    h.click(item(1));
+    assert!(h.studio.prefs.show_inspector && !h.studio.prefs.show_scripts);
+    h.click(W::new("view"));
+    h.click(item(0));
+    assert!(!h.studio.prefs.show_browser, "Browser");
+    h.click(W::new("view"));
+    h.click(item(6));
+    assert!(!h.studio.prefs.show_meter, "Master meter");
+    h.frames(2);
+    assert!(h.ui.widget_rect(W::new("load")).is_none());
+    h.click(W::new("view"));
+    h.click(item(8));
+    assert!(h.studio.prefs.show_help, "Usage hints");
+    h.click(W::new("view"));
+    let tempo = h.studio.ws.playlist.show_tempo;
+    h.click(item(5));
+    assert_ne!(h.studio.ws.playlist.show_tempo, tempo, "Tempo lane");
+    // Reset puts everything back.
+    h.studio.ws.browser_w = 400.0;
+    h.click(W::new("view"));
+    h.click(item(10));
+    let d = crate::prefs::Prefs::default();
+    let p = &h.studio.prefs;
+    assert_eq!(
+        (
+            p.show_browser,
+            p.show_inspector,
+            p.show_scripts,
+            p.show_editor,
+            p.show_help,
+            p.show_meter
+        ),
+        (
+            d.show_browser,
+            d.show_inspector,
+            d.show_scripts,
+            d.show_editor,
+            d.show_help,
+            d.show_meter
+        )
+    );
+    assert_eq!(h.studio.ws.browser_w, crate::workspace::BROWSER_W);
+}
+
+#[test]
+fn hints_are_optional_but_warnings_and_names_stay() {
+    let mut h = Harness::new();
+    assert!(!h.studio.prefs.show_help, "quiet by default");
+    h.studio.ws.focus = None;
+    h.frames(2);
+    // With hints off the usage text is a mark that still carries it.
+    h.rect(W::new("inspector-empty-hint"));
+    h.click(W::new("rail-help"));
+    assert!(h.studio.prefs.show_help);
+    h.frames(2);
+    assert!(h.ui.widget_rect(W::new("inspector-empty-hint")).is_none());
+    // The Python file-access warning is not a hint.
+    h.click(W::new("rail-help"));
+    assert!(!h.studio.prefs.show_help);
+    h.studio.scripts = crate::scripts::Scripts::with_dir(temp_scripts_dir("hints-python"));
+    h.click(W::new("scripts-open"));
+    let index = h
+        .studio
+        .scripts
+        .factory
+        .iter()
+        .position(|s| s.language == peel_extensions::Language::Python)
+        .unwrap();
+    h.click(W::new(("script-factory", index)));
+    h.frame();
+    h.rect(W::new("scripts-python"));
+    assert!(h.studio.prefs.show_scripts && !h.studio.prefs.show_help);
+}
+
+#[test]
+fn layout_preferences_round_trip_and_survive_new_projects() {
+    use crate::prefs::Prefs;
+    use crate::workspace::BrowserTab;
+    // Older preference files without layout fields still load.
+    let old: Prefs = serde_json::from_str(r#"{"recent":[],"show_welcome":false}"#).unwrap();
+    assert!(old.show_browser && old.show_inspector && old.show_editor && !old.show_help);
+    assert!(old.show_meter && old.show_status_details && old.browser_w.is_none());
+
+    let mut h = Harness::new();
+    h.studio.ws.browser_w = 320.0;
+    h.studio.ws.inspector_w = 360.0;
+    h.studio.ws.dock_h = 300.0;
+    h.frames(2);
+    h.click(W::new(("dock-tab", "Mixer")));
+    h.click(W::new(("browser-tab", "Effects")));
+    h.studio.prefs.show_meter = false;
+    h.frame();
+    assert_eq!(h.studio.prefs.browser_w, Some(320.0));
+    assert_eq!(h.studio.prefs.inspector_w, Some(360.0));
+    assert_eq!(h.studio.prefs.dock_h, Some(300.0));
+    assert_eq!(h.studio.prefs.dock_tab, Some(DockTab::Mixer));
+    assert_eq!(h.studio.prefs.browser_tab, Some(BrowserTab::Effects));
+
+    // Saved and loaded again, the same layout comes back.
+    let json = serde_json::to_string(&h.studio.prefs).unwrap();
+    let back: Prefs = serde_json::from_str(&json).unwrap();
+    let mut ws = crate::workspace::Workspace::default();
+    back.apply_layout(&mut ws);
+    assert_eq!(
+        (ws.browser_w, ws.inspector_w, ws.dock_h),
+        (320.0, 360.0, 300.0)
+    );
+    assert_eq!(ws.dock, DockTab::Mixer);
+    assert_eq!(ws.browser_tab, BrowserTab::Effects);
+    assert!(!back.show_meter);
+
+    // A new project keeps the user's layout.
+    let mods = peel_ui::Modifiers {
+        logo: cfg!(target_os = "macos"),
+        ctrl: !cfg!(target_os = "macos"),
+        ..Default::default()
+    };
+    h.ui.input.keys.push(peel_ui::input::KeyPress {
+        key: peel_ui::Key::Character("n".into()),
+        code: Some(peel_ui::KeyCode::KeyN),
+        repeat: false,
+        modifiers: mods,
+        consumed: false,
+    });
+    h.frames(2);
+    assert_eq!(h.studio.ws.browser_w, 320.0);
+    assert_eq!(h.studio.ws.dock, DockTab::Mixer);
+    assert_eq!(h.studio.ws.browser_tab, BrowserTab::Effects);
+}
+
+#[test]
+fn small_windows_keep_the_top_bar_and_panes_inside() {
+    let mut h = Harness::new();
+    h.size = vec2(1024.0, 700.0);
+    h.frames(2);
+    for id in [
+        "view", "undo", "redo", "play", "stop", "rec", "bpm", "export", "save", "open",
+    ] {
+        let r =
+            h.ui.widget_rect(W::new(id))
+                .unwrap_or_else(|| panic!("{id} is on screen"));
+        assert!(
+            r.x >= 0.0 && r.right() <= 1024.0 && r.bottom() <= 44.0,
+            "{id}: {r:?}"
+        );
+    }
+    // Controls in the top bar never overlap.
+    let order = [
+        "view",
+        "redo",
+        "to-start",
+        "loop",
+        "metronome",
+        "open",
+        "save",
+        "export",
+    ];
+    for w in order.windows(2) {
+        let (a, b) = (h.rect(W::new(w[0])), h.rect(W::new(w[1])));
+        assert!(a.right() <= b.x + 0.5, "{} before {}", w[0], w[1]);
+    }
+    let lanes = h.rect(W::new("pl-snap"));
+    assert!(lanes.x > 0.0 && lanes.right() < 1024.0);
 }

@@ -79,33 +79,28 @@ fn category_icon(cat: &str) -> &'static str {
     }
 }
 
-pub fn draw(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) {
+/// Draws the browser. Returns true when the user asked to hide it.
+pub fn draw(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) -> bool {
     let t = ui.theme.clone();
     ui.scene.rect(r, t.radius_l, t.panel);
-    let mut body = r.shrink(8.0);
-    let tabs_r = body.cut_top(32.0);
-    let tabs = [
-        (BrowserTab::Instruments, icons::PIANO_KEYS, "Instruments"),
-        (BrowserTab::Effects, icons::SLIDERS, "Effects"),
-        (BrowserTab::Samples, icons::WAVEFORM, "Samples"),
-        (BrowserTab::Patterns, icons::SQUARES, "Patterns"),
-    ];
-    let cells = tabs_r.columns(tabs.len(), 4.0);
-    for ((tab, icon, tip), cell) in tabs.iter().zip(cells) {
-        let b = ui.icon_button(
-            W::new(("browser-tab", *tip)),
-            cell,
-            icon,
-            ws.browser_tab == *tab,
-            None,
-        );
-        ui.tooltip(&b, tip);
-        if b.clicked {
-            ws.browser_tab = *tab;
-            ws.browser_scroll = 0.0;
-        }
-    }
-    body.cut_top(8.0);
+    let mut body = r.shrink2(10.0, 0.0);
+    // Header: the tab's name (tabs live on the left rail) and Hide.
+    let mut head = body.cut_top(t.header_h).shrink2(0.0, 5.0);
+    let hide = ui.icon_button(
+        W::new("browser-hide"),
+        head.cut_right(28.0),
+        icons::CARET_DOUBLE_LEFT,
+        false,
+        None,
+    );
+    ui.name(&hide, "Hide browser");
+    ui.tooltip(&hide, "Hide the browser");
+    let title = crate::layout::BROWSER_TABS
+        .iter()
+        .find(|(tab, _, _)| *tab == ws.browser_tab)
+        .map_or("Browser", |(_, _, label)| *label);
+    ui.text(head, title, t.heading, t.text, Align::Start);
+    ui.describe_label(W::new("browser-title"), head, title);
     let search_r = body.cut_top(30.0);
     let placeholder = match ws.browser_tab {
         BrowserTab::Instruments => "Search instruments",
@@ -127,6 +122,7 @@ pub fn draw(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) {
         BrowserTab::Samples => samples(ui, body, &query, s, ws),
         BrowserTab::Patterns => patterns(ui, body, &query, s, ws),
     }
+    hide.clicked
 }
 
 #[derive(Default)]
@@ -218,9 +214,12 @@ fn devices(
             vendor: p.vendor.clone(),
         })
         .collect();
-    if !plugins.is_empty() || query.is_empty() {
+    if !plugins.is_empty() {
         rows.push(Row::Heading("Plugins"));
         rows.extend((0..plugins.len()).map(Row::Plugin));
+    }
+    // With none installed, one quiet line instead of a section.
+    if query.is_empty() {
         if s.plugins_scanning() {
             rows.push(Row::Scanning);
         } else if plugins.is_empty() {
@@ -274,27 +273,48 @@ fn devices(
                         s.rescan_plugins();
                     }
                 }
-                ui.text(hr, h, t.caption, t.text_faint, Align::Start);
+                if h != "Plugins" {
+                    let ir = hr.cut_left(16.0);
+                    ui.icon(ir, category_icon(h), 12.0, category_color(h));
+                    hr.cut_left(6.0);
+                }
+                ui.text(hr, h, t.caption, t.text_dim, Align::Start);
+                ui.describe_label(W::new(("browser-heading", h)), hr, h);
             }
             Row::Device(d, open) => {
                 let id = W::new(("browser-dev", d.type_id));
                 let mut cells = row.shrink2(4.0, 0.0);
                 let has_presets = !peel_devices::presets(d.type_id).is_empty();
                 let caret_r = cells.cut_left(16.0);
-                let resp = ui.interact(
+                let resp = ui.interact_button(
                     id,
                     Rect {
                         x: caret_r.right(),
                         w: row.right() - caret_r.right(),
                         ..row
                     },
+                    d.name,
                 );
                 let hot = ui.animate_bool(id, resp.hovered);
                 if hot > 0.0 {
                     ui.scene.rect(row, t.radius_m, t.raised.alpha(hot));
                 }
                 if has_presets {
-                    let caret = ui.interact(id.with("caret"), caret_r);
+                    let caret = ui.interact_node(
+                        id.with("caret"),
+                        caret_r,
+                        peel_ui::FocusKind::Activate,
+                        peel_ui::Semantics::new(peel_ui::Role::DisclosureTriangle)
+                            .label(format!("{} presets", d.name))
+                            .expanded(open),
+                    );
+                    let c = if caret.hovered {
+                        t.text
+                    } else if open || hot > 0.0 {
+                        t.text_dim
+                    } else {
+                        t.text_faint.alpha(0.7)
+                    };
                     ui.icon(
                         caret_r,
                         if open {
@@ -302,9 +322,10 @@ fn devices(
                         } else {
                             icons::CARET_RIGHT
                         },
-                        11.0,
-                        if caret.hovered { t.text } else { t.text_faint },
+                        10.0,
+                        c,
                     );
+                    ui.focus_ring(id.with("caret"), caret_r, 4.0);
                     ui.tooltip(&caret, "Presets");
                     if caret.clicked {
                         let set = &mut ui.state::<Expanded>(expanded_id).0;
@@ -314,15 +335,14 @@ fn devices(
                     }
                 }
                 let cc = category_color(d.category);
-                let icon_r = cells.cut_left(22.0);
-                ui.scene.rect(
-                    Rect::from_center(icon_r.center(), 22.0, 22.0),
-                    5.0,
-                    cc.alpha(0.16),
+                cells.cut_left(4.0);
+                ui.text(
+                    cells,
+                    d.name,
+                    t.body,
+                    t.text.mix(t.text_dim, 0.15 * (1.0 - hot)),
+                    Align::Start,
                 );
-                ui.icon(icon_r, category_icon(d.category), 13.0, cc);
-                cells.cut_left(8.0);
-                ui.text(cells, d.name, t.label, t.text, Align::Start);
                 if hot > 0.2 {
                     ui.icon(
                         cells.cut_right(18.0),
@@ -332,6 +352,7 @@ fn devices(
                     );
                 }
                 ui.tooltip(&resp, d.description);
+                ui.focus_ring(id, row, t.radius_m);
                 if resp.hovered {
                     ui.set_cursor(CursorIcon::Grab);
                 }
@@ -347,20 +368,40 @@ fn devices(
                 }
             }
             Row::Scanning => {
-                let mut cells = row.shrink2(4.0, 0.0);
-                cells.cut_left(16.0 + 22.0 + 8.0);
+                let mut cells = row.shrink2(6.0, 0.0);
+                cells.cut_top(6.0);
                 ui.text(
                     cells,
-                    "Looking for plugins",
-                    t.body,
+                    "Looking for plugins…",
+                    t.caption,
                     t.text_faint,
                     Align::Start,
                 );
             }
             Row::NoPlugins => {
-                let mut cells = row.shrink2(4.0, 0.0);
-                cells.cut_left(16.0 + 22.0 + 8.0);
-                ui.text(cells, "None installed", t.body, t.text_faint, Align::Start);
+                let mut cells = row.shrink2(6.0, 0.0);
+                cells.cut_top(6.0);
+                let label = "Rescan";
+                let lw = ui.measure(label, t.caption).x + 12.0;
+                let br = cells.cut_right(lw);
+                let b = ui.interact_button(W::new("browser-rescan"), br, "Rescan for plugins");
+                let c = if b.hovered { t.text } else { t.text_dim };
+                ui.text(br, label, t.caption, c, Align::Center);
+                if b.hovered {
+                    ui.set_cursor(CursorIcon::Pointer);
+                }
+                ui.focus_ring(b.id, br, t.radius_s);
+                ui.tooltip(&b, "Look for newly installed plugins");
+                if b.clicked {
+                    s.rescan_plugins();
+                }
+                ui.text(
+                    cells,
+                    "No plugins found",
+                    t.caption,
+                    t.text_faint,
+                    Align::Start,
+                );
             }
             Row::Plugin(i) => {
                 let p = &plugins[i];
@@ -373,14 +414,7 @@ fn devices(
                     ui.scene.rect(row, t.radius_m, t.raised.alpha(hot));
                 }
                 let cc = t.text_dim;
-                let icon_r = cells.cut_left(22.0);
-                ui.scene.rect(
-                    Rect::from_center(icon_r.center(), 22.0, 22.0),
-                    5.0,
-                    cc.alpha(0.16),
-                );
-                ui.icon(icon_r, icons::PLUGS, 13.0, cc);
-                cells.cut_left(8.0);
+                cells.cut_left(4.0);
                 if hot > 0.2 {
                     ui.icon(
                         cells.cut_right(18.0),
@@ -394,7 +428,8 @@ fn devices(
                 ui.text(vendor_r, &p.vendor, t.caption, t.text_faint, Align::End);
                 cells.cut_right(6.0);
                 let shown = ui.fit_text(&p.name, t.label, cells.w);
-                ui.text(cells, &shown, t.label, t.text, Align::Start);
+                ui.text(cells, &shown, t.body, t.text, Align::Start);
+                ui.focus_ring(id, row, t.radius_m);
                 if resp.hovered {
                     ui.set_cursor(CursorIcon::Grab);
                 }
@@ -415,17 +450,20 @@ fn devices(
             }
             Row::Preset(d, preset) => {
                 let id = W::new(("browser-preset", d.type_id, preset));
-                let resp = ui.interact(id, row);
+                let resp = ui.interact_button(id, row, preset);
                 let hot = ui.animate_bool(id, resp.hovered);
                 if hot > 0.0 {
                     ui.scene.rect(row, t.radius_m, t.raised.alpha(hot * 0.8));
                 }
                 let mut cells = row.shrink2(4.0, 0.0);
-                cells.cut_left(16.0 + 22.0 + 8.0);
+                cells.cut_left(16.0 + 14.0);
                 let cc = category_color(d.category);
-                let dot = cells.cut_left(12.0);
-                ui.scene
-                    .circle(dot.center() - vec2(4.0, 0.0), 2.5, cc.alpha(0.8));
+                ui.scene.vline(
+                    cells.x - 8.0,
+                    row.y + 4.0,
+                    row.bottom() - 4.0,
+                    t.line_strong,
+                );
                 ui.text(
                     cells,
                     preset,
@@ -443,6 +481,7 @@ fn devices(
                         color: cc,
                     });
                 }
+                ui.focus_ring(id, row, t.radius_m);
                 if resp.clicked {
                     add_device(s, ws, d, Some(preset));
                 }

@@ -8,7 +8,8 @@ use peel_media::AudioFormat;
 use peel_session::ExportJob;
 use peel_ui::KeyCode;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DockTab {
     Rack,
     PianoRoll,
@@ -16,7 +17,8 @@ pub enum DockTab {
     Perform,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum BrowserTab {
     Instruments,
     Effects,
@@ -78,6 +80,14 @@ pub struct PlaylistView {
     pub fit: u8,
 }
 
+/// Default pane sizes; the user's sizes are kept in `Prefs`.
+pub const BROWSER_W: f32 = 248.0;
+pub const INSPECTOR_W: f32 = 300.0;
+pub const DOCK_H: f32 = 400.0;
+
+/// Layout of the main window. Which panes show lives in `Prefs`
+/// (`show_browser`, `show_inspector`, `show_scripts`, `show_editor`,
+/// `show_help`) so scripts and the View menu share one source.
 pub struct Workspace {
     /// Input peak with decay (left, right), read once per frame.
     pub input_meter: (f32, f32),
@@ -120,9 +130,9 @@ impl Default for Workspace {
         Workspace {
             input_meter: (0.0, 0.0),
             dock: DockTab::Rack,
-            dock_h: 400.0,
-            browser_w: 236.0,
-            inspector_w: 300.0,
+            dock_h: DOCK_H,
+            browser_w: BROWSER_W,
+            inspector_w: INSPECTOR_W,
             browser_tab: BrowserTab::Instruments,
             search: String::new(),
             sample_dir: dirs::audio_dir().or_else(dirs::home_dir),

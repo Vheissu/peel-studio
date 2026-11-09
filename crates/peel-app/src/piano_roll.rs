@@ -339,10 +339,13 @@ struct HeaderActions {
 fn header(ui: &mut Ui, tools: Rect, ch: &Channel, ws: &mut Workspace) -> HeaderActions {
     let t = ui.theme.clone();
     let mut row = tools;
-    // Channel chip.
-    let chip = row.cut_right(150.0);
-    ui.scene.rect(chip, t.radius_m, t.control);
-    let mut cr = chip.shrink2(10.0, 0.0);
+    // Narrow docks drop the chord and scale names (icons stay, tinted when
+    // active) before anything else.
+    let compact = row.w < 600.0;
+    // The channel being edited: swatch and name, quiet.
+    let chip_w = (ui.measure(&ch.name, t.label).x + 26.0).min(if compact { 96.0 } else { 140.0 });
+    let chip = row.cut_right(chip_w);
+    let mut cr = chip;
     let sw = cr.cut_left(10.0);
     ui.scene.rect(
         Rect::from_center(sw.center(), 10.0, 10.0),
@@ -352,8 +355,12 @@ fn header(ui: &mut Ui, tools: Rect, ch: &Channel, ws: &mut Workspace) -> HeaderA
     cr.cut_left(8.0);
     let name = ui.fit_text(&ch.name, t.label, cr.w);
     ui.text(cr, &name, t.label, t.text, Align::Start);
-    row.cut_right(10.0);
-    // Ghost toggle.
+    ui.describe_label(W::new("roll-channel"), chip, &ch.name);
+    row.cut_right(8.0);
+    ui.divider_v(row.cut_right(1.0));
+    row.cut_right(6.0);
+
+    // Ghosts, grid, chord stamp and scale.
     let g = ui.icon_button(
         W::new("roll-ghost"),
         row.cut_right(30.0),
@@ -361,33 +368,21 @@ fn header(ui: &mut Ui, tools: Rect, ch: &Channel, ws: &mut Workspace) -> HeaderA
         ws.roll.ghosts,
         None,
     );
+    ui.name(&g, "Show other channels");
     ui.tooltip(&g, "Show other channels");
     if g.clicked {
         ws.roll.ghosts = !ws.roll.ghosts;
     }
-    row.cut_right(6.0);
-    // Snap.
-    let snap_r = row.cut_right(70.0);
-    let sresp = ui.interact(W::new("roll-snap"), snap_r);
-    ui.scene.rect(
+    row.cut_right(2.0);
+    let snap_r = row.cut_right(62.0);
+    let sresp = ui.value_button(
+        W::new("roll-snap"),
         snap_r,
-        t.radius_m,
-        if sresp.hovered {
-            t.control_hover
-        } else {
-            t.control
-        },
-    );
-    let mut sr = snap_r.shrink2(8.0, 0.0);
-    ui.icon(sr.cut_left(14.0), icons::MAGNET, 13.0, t.text_dim);
-    ui.text(
-        sr,
+        icons::MAGNET,
         &format_length(ws.roll.snap),
-        t.label,
-        t.text,
-        Align::Center,
+        "Grid",
+        false,
     );
-    ui.tooltip(&sresp, "Grid");
     if sresp.clicked {
         ui.open_popup(W::new("roll-snap-menu"), snap_r);
     }
@@ -411,44 +406,24 @@ fn header(ui: &mut Ui, tools: Rect, ch: &Channel, ws: &mut Workspace) -> HeaderA
         ws.roll.snap = snaps[i];
         ws.roll.note_len = snaps[i];
     }
-    row.cut_right(6.0);
+    row.cut_right(2.0);
     // Chord stamp.
-    let chord_r = row.cut_right(92.0);
-    let cresp = ui.interact(W::new("roll-chord"), chord_r);
     let on = ws.roll.chord != 0;
-    ui.scene.rect(
-        chord_r,
-        t.radius_m,
-        if on {
-            t.accent.alpha(0.16)
-        } else if cresp.hovered {
-            t.control_hover
-        } else {
-            t.control
-        },
-    );
-    let mut cr = chord_r.shrink2(8.0, 0.0);
-    ui.icon(
-        cr.cut_left(14.0),
-        icons::MUSIC_NOTES,
-        13.0,
-        if on { t.accent } else { t.text_dim },
-    );
-    cr.cut_left(4.0);
     let chord_label = if on {
         crate::harmony::CHORDS[ws.roll.chord].0
     } else {
         "Chord"
     };
-    let chord_label = ui.fit_text(chord_label, t.caption, cr.w);
-    ui.text(
-        cr,
-        &chord_label,
-        t.caption,
-        if on { t.text } else { t.text_dim },
-        Align::Start,
+    let chord_r = row.cut_right(if compact { 30.0 } else { 88.0 });
+    let cresp = ui.value_button(
+        W::new("roll-chord"),
+        chord_r,
+        icons::MUSIC_NOTES,
+        if compact { "" } else { chord_label },
+        "Stamp a chord with every click",
+        on,
     );
-    ui.tooltip(&cresp, "Stamp a chord with every click");
+    ui.value_text(&cresp, chord_label);
     if cresp.clicked {
         ui.open_popup(W::new("roll-chord-menu"), chord_r);
     }
@@ -464,44 +439,24 @@ fn header(ui: &mut Ui, tools: Rect, ch: &Channel, ws: &mut Workspace) -> HeaderA
     ) {
         ws.roll.chord = i;
     }
-    row.cut_right(4.0);
+    row.cut_right(2.0);
     // Scale.
-    let scale_r = row.cut_right(118.0);
-    let sresp = ui.interact(W::new("roll-scale"), scale_r);
     let on = ws.roll.scale.is_some();
-    ui.scene.rect(
-        scale_r,
-        t.radius_m,
-        if on {
-            t.accent.alpha(0.16)
-        } else if sresp.hovered {
-            t.control_hover
-        } else {
-            t.control
-        },
-    );
-    let mut sr = scale_r.shrink2(8.0, 0.0);
-    ui.icon(
-        sr.cut_left(14.0),
-        icons::PIANO_KEYS,
-        13.0,
-        if on { t.accent } else { t.text_dim },
-    );
-    sr.cut_left(4.0);
     let scale_label = ws
         .roll
         .scale
         .map(|s| s.name())
         .unwrap_or_else(|| "Scale".into());
-    let scale_label = ui.fit_text(&scale_label, t.caption, sr.w);
-    ui.text(
-        sr,
-        &scale_label,
-        t.caption,
-        if on { t.text } else { t.text_dim },
-        Align::Start,
+    let scale_r = row.cut_right(if compact { 30.0 } else { 112.0 });
+    let sresp = ui.value_button(
+        W::new("roll-scale"),
+        scale_r,
+        icons::PIANO_KEYS,
+        if compact { "" } else { &scale_label },
+        "Highlight a scale and snap notes to it",
+        on,
     );
-    ui.tooltip(&sresp, "Highlight a scale and snap notes to it");
+    ui.value_text(&sresp, &scale_label);
     if sresp.clicked {
         ui.open_popup(W::new("roll-scale-menu"), scale_r);
     }
@@ -538,36 +493,11 @@ fn header(ui: &mut Ui, tools: Rect, ch: &Channel, ws: &mut Workspace) -> HeaderA
             });
         }
     }
-    row.cut_right(10.0);
-    // Tools.
-    for (tool, icon, tip) in [
-        (Tool::Erase, icons::ERASER, "Erase"),
-        (Tool::Select, icons::CURSOR, "Select"),
-        (Tool::Draw, icons::PENCIL, "Draw"),
-    ] {
-        let b = ui.icon_button(
-            W::new(("roll-tool", tip)),
-            row.cut_right(30.0),
-            icon,
-            ws.roll.tool == tool,
-            None,
-        );
-        ui.tooltip(&b, tip);
-        if b.clicked {
-            ws.roll.tool = tool;
-        }
-        row.cut_right(2.0);
-    }
-    row.cut_right(8.0);
-    let q = ui.icon_button(
-        W::new("roll-quantize"),
-        row.cut_right(30.0),
-        icons::GRID,
-        false,
-        None,
-    );
-    ui.tooltip(&q, "Quantize to the grid (selection, or all notes)");
-    row.cut_right(2.0);
+    row.cut_right(6.0);
+    ui.divider_v(row.cut_right(1.0));
+    row.cut_right(6.0);
+
+    // Note actions, then the editing tools in a well.
     let nt = ui.icon_button(
         W::new("roll-note-tools"),
         row.cut_right(30.0),
@@ -575,7 +505,38 @@ fn header(ui: &mut Ui, tools: Rect, ch: &Channel, ws: &mut Workspace) -> HeaderA
         crate::note_tools::is_open(ui),
         None,
     );
+    ui.name(&nt, "Note tools");
     ui.tooltip(&nt, "Note tools: legato, chop, arpeggiate, strum and more");
+    let q = ui.icon_button(
+        W::new("roll-quantize"),
+        row.cut_right(30.0),
+        icons::GRID,
+        false,
+        None,
+    );
+    ui.name(&q, "Quantize");
+    ui.tooltip(&q, "Quantize to the grid (selection, or all notes)");
+    row.cut_right(6.0);
+    let tools = [
+        (Tool::Draw, icons::PENCIL, "Draw"),
+        (Tool::Select, icons::CURSOR, "Select"),
+        (Tool::Erase, icons::ERASER, "Erase"),
+    ];
+    let well = row.cut_right(tools.len() as f32 * 30.0 + 4.0);
+    ui.well(well);
+    let mut cells = well.shrink(2.0);
+    for (tool, icon, tip) in tools {
+        let b = ui.tool_button(
+            W::new(("roll-tool", tip)),
+            cells.cut_left(30.0),
+            icon,
+            tip,
+            ws.roll.tool == tool,
+        );
+        if b.clicked {
+            ws.roll.tool = tool;
+        }
+    }
     HeaderActions {
         quantize: q.clicked,
         note_tools: nt.clicked.then_some(nt.rect),

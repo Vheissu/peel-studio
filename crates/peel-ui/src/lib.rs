@@ -9,6 +9,7 @@
 
 pub mod a11y;
 pub mod app;
+pub mod chrome;
 pub mod focus;
 pub mod geom;
 pub mod icons;
@@ -25,6 +26,7 @@ mod tests;
 
 pub use a11y::{Action, ActionRequest, Role, Semantics};
 pub use app::{App, WindowControl, WindowOptions, run};
+pub use chrome::Edge;
 pub use focus::{Adjust, FocusKind};
 pub use geom::{Color, Rect, Vec2, rect, vec2};
 pub use input::{Button, Input, Modifiers};

@@ -1,4 +1,5 @@
-//! Top bar: transport, tempo, position, pattern picker and master meter.
+//! Top bar: project, View, history, transport, time, master meter and
+//! Export. Also the pattern picker the dock header uses.
 
 use peel_document::{Id, PALETTE, Pattern, Time};
 use peel_media::AudioFormat;
@@ -9,6 +10,83 @@ use peel_ui::{Align, MenuItem, Rect, Ui, WindowControl, icons, vec2};
 use crate::studio::Studio;
 use crate::util::{col, format_position};
 
+/// What the top bar shows at a given width; later fields give way first
+/// to earlier ones as the window narrows.
+#[derive(Clone, Copy)]
+struct Fit {
+    load_text: bool,
+    wind: bool,
+    meter: bool,
+    export_label: bool,
+    clock: bool,
+    title_w: f32,
+    /// View as an icon with its caret, no label.
+    view_icon: bool,
+}
+
+impl Fit {
+    fn level(n: usize, title_w: f32) -> Fit {
+        Fit {
+            load_text: n < 1,
+            wind: n < 2,
+            meter: n < 3,
+            export_label: n < 4,
+            clock: n < 5,
+            title_w: match n {
+                0..=4 => title_w,
+                5 => title_w.min(96.0),
+                _ => 0.0,
+            },
+            view_icon: n >= 7,
+        }
+    }
+
+    fn view_w(&self, full: f32) -> f32 {
+        if self.view_icon { 44.0 } else { full }
+    }
+
+    fn left(&self, view_w: f32) -> f32 {
+        let view_w = self.view_w(view_w);
+        let title = if self.title_w > 0.0 {
+            self.title_w + 12.0
+        } else {
+            0.0
+        };
+        28.0 + 8.0 + title + view_w + 6.0 + 60.0
+    }
+
+    fn playback(&self) -> f32 {
+        4.0 + 120.0
+            + 13.0
+            + 30.0 * 2.0
+            + 34.0 * 3.0
+            + 13.0
+            + 30.0
+            + 4.0
+            + if self.wind { 60.0 } else { 0.0 }
+    }
+
+    fn time(&self) -> f32 {
+        4.0 + self.pos_w() + 13.0 + 88.0 + 13.0 + 40.0 + 13.0 + 30.0 + 4.0
+    }
+
+    fn pos_w(&self) -> f32 {
+        if self.clock { 124.0 } else { 84.0 }
+    }
+
+    fn right(&self, meter_on: bool) -> f32 {
+        let export = if self.export_label { 92.0 } else { 36.0 };
+        let meter = if meter_on && self.meter {
+            12.0 + 96.0 + 10.0 + if self.load_text { 46.0 } else { 18.0 }
+        } else {
+            0.0
+        };
+        export + 8.0 + 60.0 + meter
+    }
+}
+
+/// Top bar: project and View on the left, transport and time centered in
+/// two wells, output (meter, open, save, Export) on the right.
 pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
     let t = ui.theme.clone();
     // The whole bar moves the window; controls registered later take priority.
@@ -20,23 +98,171 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
         win.toggle_maximized();
     }
 
-    let mut row = r.shrink2(12.0, 9.0);
-    // Narrow windows trade labels and width for room.
-    let compact = r.w < 1700.0;
-    let tight = r.w < 1470.0;
+    let mut row = r.shrink2(10.0, 6.0);
     row.cut_left(win.titlebar_inset());
-    logo(ui, row.cut_left(30.0));
-    row.cut_left(10.0);
-    if !tight {
-        let max_title = if compact { 110.0 } else { 180.0 };
-        let title = studio.session.project().meta.title.clone();
-        let tw = ui.measure(&title, t.label).x.min(max_title);
-        let title_r = row.cut_left(tw + 4.0);
-        let fitted = ui.fit_text(&title, t.label, max_title);
-        ui.text(title_r, &fitted, t.label, t.text_dim, Align::Start);
-    }
-    row.cut_left(if compact { 12.0 } else { 18.0 });
+    let title = studio.session.project().meta.title.clone();
+    let title_w = ui.measure(&title, t.label).x.min(180.0) + 2.0;
+    let view_w = ui.quiet_button_width(true, "View", true);
+    let meter_on = studio.prefs.show_meter;
+    let fit = (0..=7)
+        .map(|n| Fit::level(n, title_w))
+        .find(|f| {
+            f.left(view_w) + f.playback() + 8.0 + f.time() + f.right(meter_on) + 32.0 <= row.w
+        })
+        .unwrap_or_else(|| Fit::level(7, title_w));
 
+    // ---- Left: identity, View, history.
+    logo(ui, row.cut_left(28.0));
+    row.cut_left(8.0);
+    if fit.title_w > 0.0 {
+        let title_r = row.cut_left(fit.title_w);
+        let fitted = ui.fit_text(&title, t.label, title_r.w);
+        ui.text(title_r, &fitted, t.label, t.text, Align::Start);
+        ui.describe_label(W::new("project-title"), title_r, &title);
+        row.cut_left(12.0);
+    }
+    crate::layout::view_button(ui, row.cut_left(fit.view_w(view_w)), studio, fit.view_icon);
+    row.cut_left(6.0);
+    let undo = ui.icon_button(W::new("undo"), row.cut_left(30.0), icons::UNDO, false, None);
+    let undo_label = studio
+        .session
+        .doc
+        .undo_label()
+        .map(|l| format!("Undo {l}"))
+        .unwrap_or_else(|| "Nothing to undo".into());
+    ui.tooltip(&undo, &format!("{undo_label}  ·  right-click for history"));
+    if undo.clicked {
+        studio.session.doc.undo();
+    }
+    if undo.secondary_clicked {
+        ui.open_popup(W::new("history"), undo.rect);
+    }
+    let redo = ui.icon_button(W::new("redo"), row.cut_left(30.0), icons::REDO, false, None);
+    let redo_label = studio
+        .session
+        .doc
+        .redo_label()
+        .map(|l| format!("Redo {l}"))
+        .unwrap_or_else(|| "Nothing to redo".into());
+    ui.tooltip(&redo, &redo_label);
+    if redo.clicked {
+        studio.session.doc.redo();
+    }
+    history_panel(ui, undo.rect, studio);
+
+    // ---- Right: Export (the bar's one primary action), save, open, meter.
+    let mut right = row;
+    let export_r = right.cut_right(if fit.export_label { 92.0 } else { 36.0 });
+    let export = ui.interact_button(W::new("export"), export_r, "Export");
+    {
+        let er = export.rect;
+        let hot = ui.animate_bool(W::new("export-hot"), export.hovered);
+        ui.scene.rect(er, t.radius_m, t.accent.lighten(hot * 0.08));
+        if fit.export_label {
+            let mut inner = er.shrink2(12.0, 0.0);
+            ui.icon(inner.cut_left(16.0), icons::EXPORT, 15.0, t.text_on_accent);
+            ui.text(inner, "Export", t.label, t.text_on_accent, Align::Center);
+        } else {
+            ui.icon(er, icons::EXPORT, 16.0, t.text_on_accent);
+        }
+        if export.hovered {
+            ui.set_cursor(peel_ui::CursorIcon::Pointer);
+        }
+        ui.focus_ring(export.id, er, t.radius_m);
+    }
+    ui.tooltip(
+        &export,
+        "Export the arrangement as audio or MIDI (Cmd/Ctrl+E)",
+    );
+    if export.clicked {
+        studio.export();
+    }
+    export_panel(ui, export.rect, studio);
+    right.cut_right(8.0);
+    let save = ui.icon_button(
+        W::new("save"),
+        right.cut_right(30.0),
+        icons::SAVE,
+        false,
+        None,
+    );
+    ui.tooltip(&save, "Save (Cmd/Ctrl+S)");
+    if save.clicked {
+        studio.save();
+    }
+    let open = ui.icon_button(
+        W::new("open"),
+        right.cut_right(30.0),
+        icons::FOLDER_OPEN,
+        false,
+        None,
+    );
+    ui.tooltip(&open, "Open project or MIDI file (Cmd/Ctrl+O)");
+    if open.clicked {
+        studio.open();
+    }
+    if meter_on && fit.meter {
+        right.cut_right(12.0);
+        let meter_r = right.cut_right(96.0).shrink2(0.0, 9.0);
+        let master = studio.session.project().mixer.tracks[0].id;
+        let peaks = studio.session.take_track_meter(master);
+        horizontal_meter(ui, W::new("master-meter"), meter_r, peaks);
+        right.cut_right(10.0);
+        let load = studio.session.cpu_load();
+        let load_r = right.cut_right(if fit.load_text { 46.0 } else { 18.0 });
+        let lc = if load > 0.85 {
+            t.record
+        } else if load > 0.6 {
+            t.warn
+        } else {
+            t.text_faint
+        };
+        let lresp = ui.interact(W::new("load"), load_r);
+        ui.tooltip(
+            &lresp,
+            &format!("Audio processing load {:.0}%", load * 100.0),
+        );
+        let mut lr = load_r;
+        ui.icon(lr.cut_left(16.0), icons::CPU, 14.0, lc);
+        if fit.load_text {
+            ui.text(
+                lr,
+                &format!("{:.0}%", load * 100.0),
+                t.readout_small,
+                lc,
+                Align::End,
+            );
+        }
+    }
+
+    // ---- Center: playback well and time well, centered on the window
+    // when there is room, otherwise between the two sides.
+    let group_w = fit.playback() + 8.0 + fit.time();
+    let free = Rect {
+        x: row.x + 16.0,
+        w: (right.right() - row.x - 32.0).max(0.0),
+        ..row
+    };
+    let x = (r.center().x - group_w * 0.5)
+        .min(free.right() - group_w)
+        .max(free.x);
+    let mut center = Rect {
+        x,
+        w: group_w,
+        ..row
+    };
+    let playback_r = center.cut_left(fit.playback());
+    center.cut_left(8.0);
+    let time_r = center;
+    playback(ui, playback_r, studio, fit);
+    time(ui, time_r, studio, fit);
+}
+
+/// Pattern/Song and the transport buttons, in one well.
+fn playback(ui: &mut Ui, r: Rect, studio: &mut Studio, fit: Fit) {
+    let t = ui.theme.clone();
+    ui.well(r);
+    let mut row = r.shrink2(4.0, 2.0);
     // Pattern / Song.
     let mut mode_idx = if studio.session.mode() == PlayMode::Song {
         1
@@ -45,7 +271,7 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
     };
     if ui.segmented(
         W::new("mode"),
-        row.cut_left(if compact { 136.0 } else { 150.0 }),
+        row.cut_left(120.0),
         &["Pattern", "Song"],
         &mut mode_idx,
     ) {
@@ -56,9 +282,8 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
         };
         studio.session.set_mode(mode);
     }
-    row.cut_left(10.0);
+    ui.divider_v(row.cut_left(13.0));
 
-    // Start, rewind, play / stop / record, fast forward, end, loop.
     let playing = studio.session.is_playing();
     let bar = studio
         .session
@@ -78,8 +303,7 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
     if start.clicked {
         studio.session.seek(0.0);
     }
-    row.cut_left(4.0);
-    if !tight {
+    if fit.wind {
         let rew = ui.icon_button_fill(
             W::new("rewind"),
             row.cut_left(30.0),
@@ -92,11 +316,10 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
         if rew.clicked {
             studio.session.nudge(-bar);
         }
-        row.cut_left(4.0);
     }
     let play = ui.icon_button_fill(
         W::new("play"),
-        row.cut_left(38.0),
+        row.cut_left(34.0),
         if playing { icons::PAUSE } else { icons::PLAY },
         playing,
         t.play,
@@ -106,10 +329,9 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
     if play.clicked {
         studio.session.toggle_play();
     }
-    row.cut_left(4.0);
     let stop = ui.icon_button_fill(
         W::new("stop"),
-        row.cut_left(38.0),
+        row.cut_left(34.0),
         icons::STOP,
         false,
         t.text,
@@ -127,11 +349,10 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
             studio.session.seek(0.0);
         }
     }
-    row.cut_left(4.0);
     let armed = studio.recorder.armed;
     let rec = ui.icon_button_fill(
         W::new("rec"),
-        row.cut_left(38.0),
+        row.cut_left(34.0),
         icons::RECORD,
         armed,
         t.record,
@@ -150,8 +371,7 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
     if rec.clicked {
         studio.recorder.armed = !armed;
     }
-    row.cut_left(4.0);
-    if !tight {
+    if fit.wind {
         let ff = ui.icon_button_fill(
             W::new("fast-forward"),
             row.cut_left(30.0),
@@ -164,7 +384,6 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
         if ff.clicked {
             studio.session.nudge(bar);
         }
-        row.cut_left(4.0);
     }
     let end = ui.icon_button_fill(
         W::new("to-end"),
@@ -179,8 +398,7 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
         let to = studio.session.play_end();
         studio.session.seek(to);
     }
-    row.cut_left(4.0);
-    let song = studio.session.mode() == peel_session::PlayMode::Song;
+    ui.divider_v(row.cut_left(13.0));
     let looping = !song || studio.session.looping();
     let lp = ui.icon_button_fill(
         W::new("loop"),
@@ -201,21 +419,20 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
     if lp.clicked && song {
         studio.session.set_looping(!looping);
     }
-    row.cut_left(12.0);
+}
+
+/// Position, tempo, time signature and metronome, in one well.
+fn time(ui: &mut Ui, r: Rect, studio: &mut Studio, fit: Fit) {
+    let t = ui.theme.clone();
+    ui.well(r);
+    let mut row = r.shrink2(4.0, 2.0);
 
     // Position readout.
-    let pos_r = row.cut_left(if tight {
-        84.0
-    } else if compact {
-        124.0
-    } else {
-        132.0
-    });
-    ui.scene.rect(pos_r, t.radius_m, t.panel);
+    let pos_r = row.cut_left(fit.pos_w());
     let beat = studio.session.position();
     let sig = studio.session.project().time_signature;
     let pos = format_position(beat, sig);
-    let mut pr = pos_r.shrink2(12.0, 0.0);
+    let mut pr = pos_r.shrink2(8.0, 0.0);
     let secs = studio
         .session
         .project()
@@ -224,23 +441,28 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
         .map_or(0.0, |s| beat * 60.0 / s.bpm);
     let time = format!("{}:{:04.1}", (secs / 60.0) as i64, secs % 60.0);
     ui.text(
-        pr.cut_left(70.0),
+        pr.cut_left(68.0),
         &pos,
         t.readout.size(18.0),
         t.text,
         Align::Start,
     );
-    if !tight {
+    if fit.clock {
         ui.text(pr, &time, t.readout_small, t.text_faint, Align::End);
     }
-    row.cut_left(8.0);
+    ui.describe_node(
+        W::new("position"),
+        peel_ui::Semantics::new(peel_ui::Role::Label)
+            .label("Position")
+            .value(format!("{pos}  {time}"))
+            .rect(pos_r),
+    );
+    ui.divider_v(row.cut_left(13.0));
 
-    // Tempo.
-    let bpm_r = row.cut_left(96.0);
-    ui.scene.rect(bpm_r, t.radius_m, t.panel);
-    // With tempo changes, the tempo at the playhead: live while playing
-    // (ramps included), the change in force when stopped. Edits change
-    // that tempo change.
+    // Tempo. With tempo changes, the tempo at the playhead: live while
+    // playing (ramps included), the change in force when stopped. Edits
+    // change that tempo change.
+    let bpm_r = row.cut_left(88.0);
     let segs = studio.session.project().tempo.clone();
     let pos = studio.session.position().max(0.0);
     let active = segs
@@ -253,7 +475,7 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
         _ => segs[active].bpm,
     };
     let mut br = bpm_r;
-    let label = br.cut_right(34.0);
+    let label = br.cut_right(30.0);
     let resp = ui.drag_number(
         W::new("bpm"),
         br,
@@ -266,7 +488,7 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
         |v| format!("{v:.1}"),
     );
     // Tap tempo: click the BPM label in time with the music.
-    let tap = ui.interact(W::new("tap-tempo"), label);
+    let tap = ui.interact_button(W::new("tap-tempo"), label, "Tap tempo");
     let tapped = ui.animate(W::new("tap-flash"), 0.0, 8.0);
     ui.text(
         label,
@@ -279,7 +501,7 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
     if tap.hovered {
         ui.set_cursor(peel_ui::CursorIcon::Pointer);
     }
-    if tap.pressed {
+    if tap.pressed || (tap.clicked && !tap.hovered) {
         let now = ui.time();
         ui.animate(W::new("tap-flash"), 1.0, 1000.0);
         let taps = ui.state::<Vec<f64>>(W::new("tap-times"));
@@ -323,20 +545,32 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
         studio.session.doc.end_gesture();
     }
     ui.tooltip(&resp, "Drag or double-click to type");
-    row.cut_left(8.0);
+    ui.divider_v(row.cut_left(13.0));
 
     // Time signature.
-    let sig_r = row.cut_left(48.0);
-    ui.scene.rect(sig_r, t.radius_m, t.panel);
+    let sig_r = row.cut_left(40.0);
     let sig_txt = format!("{}/{}", sig.numerator, sig.denominator);
-    let sresp = ui.interact(W::new("sig"), sig_r);
+    let sresp = ui.interact_button(W::new("sig"), sig_r, "Time signature");
+    ui.describe_node(
+        sresp.id,
+        peel_ui::Semantics::patch().value(sig_txt.as_str()),
+    );
+    let hot = ui.animate_bool(W::new("sig"), sresp.hovered);
+    if hot > 0.0 {
+        ui.scene.rect(sig_r, t.radius_m, t.control.alpha(hot));
+    }
     ui.text(
         sig_r,
         &sig_txt,
         t.readout_small.size(14.0),
-        t.text_dim,
+        t.text_dim.mix(t.text, hot),
         Align::Center,
     );
+    ui.tooltip(&sresp, "Time signature");
+    if sresp.hovered {
+        ui.set_cursor(peel_ui::CursorIcon::Pointer);
+    }
+    ui.focus_ring(sresp.id, sig_r, t.radius_m);
     if sresp.clicked {
         ui.open_popup(W::new("sig-menu"), sig_r);
     }
@@ -360,12 +594,12 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
             };
         });
     }
-    row.cut_left(6.0);
+    ui.divider_v(row.cut_left(13.0));
 
     let metro_on = studio.session.metronome();
     let m = ui.icon_button(
         W::new("metronome"),
-        row.cut_left(34.0),
+        row.cut_left(30.0),
         icons::METRONOME,
         metro_on,
         None,
@@ -373,154 +607,6 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
     ui.tooltip(&m, "Metronome");
     if m.clicked {
         studio.session.set_metronome(!metro_on);
-    }
-    row.cut_left(14.0);
-
-    pattern_picker(
-        ui,
-        &mut row,
-        studio,
-        if tight {
-            120.0
-        } else if compact {
-            150.0
-        } else {
-            190.0
-        },
-    );
-
-    // Right side: export, save, undo/redo, load, master meter.
-    let mut right = row;
-    let export = ui.interact(
-        W::new("export"),
-        right.cut_right(if tight { 40.0 } else { 96.0 }),
-    );
-    {
-        let er = export.rect;
-        let hot = ui.animate_bool(W::new("export-hot"), export.hovered);
-        ui.scene.rect(er, t.radius_m, t.accent.lighten(hot * 0.08));
-        if tight {
-            ui.icon(er, icons::EXPORT, 16.0, t.text_on_accent);
-        } else {
-            let mut inner = er.shrink2(12.0, 0.0);
-            ui.icon(inner.cut_left(16.0), icons::EXPORT, 15.0, t.text_on_accent);
-            ui.text(inner, "Export", t.label, t.text_on_accent, Align::Center);
-        }
-        if export.hovered {
-            ui.set_cursor(peel_ui::CursorIcon::Pointer);
-        }
-    }
-    ui.tooltip(
-        &export,
-        "Export the arrangement as audio or MIDI (Cmd/Ctrl+E)",
-    );
-    if export.clicked {
-        studio.export();
-    }
-    export_panel(ui, export.rect, studio);
-    right.cut_right(6.0);
-    let save = ui.icon_button(
-        W::new("save"),
-        right.cut_right(34.0),
-        icons::SAVE,
-        false,
-        None,
-    );
-    ui.tooltip(&save, "Save (Cmd/Ctrl+S)");
-    if save.clicked {
-        studio.save();
-    }
-    let open = ui.icon_button(
-        W::new("open"),
-        right.cut_right(34.0),
-        icons::FOLDER_OPEN,
-        false,
-        None,
-    );
-    ui.tooltip(&open, "Open project or MIDI file");
-    if open.clicked {
-        studio.open();
-    }
-    right.cut_right(4.0);
-    let redo = ui.icon_button(
-        W::new("redo"),
-        right.cut_right(34.0),
-        icons::REDO,
-        false,
-        None,
-    );
-    let redo_label = studio
-        .session
-        .doc
-        .redo_label()
-        .map(|l| format!("Redo {l}"))
-        .unwrap_or_else(|| "Nothing to redo".into());
-    ui.tooltip(&redo, &redo_label);
-    if redo.clicked {
-        studio.session.doc.redo();
-    }
-    let undo = ui.icon_button(
-        W::new("undo"),
-        right.cut_right(34.0),
-        icons::UNDO,
-        false,
-        None,
-    );
-    let undo_label = studio
-        .session
-        .doc
-        .undo_label()
-        .map(|l| format!("Undo {l}"))
-        .unwrap_or_else(|| "Nothing to undo".into());
-    ui.tooltip(&undo, &format!("{undo_label}  ·  right-click for history"));
-    if undo.clicked {
-        studio.session.doc.undo();
-    }
-    if undo.secondary_clicked {
-        ui.open_popup(W::new("history"), undo.rect);
-    }
-    history_panel(ui, undo.rect, studio);
-    right.cut_right(14.0);
-
-    // Master meter + load.
-    if tight {
-        return;
-    }
-    // The meter gives way to the controls on the left when space is short.
-    let load_w = if compact { 18.0 } else { 54.0 };
-    let meter_w = (if compact { 90.0 } else { 130.0 } as f32).min(right.w - load_w - 20.0);
-    if meter_w < 40.0 {
-        return;
-    }
-    let meter_r = right.cut_right(meter_w).shrink2(0.0, 7.0);
-    let master = studio.session.project().mixer.tracks[0].id;
-    let peaks = studio.session.take_track_meter(master);
-    horizontal_meter(ui, W::new("master-meter"), meter_r, peaks);
-    right.cut_right(12.0);
-    let load = studio.session.cpu_load();
-    let load_r = right.cut_right(load_w);
-    let lc = if load > 0.85 {
-        t.record
-    } else if load > 0.6 {
-        t.warn
-    } else {
-        t.text_faint
-    };
-    let lresp = ui.interact(W::new("load"), load_r);
-    ui.tooltip(
-        &lresp,
-        &format!("Audio processing load {:.0}%", load * 100.0),
-    );
-    let mut lr = load_r;
-    ui.icon(lr.cut_left(16.0), icons::CPU, 14.0, lc);
-    if !compact {
-        ui.text(
-            lr,
-            &format!("{:.0}%", load * 100.0),
-            t.readout_small,
-            lc,
-            Align::End,
-        );
     }
 }
 
@@ -607,7 +693,9 @@ fn horizontal_meter(ui: &mut Ui, id: W, r: Rect, peaks: (f32, f32)) {
         .vline(x, r.y - 2.0, r.bottom() + 2.0, t.text_faint.alpha(0.6));
 }
 
-fn pattern_picker(ui: &mut Ui, row: &mut Rect, studio: &mut Studio, width: f32) {
+/// The pattern being edited, with its menu and a new-pattern button; sits
+/// in the dock header beside the Channels and Piano roll editors.
+pub fn pattern_picker(ui: &mut Ui, row: &mut Rect, studio: &mut Studio, width: f32) {
     let t = ui.theme.clone();
     let pid = studio.current_pattern();
     let Some(pat) = studio.session.project().pattern(pid).cloned() else {
@@ -615,9 +703,12 @@ fn pattern_picker(ui: &mut Ui, row: &mut Rect, studio: &mut Studio, width: f32) 
     };
     let r = row.cut_left(width);
     let id = W::new("pattern-picker");
-    let resp = ui.interact(id, r);
+    let resp = ui.interact_button(id, r, "Pattern");
+    ui.describe_node(id, peel_ui::Semantics::patch().value(pat.name.as_str()));
     let hot = ui.animate_bool(id, resp.hovered);
-    ui.scene.rect(r, t.radius_m, t.panel.mix(t.raised, hot));
+    ui.scene
+        .rect(r, t.radius_m, t.control.mix(t.control_hover, hot));
+    ui.focus_ring(id, r, t.radius_m);
     let mut inner = r.shrink2(10.0, 0.0);
     let sw = inner.cut_left(12.0);
     ui.scene.rect(

@@ -1,6 +1,8 @@
-//! Scripts panel: factory actions and `.js`, `.lua` and `.py` files installed in the
-//! user's Scripts folder. A script only runs when Run is pressed; one runs
-//! at a time, in the background, and its result stays until the next run.
+//! Scripts: factory actions and `.js`, `.lua` and `.py` files installed in
+//! the user's Scripts folder, shown in the right column in place of the
+//! Inspector (F8 or the right rail). A script only runs when Run is
+//! pressed; one runs at a time, in the background, and its result stays
+//! until the next run. The column is not modal: editing goes on beside it.
 
 use std::path::{Path, PathBuf};
 
@@ -54,8 +56,11 @@ pub struct Scripts {
     pub job: Option<Running>,
     pub(crate) control: peel_mcp::Control,
     pub last: Option<Outcome>,
-    /// Open the panel on the next frame (F8, `PEEL_SCRIPTS`).
+    /// Show the column on the next frame (`PEEL_SCRIPTS`).
     pub open_requested: bool,
+    /// Whether the Inspector showed before Scripts replaced it, so closing
+    /// Scripts puts it back.
+    pub return_inspector: bool,
     scanned: bool,
 }
 
@@ -99,6 +104,7 @@ impl Scripts {
             control: Default::default(),
             last: None,
             open_requested: false,
+            return_inspector: true,
             scanned: false,
         }
     }
@@ -311,61 +317,39 @@ pub fn frame(ui: &mut Ui, studio: &mut Studio) {
     }
 }
 
-/// Opens the panel, or closes it when it is open (F8).
-pub fn toggle(ui: &mut Ui, studio: &mut Studio) {
-    if ui.is_popup_open(PANEL) {
-        ui.close_popup();
+/// Shows Scripts in the right column, or puts the Inspector back (F8,
+/// the right rail, the View menu). Saved like the other pane choices.
+pub fn toggle(studio: &mut Studio) {
+    if studio.prefs.show_scripts {
+        close(studio);
     } else {
-        studio.scripts.open_requested = true;
+        open(studio);
+    }
+    studio.prefs.save();
+}
+
+fn open(studio: &mut Studio) {
+    studio.scripts.return_inspector = studio.prefs.show_inspector;
+    studio.scripts.ensure_scanned();
+    studio.prefs.set_scripts(true);
+}
+
+fn close(studio: &mut Studio) {
+    studio.prefs.show_scripts = false;
+    if studio.scripts.return_inspector {
+        studio.prefs.set_inspector(true);
     }
 }
 
-/// Width the status-bar button needs.
-pub fn button_width(ui: &mut Ui) -> f32 {
-    let t = ui.theme.clone();
-    ui.measure("Scripts", t.caption).x + 30.0
-}
-
-/// The status-bar button that opens the panel.
-pub fn status_button(ui: &mut Ui, r: Rect, studio: &mut Studio) {
-    let t = ui.theme.clone();
-    let id = W::new("scripts-open");
-    let open = ui.is_popup_open(PANEL);
-    let resp = ui.interact_button(id, r, "Scripts");
-    ui.describe_node(id, Semantics::patch().expanded(open).shortcut("F8"));
-    let hot = ui.animate_bool(id, resp.hovered);
-    let cell = r.shrink2(0.0, 2.0);
-    if open {
-        ui.scene.rect(cell, t.radius_s, t.raised);
-    } else if hot > 0.0 {
-        ui.scene.rect(cell, t.radius_s, t.control.alpha(hot));
+/// Applies a pending open request (`PEEL_SCRIPTS`) and loads the list
+/// whenever the column shows, however it was shown (scripts can show it
+/// with `ui.set`).
+pub fn sync(studio: &mut Studio) {
+    if std::mem::take(&mut studio.scripts.open_requested) && !studio.prefs.show_scripts {
+        open(studio);
     }
-    let mut inner = cell.shrink2(8.0, 0.0);
-    let dot = inner.cut_left(8.0);
-    if studio.scripts.is_running() {
-        ui.scene.circle(dot.center(), 3.0, t.accent);
-    } else if studio
-        .scripts
-        .last
-        .as_ref()
-        .is_some_and(|o| o.result.is_err())
-    {
-        ui.scene.circle(dot.center(), 3.0, t.record);
-    }
-    inner.cut_left(4.0);
-    let c = if open {
-        t.text
-    } else {
-        t.text_dim.mix(t.text, hot)
-    };
-    ui.text(inner, "Scripts", t.caption, c, Align::Start);
-    if resp.hovered {
-        ui.set_cursor(peel_ui::CursorIcon::Pointer);
-    }
-    ui.focus_ring(id, cell, t.radius_s);
-    ui.tooltip(&resp, "Scripts (F8)");
-    if resp.clicked {
-        studio.scripts.open_requested = true;
+    if studio.prefs.show_scripts {
+        studio.scripts.ensure_scanned();
     }
 }
 
@@ -395,25 +379,9 @@ enum Row {
     Empty,
 }
 
-/// Draws the panel when open.
-pub fn panel(ui: &mut Ui, studio: &mut Studio) {
-    if std::mem::take(&mut studio.scripts.open_requested) {
-        studio.scripts.ensure_scanned();
-        ui.open_popup(PANEL, Rect::ZERO);
-    }
-    if !ui.is_popup_open(PANEL) {
-        return;
-    }
+/// Draws the Scripts column into `r` (the right column).
+pub fn column(ui: &mut Ui, r: Rect, studio: &mut Studio) {
     let t = ui.theme.clone();
-    let screen = ui.screen();
-    let w = 420.0f32.min(screen.w - 16.0);
-    let h = 480.0f32.min(screen.h - 32.0 - 60.0).max(240.0);
-    let r = Rect {
-        x: (screen.right() - w - 10.0).max(screen.x + 8.0),
-        y: (screen.bottom() - 32.0 - h).max(screen.y + 8.0),
-        w,
-        h,
-    };
     let rec = recording(studio);
     let mut rows = vec![Row::Heading("Factory")];
     for (i, s) in studio.scripts.factory.iter().enumerate() {
@@ -466,69 +434,86 @@ pub fn panel(ui: &mut Ui, studio: &mut Studio) {
         .as_ref()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| peel_extensions::default_python_label().into());
-    ui.popup_panel(PANEL, r, |ui, r| {
-        ui.describe_node(
-            PANEL.with("a11y-panel"),
-            Semantics::patch().label("Scripts"),
-        );
-        let mut body = r.shrink(16.0);
+    ui.scene.rect(r, t.radius_l, t.panel);
+    ui.describe_node(PANEL, Semantics::new(Role::Group).label("Scripts").rect(r));
+    {
+        let mut body = r.shrink2(12.0, 0.0);
 
-        // Header: title, Add file, Refresh.
-        let mut head = body.cut_top(28.0);
-        let close_r = head.cut_right(28.0);
-        let x = ui.icon_button(PANEL.with("close"), close_r, peel_ui::icons::X, false, None);
-        ui.name(&x, "Close");
+        // Header: title, then Add file, Refresh and Close as quiet icons.
+        let mut head = body.cut_top(t.header_h).shrink2(0.0, 5.0);
+        let x = ui.icon_button(
+            PANEL.with("close"),
+            head.cut_right(28.0),
+            peel_ui::icons::X,
+            false,
+            None,
+        );
+        ui.name(&x, "Close Scripts");
+        ui.tooltip(&x, "Close (F8)");
         if x.clicked {
             close = true;
         }
-        head.cut_right(6.0);
-        let refresh_r = head.cut_right(72.0);
-        let rb = ui.button(W::new("scripts-refresh"), refresh_r, "Refresh");
-        ui.tooltip(&rb, &dir);
+        head.cut_right(2.0);
+        let rb = ui.icon_button(
+            W::new("scripts-refresh"),
+            head.cut_right(28.0),
+            peel_ui::icons::REPEAT,
+            false,
+            None,
+        );
+        ui.name(&rb, "Refresh");
+        ui.tooltip(&rb, &format!("Rescan {dir}"));
         if rb.clicked {
             refresh = true;
         }
-        head.cut_right(6.0);
-        if ui
-            .button(W::new("scripts-add"), head.cut_right(80.0), "Add file")
-            .clicked
-        {
+        head.cut_right(2.0);
+        let ab = ui.icon_button(
+            W::new("scripts-add"),
+            head.cut_right(28.0),
+            peel_ui::icons::PLUS,
+            false,
+            None,
+        );
+        ui.name(&ab, "Add file");
+        ui.tooltip(&ab, "Add a .js, .lua or .py file");
+        if ab.clicked {
             add = true;
         }
         ui.text(head, "Scripts", t.heading, t.text, Align::Start);
         ui.describe_label(PANEL.with("title"), head, "Scripts");
-        body.cut_top(10.0);
+        ui.scene.hline(r.x, r.right(), r.y + t.header_h, t.line);
+        body.cut_top(8.0);
 
+        // Python: the interpreter and its file-access warning. The
+        // warning is not a usage hint, so it always shows.
         if python_selected {
             let mut row = body.cut_top(28.0);
             let choose = ui.button(W::new("scripts-python"), row.cut_right(72.0), "Choose…");
             ui.name(&choose, "Choose Python interpreter");
             choose_python = choose.clicked;
-            row.cut_right(6.0);
-            system_python = ui
-                .button(
-                    W::new("scripts-python-system"),
-                    row.cut_right(60.0),
-                    "Default",
-                )
-                .clicked;
+            row.cut_right(4.0);
+            let sys = ui.button(
+                W::new("scripts-python-system"),
+                row.cut_right(64.0),
+                "Default",
+            );
+            ui.name(&sys, "Use the default Python");
+            system_python = sys.clicked;
             row.cut_right(8.0);
             let path = ui.fit_text(&python_path, t.caption, row.w);
             ui.text(row, &path, t.caption, t.text_dim, Align::Start);
             let info = ui.interact(W::new("scripts-python-path"), row);
             ui.tooltip(&info, &python_path);
-            body.cut_top(4.0);
-            ui.text(
-                body.cut_top(22.0),
-                "Python scripts have full access to your files.",
-                t.caption,
-                t.warn,
-                Align::Start,
-            );
+            body.cut_top(2.0);
+            let warn = body.cut_top(22.0);
+            let msg = "Python scripts have full access to your files.";
+            ui.text(warn, msg, t.caption, t.warn, Align::Start);
+            ui.describe_label(W::new("scripts-python-warning"), warn, msg);
             body.cut_top(6.0);
         }
 
         // Footer: selection summary, Cancel, Run.
+        body.cut_bottom(12.0);
         let mut foot = body.cut_bottom(32.0);
         body.cut_bottom(10.0);
         let run_r = foot.cut_right(88.0);
@@ -572,9 +557,11 @@ pub fn panel(ui: &mut Ui, studio: &mut Studio) {
         }
 
         // Script list.
-        let list = body;
-        ui.scene.rect(list, t.radius_m, t.panel_alt);
-        let list_in = list.shrink(4.0);
+        let list_in = Rect {
+            x: body.x - 4.0,
+            w: body.w + 8.0,
+            ..body
+        };
         let content_h: f32 = rows
             .iter()
             .map(|r| {
@@ -676,7 +663,7 @@ pub fn panel(ui: &mut Ui, studio: &mut Studio) {
                     let lr = rr.shrink2(8.0, 0.0);
                     ui.text(
                         lr,
-                        "No .js, .lua or .py files",
+                        "No scripts installed",
                         t.body,
                         t.text_faint,
                         Align::Start,
@@ -685,7 +672,7 @@ pub fn panel(ui: &mut Ui, studio: &mut Studio) {
             }
         }
         ui.scene.pop_clip();
-    });
+    }
 
     if choose_python && let Some(path) = crate::dialogs::open(&[]) {
         studio.scripts.python = Some(path.clone());
@@ -721,7 +708,7 @@ pub fn panel(ui: &mut Ui, studio: &mut Studio) {
         studio.scripts.cancel();
     }
     if close {
-        ui.close_popup();
+        toggle(studio);
     }
 }
 

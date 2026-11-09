@@ -67,6 +67,11 @@ pub const ROWS: &str = "\u{e5a2}";
 pub const COLUMNS: &str = "\u{e546}";
 pub const QUESTION: &str = "\u{e3e8}";
 pub const KEYBOARD: &str = "\u{e2d8}";
+pub const LAYOUT: &str = "\u{e6d6}";
+pub const CODE: &str = "\u{e1bc}";
+pub const CARET_DOUBLE_LEFT: &str = "\u{e128}";
+pub const CARET_DOUBLE_RIGHT: &str = "\u{e12a}";
+pub const INFO: &str = "\u{e2ce}";
 
 /// Plain-language names for the icons, used as accessible names when an
 /// icon is the only content of a control.
@@ -133,6 +138,11 @@ const NAMES: &[(&str, &str)] = &[
     (COLUMNS, "Columns"),
     (QUESTION, "Help"),
     (KEYBOARD, "Keyboard"),
+    (LAYOUT, "Layout"),
+    (CODE, "Code"),
+    (CARET_DOUBLE_LEFT, "Collapse left"),
+    (CARET_DOUBLE_RIGHT, "Collapse right"),
+    (INFO, "Information"),
 ];
 
 /// The accessible name of an icon glyph from this module, if it has one.

@@ -14,7 +14,14 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, _ws: &mut Worksp
     let t = ui.theme.clone();
     // Header tools: capture and stop.
     let mut row = tools;
-    let stop = ui.button(W::new("perform-stop"), row.cut_right(96.0), "Stop all");
+    let stop = ui.quiet_button(
+        W::new("perform-stop"),
+        row.cut_right(84.0),
+        Some(icons::STOP),
+        "Stop all",
+        false,
+        false,
+    );
     if stop.clicked {
         s.stop_performance();
     }
@@ -40,12 +47,23 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, _ws: &mut Worksp
         s.set_performance_capture(!capturing);
     }
     row.cut_right(10.0);
+    // Usage hint: inline when hints are on, a mark with a tooltip if not.
     let hint = if s.performing() {
         "Launches start on the next bar"
     } else {
         "Click a clip to launch it"
     };
-    ui.text(row, hint, t.caption, t.text_faint, Align::End);
+    if crate::util::help(ui) {
+        ui.text(row, hint, t.caption, t.text_faint, Align::End);
+    } else {
+        let mark = Rect {
+            x: row.right() - 18.0,
+            y: row.center().y - 9.0,
+            w: 18.0,
+            h: 18.0,
+        };
+        crate::util::hint(ui, W::new("perform-hint"), mark, hint);
+    }
 
     let lanes: Vec<(Id, String, Vec<peel_session::PerformSlot>)> = {
         let names: std::collections::HashMap<Id, String> = s

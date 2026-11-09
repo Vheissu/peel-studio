@@ -271,11 +271,12 @@ impl Ui {
         self.describe_icon_button(id, r, icon, on);
         let t = self.theme.clone();
         let hot = self.animate_bool(id, resp.hovered);
+        // Quiet until hovered; only the on state carries a tint.
         if on {
             self.scene
                 .rect(r, t.radius_m, on_color.with_alpha(0.18 + hot * 0.06));
-        } else {
-            let a = if resp.active { 1.0 } else { 0.55 + hot * 0.45 };
+        } else if hot > 0.0 || resp.active {
+            let a = if resp.active { 1.0 } else { hot };
             self.scene.rect(r, t.radius_m, t.control.alpha(a));
         }
         let color = if on {
@@ -325,10 +326,8 @@ impl Ui {
         let c = r.center();
         let rad = (r.w.min(r.h) * 0.5 - 1.0).clamp(3.0, 6.0);
         let k = self.animate_bool(id.with("led"), on);
-        if k > 0.0 {
-            self.scene.circle(c, rad + 3.0, color.with_alpha(0.14 * k));
-        }
-        let fill = t.control_hover.mix(color, k);
+        // No halo: lit LEDs are a flat, slightly muted dot.
+        let fill = t.control_hover.mix(color, k * 0.82);
         let stroke = if resp.hovered {
             t.text_dim
         } else {
@@ -345,7 +344,7 @@ impl Ui {
     /// Segmented control. Returns true when the selection changes.
     pub fn segmented(&mut self, id: Id, r: Rect, options: &[&str], selected: &mut usize) -> bool {
         let t = self.theme.clone();
-        self.scene.rect(r, t.radius_m, t.bg.mix(t.panel, 0.4));
+        self.scene.rect(r, t.radius_m, t.well);
         let inner = r.shrink(2.0);
         let cells = inner.columns(options.len(), 2.0);
         let mut changed = false;

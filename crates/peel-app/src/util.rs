@@ -1,12 +1,12 @@
 //! Small helpers shared by the editors.
 
 use peel_document::{Color as DocColor, Time, TimeSignature};
-use peel_ui::Color;
+use peel_ui::{Color, Id as W, Rect, Ui, icons};
 
-/// Names for the twelve palette colors, in palette order.
 /// Thickness of the timeline scrollbars.
 pub const SCROLLBAR: f32 = 8.0;
 
+/// Names for the twelve palette colors, in palette order.
 pub const COLOR_NAMES: [&str; 12] = [
     "Tomato", "Amber", "Mustard", "Olive", "Jade", "Teal", "Blue", "Lavender", "Rose", "Salmon",
     "Beige", "Steel",
@@ -103,5 +103,57 @@ mod tests {
         assert_eq!(format_position(4.25, sig), "2.1.2");
         assert_eq!(format_position(7.5, sig), "2.4.3");
         assert_eq!(note_name(60), "C4");
+    }
+}
+
+/// Per-frame copy of `Prefs::show_help`, so editors that only see the
+/// workspace can ask whether usage hints are on.
+#[derive(Default)]
+struct HelpOn(bool);
+
+const HELP: W = W(0x4e1b_77a0_5c03);
+
+/// Sets whether usage hints show this frame (called by the studio).
+pub fn set_help(ui: &mut Ui, on: bool) {
+    ui.state::<HelpOn>(HELP).0 = on;
+}
+
+/// Usage hints are on.
+pub fn help(ui: &mut Ui) -> bool {
+    ui.state::<HelpOn>(HELP).0
+}
+
+/// An optional usage hint. With hints on, the text wraps into `r` and the
+/// height used is returned; with hints off only a small info mark shows
+/// at the top left of `r`, carrying the text as its tooltip (and name).
+/// Warnings never go through here: they always show.
+pub fn hint(ui: &mut Ui, id: W, r: Rect, text: &str) -> f32 {
+    let t = ui.theme.clone();
+    if help(ui) {
+        ui.text_wrapped(r.min(), r.w, text, t.caption, t.text_faint)
+    } else {
+        let mark = Rect {
+            x: r.x,
+            y: r.y,
+            w: 18.0,
+            h: 18.0,
+        };
+        let resp = ui.interact_node(
+            id,
+            mark,
+            peel_ui::FocusKind::Activate,
+            peel_ui::Semantics::new(peel_ui::Role::Button)
+                .label("Hint")
+                .description(text),
+        );
+        let c = if resp.hovered {
+            t.text_dim
+        } else {
+            t.text_faint
+        };
+        ui.icon(mark, icons::INFO, 14.0, c);
+        ui.tooltip(&resp, text);
+        ui.focus_ring(id, mark, 9.0);
+        18.0
     }
 }

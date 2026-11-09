@@ -5,7 +5,7 @@ use peel_document::{DeviceInstance, Id};
 use peel_dsp::{DeviceDescriptor, ParamDescriptor};
 use peel_session::Session;
 use peel_ui::Id as W;
-use peel_ui::{Align, Color, CursorIcon, MenuItem, Rect, Ui, icons, vec2};
+use peel_ui::{Align, Color, MenuItem, Rect, Ui, icons, vec2};
 
 use crate::util::{col, db_to_fader, fader_to_db, format_db, note_name};
 use crate::workspace::{Focus, Workspace};
@@ -19,31 +19,79 @@ struct WaveCache {
     cols: Vec<(f32, f32)>,
 }
 
-pub fn draw(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) {
+/// Draws the Inspector. Returns true when the user asked to hide it.
+pub fn draw(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) -> bool {
     let t = ui.theme.clone();
     ui.scene.rect(r, t.radius_l, t.panel);
-    let body = r.shrink(12.0);
-    match ws.focus {
-        Some(Focus::Channel(id)) if s.project().channel(id).is_some() => {
-            channel(ui, body, id, s, ws)
-        }
-        Some(Focus::Track(id)) if s.project().mixer.track(id).is_some() => {
-            track(ui, body, id, s, ws)
-        }
-        Some(Focus::Clip(id)) if audio_clip_of(s, id).is_some() => audio_clip(ui, body, id, s),
-        _ => {
+    let mut body = r.shrink2(12.0, 0.0);
+    let focus = match ws.focus {
+        Some(Focus::Channel(id)) if s.project().channel(id).is_some() => Some(Focus::Channel(id)),
+        Some(Focus::Track(id)) if s.project().mixer.track(id).is_some() => Some(Focus::Track(id)),
+        Some(Focus::Clip(id)) if audio_clip_of(s, id).is_some() => Some(Focus::Clip(id)),
+        _ => None,
+    };
+    // Pane header: what kind of thing is selected, and Hide.
+    let mut head = body.cut_top(t.header_h).shrink2(0.0, 5.0);
+    let hide = ui.icon_button(
+        W::new("inspector-hide"),
+        head.cut_right(28.0),
+        icons::CARET_DOUBLE_RIGHT,
+        false,
+        None,
+    );
+    ui.name(&hide, "Hide inspector");
+    ui.tooltip(&hide, "Hide the inspector");
+    let kind = match focus {
+        Some(Focus::Channel(_)) => "Channel",
+        Some(Focus::Track(id)) if s.project().mixer.tracks[0].id == id => "Master",
+        Some(Focus::Track(_)) => "Mixer track",
+        Some(Focus::Clip(_)) => "Audio clip",
+        None => "Inspector",
+    };
+    ui.text(head, kind, t.label, t.text_dim, Align::Start);
+    ui.describe_label(W::new("inspector-kind"), head, kind);
+    body.cut_bottom(12.0);
+    match focus {
+        Some(Focus::Channel(id)) => channel(ui, body, id, s, ws),
+        Some(Focus::Track(id)) => track(ui, body, id, s, ws),
+        Some(Focus::Clip(id)) => audio_clip(ui, body, id, s),
+        None => {
+            // Restrained empty state: one line, plus a hint when hints are on.
             let mut c = body;
-            c.cut_top(body.h * 0.35);
-            ui.icon(c.cut_top(40.0), icons::SLIDERS, 28.0, t.text_faint);
+            c.cut_top(4.0);
             ui.text(
-                c.cut_top(24.0),
-                "Select a channel or mixer track",
+                c.cut_top(22.0),
+                "Nothing selected",
                 t.body,
                 t.text_faint,
-                Align::Center,
+                Align::Start,
+            );
+            crate::util::hint(
+                ui,
+                W::new("inspector-empty-hint"),
+                c,
+                "Click a channel, mixer track or audio clip to edit it here.",
             );
         }
     }
+    hide.clicked
+}
+
+/// The selected object's name block: a color bar, the name and a detail
+/// line. Returns the rect left of the name for actions (right side).
+fn object_head(ui: &mut Ui, r: Rect, color: Color) -> Rect {
+    let mut hr = r;
+    let bar = hr.cut_left(3.0);
+    ui.scene.rect(bar.shrink2(0.0, 3.0), 1.5, color);
+    hr.cut_left(10.0);
+    hr
+}
+
+/// The label column of a property row (72 px).
+fn prop_label(ui: &mut Ui, row: &mut Rect, label: &str) {
+    let t = ui.theme.clone();
+    let lr = row.cut_left(72.0);
+    ui.text(lr, label, t.caption, t.text_faint, Align::Start);
 }
 
 fn scroll_body(ui: &mut Ui, id: W, r: Rect, content_h: f32) -> f32 {
@@ -61,14 +109,51 @@ fn channel(ui: &mut Ui, r: Rect, id: Id, s: &mut Session, ws: &mut Workspace) {
     let desc = peel_devices::descriptor(&ch.device.type_id);
     let mut body = r;
 
-    // Header.
+    // Header: name, device and preset, and the channel's actions.
     let head = body.cut_top(44.0);
-    let mut hr = head;
-    let sw = hr.cut_left(6.0);
-    ui.scene.rect(sw.shrink2(0.0, 4.0), 3.0, col(ch.color));
-    hr.cut_left(10.0);
+    let mut hr = object_head(ui, head, col(ch.color));
+    let more_r = hr.cut_right(28.0).with_h(28.0);
+    let more_id = W::new(("insp-channel-more", id));
+    let more = ui.icon_button(
+        more_id,
+        more_r,
+        icons::DOTS,
+        ui.is_popup_open(more_id.with("menu")),
+        None,
+    );
+    ui.name(&more, "Channel actions");
+    ui.tooltip(&more, "Channel actions");
+    if more.clicked {
+        ui.open_popup(more_id.with("menu"), more_r);
+    }
+    hr.cut_right(4.0);
     let name_r = hr.cut_top(24.0);
     let name_id = W::new(("rename-channel", id));
+    let items = [
+        MenuItem::new("Rename"),
+        MenuItem::new("Edit in piano roll").shortcut("F7"),
+        MenuItem::Separator,
+        MenuItem::new("Delete channel"),
+    ];
+    match ui.menu(
+        more_id.with("menu"),
+        vec2(more_r.right() - 180.0, more_r.bottom() + 4.0),
+        &items,
+    ) {
+        Some(0) => {
+            *ui.state::<String>(name_id) = ch.name.clone();
+            ui.request_focus(name_id);
+        }
+        Some(1) => {
+            ws.selected_channel = Some(id);
+            ws.dock = crate::workspace::DockTab::PianoRoll;
+        }
+        Some(3) => {
+            crate::rack::delete_channel(s, ws, id);
+            return;
+        }
+        _ => {}
+    }
     if ui.has_focus(name_id) {
         let mut name = ui.state::<String>(name_id).clone();
         let resp = ui.text_edit(name_id, name_r, &mut name, "Name");
@@ -87,7 +172,8 @@ fn channel(ui: &mut Ui, r: Rect, id: Id, s: &mut Session, ws: &mut Workspace) {
         }
     } else {
         let resp = ui.interact(name_id.with("label"), name_r);
-        ui.text(name_r, &ch.name, t.heading, t.text, Align::Start);
+        let shown = ui.fit_text(&ch.name, t.heading, name_r.w);
+        ui.text(name_r, &shown, t.heading, t.text, Align::Start);
         ui.tooltip(&resp, "Double-click to rename");
         if resp.double_clicked {
             *ui.state::<String>(name_id) = ch.name.clone();
@@ -109,9 +195,9 @@ fn channel(ui: &mut Ui, r: Rect, id: Id, s: &mut Session, ws: &mut Workspace) {
         t.text_faint,
         Align::Start,
     );
-    body.cut_top(10.0);
+    body.cut_top(8.0);
 
-    // Channel strip row: volume, pan, routing, root key.
+    // Volume and pan, then property rows: output and step key.
     let mut strip = body.cut_top(70.0);
     let mut vol = db_to_fader(ch.gain_db);
     let vcell = strip.cut_left(CELL_W);
@@ -159,31 +245,22 @@ fn channel(ui: &mut Ui, r: Rect, id: Id, s: &mut Session, ws: &mut Workspace) {
     if v.released || pr.released {
         s.doc.end_gesture();
     }
-    strip.cut_left(8.0);
-    let mut right = strip.shrink2(0.0, 8.0);
-    let route_r = right.cut_top(26.0);
+    body.cut_top(4.0);
+    let mut route_row = body.cut_top(28.0);
+    prop_label(ui, &mut route_row, "Output");
+    let route_r = route_row;
     let track_name = s
         .project()
         .mixer
         .track(ch.track)
         .map_or("Master".to_string(), |t| t.name.clone());
-    let rresp = ui.interact(W::new(("insp-route", id)), route_r);
-    ui.scene.rect(
+    let rresp = ui.dropdown(
+        W::new(("insp-route", id)),
         route_r,
-        t.radius_m,
-        if rresp.hovered {
-            t.control_hover
-        } else {
-            t.control
-        },
+        &track_name,
+        "Mixer track",
     );
-    let mut rr = route_r.shrink2(8.0, 0.0);
-    ui.icon(rr.cut_left(14.0), icons::FADERS, 12.0, t.text_dim);
-    rr.cut_left(4.0);
-    ui.icon(rr.cut_right(12.0), icons::CARET_DOWN, 11.0, t.text_dim);
-    let tn = ui.fit_text(&track_name, t.caption, rr.w);
-    ui.text(rr, &tn, t.caption, t.text, Align::Start);
-    ui.tooltip(&rresp, "Mixer track");
+    ui.tooltip(&rresp, "Mixer track this channel plays through");
     if rresp.clicked {
         ui.open_popup(W::new(("insp-route-menu", id)), route_r);
     }
@@ -210,19 +287,13 @@ fn channel(ui: &mut Ui, r: Rect, id: Id, s: &mut Session, ws: &mut Workspace) {
             }
         });
     }
-    right.cut_top(6.0);
-    let key_r = right.cut_top(26.0);
+    body.cut_top(4.0);
+    let mut key_row = body.cut_top(28.0);
+    prop_label(ui, &mut key_row, "Step key");
+    let key_r = key_row;
     let mut key = ch.root_key as f64;
     ui.scene.rect(key_r, t.radius_m, t.control);
-    let mut kr = key_r;
-    let lbl = kr.cut_left(54.0);
-    ui.text(
-        lbl.shrink2(8.0, 0.0),
-        "Step key",
-        t.caption,
-        t.text_faint,
-        Align::Start,
-    );
+    let kr = key_r.shrink2(8.0, 0.0);
     let k = ui.drag_number(
         W::new(("insp-root", id)),
         kr,
@@ -252,12 +323,14 @@ fn channel(ui: &mut Ui, r: Rect, id: Id, s: &mut Session, ws: &mut Workspace) {
             }
         });
     }
+    ui.tooltip(
+        &k,
+        "Key the step sequencer plays. Drag or double-click to type",
+    );
     if k.released {
         s.doc.end_gesture();
     }
-    body.cut_top(6.0);
-    ui.scene.hline(body.x, body.right(), body.y, t.line_strong);
-    body.cut_top(10.0);
+    body.cut_top(12.0);
 
     let Some(desc) = desc else {
         ui.text(
@@ -280,15 +353,9 @@ fn track(ui: &mut Ui, r: Rect, id: Id, s: &mut Session, ws: &mut Workspace) {
     let is_master = s.project().mixer.tracks[0].id == id;
     let mut body = r;
     let head = body.cut_top(44.0);
-    let mut hr = head;
-    let sw = hr.cut_left(6.0);
-    ui.scene.rect(
-        sw.shrink2(0.0, 4.0),
-        3.0,
-        if is_master { t.accent } else { col(tr.color) },
-    );
-    hr.cut_left(10.0);
-    ui.text(hr.cut_top(24.0), &tr.name, t.heading, t.text, Align::Start);
+    let mut hr = object_head(ui, head, if is_master { t.accent } else { col(tr.color) });
+    let name = ui.fit_text(&tr.name, t.heading, hr.w);
+    ui.text(hr.cut_top(24.0), &name, t.heading, t.text, Align::Start);
     let sub = if tr.inserts.is_empty() {
         "No effects".to_string()
     } else {
@@ -305,32 +372,14 @@ fn track(ui: &mut Ui, r: Rect, id: Id, s: &mut Session, ws: &mut Workspace) {
     if !is_master {
         let row = body.cut_top(28.0);
         let mut rr = row;
-        ui.text(
-            rr.cut_left(60.0),
-            "Output",
-            t.caption,
-            t.text_dim,
-            Align::Start,
-        );
+        prop_label(ui, &mut rr, "Output");
         let out_id = tr.output.unwrap_or(s.project().mixer.tracks[0].id);
         let out_name = s
             .project()
             .mixer
             .track(out_id)
             .map_or("Master".to_string(), |t| t.name.clone());
-        let resp = ui.interact(W::new(("insp-output", id)), rr);
-        ui.scene.rect(
-            rr,
-            t.radius_m,
-            if resp.hovered {
-                t.control_hover
-            } else {
-                t.control
-            },
-        );
-        let mut inner = rr.shrink2(10.0, 0.0);
-        ui.icon(inner.cut_right(14.0), icons::CARET_DOWN, 11.0, t.text_dim);
-        ui.text(inner, &out_name, t.label, t.text, Align::Start);
+        let resp = ui.dropdown(W::new(("insp-output", id)), rr, &out_name, "Output");
         if resp.clicked {
             ui.open_popup(W::new(("insp-output-menu", id)), rr);
         }
@@ -384,21 +433,19 @@ fn track(ui: &mut Ui, r: Rect, id: Id, s: &mut Session, ws: &mut Workspace) {
 
     if tr.inserts.is_empty() {
         let mut c = body;
-        c.cut_top(40.0);
-        ui.icon(c.cut_top(36.0), icons::SLIDERS, 24.0, t.text_faint);
+        c.cut_top(8.0);
         ui.text(
             c.cut_top(22.0),
-            "Add effects from the Browser",
+            "No effects",
             t.body,
             t.text_faint,
-            Align::Center,
+            Align::Start,
         );
-        ui.text(
-            c.cut_top(20.0),
-            "or a mixer slot",
-            t.body,
-            t.text_faint,
-            Align::Center,
+        crate::util::hint(
+            ui,
+            W::new(("insp-fx-hint", id)),
+            c,
+            "Add effects from the Browser's Effects tab, or from an empty mixer slot.",
         );
         return;
     }
@@ -508,7 +555,7 @@ fn panel_height(desc: &DeviceDescriptor, w: f32) -> f32 {
     let per_row = ((w - 6.0) / CELL_W).floor().max(1.0) as usize;
     let mut h = 0.0;
     if !peel_devices::presets(desc.type_id).is_empty() {
-        h += 36.0;
+        h += 38.0;
     }
     if desc.type_id == "peel.sampler" {
         h += 80.0;
@@ -517,7 +564,7 @@ fn panel_height(desc: &DeviceDescriptor, w: f32) -> f32 {
         h += 140.0;
     }
     for (_, params) in groups(desc) {
-        h += 22.0;
+        h += 30.0;
         let (wide, knobs): (Vec<&ParamDescriptor>, Vec<&ParamDescriptor>) =
             params.iter().copied().partition(|p| is_wide_choice(p));
         h += wide.len() as f32 * 34.0;
@@ -557,29 +604,14 @@ fn device_panel(
     // Presets.
     let presets = peel_devices::presets(desc.type_id);
     if !presets.is_empty() {
-        let pr = body.cut_top(28.0);
+        let mut prow = body.cut_top(28.0);
+        prop_label(ui, &mut prow, "Preset");
+        let pr = prow;
         let id = W::new(("preset", dev.id));
-        let resp = ui.interact(id, pr);
-        ui.scene.rect(
-            pr,
-            t.radius_m,
-            if resp.hovered {
-                t.control_hover
-            } else {
-                t.control
-            },
-        );
-        let mut inner = pr.shrink2(10.0, 0.0);
-        ui.icon(inner.cut_left(16.0), icons::STAR, 12.0, t.accent);
-        inner.cut_left(4.0);
-        ui.icon(inner.cut_right(14.0), icons::CARET_DOWN, 11.0, t.text_dim);
-        let label = dev.preset.clone().unwrap_or_else(|| "Presets".into());
-        ui.text(inner, &label, t.label, t.text, Align::Start);
+        let label = dev.preset.clone().unwrap_or_else(|| "Default".into());
+        let resp = ui.dropdown(id, pr, &label, "Preset");
         if resp.clicked {
             ui.open_popup(id.with("menu"), pr);
-        }
-        if resp.hovered {
-            ui.set_cursor(CursorIcon::Pointer);
         }
         let items: Vec<MenuItem> = presets
             .iter()
@@ -600,7 +632,7 @@ fn device_panel(
                 }
             });
         }
-        body.cut_top(8.0);
+        body.cut_top(10.0);
     }
     if desc.type_id == "peel.sampler" {
         sample_view(ui, &mut body, dev, s);
@@ -611,7 +643,7 @@ fn device_panel(
 
     let mut content_h = panel_height(desc, body.w);
     if !presets.is_empty() {
-        content_h -= 36.0;
+        content_h -= 38.0;
     }
     if desc.type_id == "peel.sampler" {
         content_h -= 80.0;
@@ -627,21 +659,21 @@ fn device_panel(
     };
     ui.scene.push_clip(body);
     let per_row = ((body.w - 6.0) / CELL_W).floor().max(1.0) as usize;
+    // Cells stretch to fill the row, so labels get the room there is.
+    let cell_w = (body.w - 6.0) / per_row as f32;
     let mut y = body.y - off;
-    for (group, params) in groups(desc) {
-        ui.text(
+    for (gi, (group, params)) in groups(desc).into_iter().enumerate() {
+        ui.group_heading(
             Rect {
                 x: body.x,
                 y,
-                w: body.w,
-                h: 20.0,
+                w: body.w - 6.0,
+                h: 26.0,
             },
             group,
-            t.caption,
-            t.text_faint,
-            Align::Start,
+            gi == 0,
         );
-        y += 22.0;
+        y += 30.0;
         let (wide, knobs): (Vec<&ParamDescriptor>, Vec<&ParamDescriptor>) =
             params.into_iter().partition(|p| is_wide_choice(p));
         for p in wide {
@@ -656,15 +688,14 @@ fn device_panel(
             let mut sel = value.round().max(0.0) as usize;
             let short: Vec<&str> = p.choices.to_vec();
             // Segmented when every label fits its cell, otherwise a menu.
-            let cell_w = (row.w - 56.0 - 4.0) / p.choices.len().max(1) as f32;
+            let cell_w = (row.w - 72.0 - 4.0) / p.choices.len().max(1) as f32;
             let fits = p
                 .choices
                 .iter()
                 .all(|c| ui.measure(c, t.label).x + 10.0 <= cell_w);
             if p.choices.len() <= 5 && fits {
                 let mut rr = row;
-                let lbl = rr.cut_left(56.0);
-                ui.text(lbl, p.name, t.caption, t.text_dim, Align::Start);
+                prop_label(ui, &mut rr, p.name);
                 if ui.segmented(W::new(("choice", dev.id, p.id)), rr, &short, &mut sel) {
                     s.set_param(
                         dev.id,
@@ -677,27 +708,8 @@ fn device_panel(
             } else {
                 let id = W::new(("choice-menu", dev.id, p.id));
                 let mut rr = row;
-                let lbl = rr.cut_left(56.0);
-                ui.text(lbl, p.name, t.caption, t.text_dim, Align::Start);
-                let resp = ui.interact(id, rr);
-                ui.scene.rect(
-                    rr,
-                    t.radius_m,
-                    if resp.hovered {
-                        t.control_hover
-                    } else {
-                        t.control
-                    },
-                );
-                let mut inner = rr.shrink2(10.0, 0.0);
-                ui.icon(inner.cut_right(14.0), icons::CARET_DOWN, 11.0, t.text_dim);
-                ui.text(
-                    inner,
-                    &s.param_text(dev.id, p, value),
-                    t.label,
-                    t.text,
-                    Align::Start,
-                );
+                prop_label(ui, &mut rr, p.name);
+                let resp = ui.dropdown(id, rr, &s.param_text(dev.id, p, value), p.name);
                 if resp.clicked {
                     ui.open_popup(id.with("m"), rr);
                 }
@@ -716,9 +728,9 @@ fn device_panel(
         for chunk in knobs.chunks(per_row) {
             for (i, p) in chunk.iter().enumerate() {
                 let cell = Rect {
-                    x: body.x + i as f32 * CELL_W,
+                    x: body.x + i as f32 * cell_w,
                     y,
-                    w: CELL_W,
+                    w: cell_w,
                     h: CELL_H,
                 };
                 let value = dev.params.get(p.key).copied().unwrap_or(p.default);
@@ -834,6 +846,9 @@ pub(crate) fn knob_cell(
     } else {
         let n = ui.fit_text(name, t.caption, label_r.w - 2.0);
         ui.text(label_r, &n, t.caption, t.text_dim, Align::Center);
+        if n != name {
+            ui.tooltip(&resp, name);
+        }
     }
     resp
 }
@@ -844,13 +859,26 @@ fn sample_view(ui: &mut Ui, body: &mut Rect, dev: &DeviceInstance, s: &mut Sessi
     body.cut_top(8.0);
     ui.scene.rect(r, t.radius_m, t.bg);
     let Some(asset_id) = dev.sample else {
-        ui.text(
-            r,
-            "Drop an audio file on the Channel Rack",
-            t.caption,
-            t.text_faint,
-            Align::Center,
-        );
+        if crate::util::help(ui) {
+            let mut a = r;
+            let b = a.cut_bottom(r.h * 0.5);
+            ui.text(
+                a.shrink2(0.0, 2.0),
+                "No sample loaded",
+                t.body,
+                t.text_dim,
+                Align::Center,
+            );
+            ui.text(
+                b,
+                "Drop an audio file on the Channel Rack",
+                t.caption,
+                t.text_faint,
+                Align::Center,
+            );
+        } else {
+            ui.text(r, "No sample loaded", t.body, t.text_faint, Align::Center);
+        }
         return;
     };
     let name = s
@@ -1498,10 +1526,7 @@ fn audio_clip(ui: &mut Ui, r: Rect, id: Id, s: &mut Session) {
 
     // Header.
     let head = body.cut_top(44.0);
-    let mut hr = head;
-    let sw = hr.cut_left(6.0);
-    ui.scene.rect(sw.shrink2(0.0, 4.0), 3.0, t.text_dim);
-    hr.cut_left(10.0);
+    let mut hr = object_head(ui, head, t.text_dim);
     let shown = ui.fit_text(&name, t.heading, hr.w);
     ui.text(hr.cut_top(24.0), &shown, t.heading, t.text, Align::Start);
     ui.text(

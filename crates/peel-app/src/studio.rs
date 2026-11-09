@@ -26,6 +26,8 @@ pub struct Studio {
     debug_plugin: Option<String>,
     last_autosave: std::time::Instant,
     autosaved_revision: u64,
+    /// The dock tab last frame; switching editors reveals a hidden dock.
+    last_dock: DockTab,
 }
 
 /// Seconds between autosaves of a changed project.
@@ -33,6 +35,9 @@ const AUTOSAVE_EVERY: f32 = 60.0;
 
 /// Gap between panes.
 pub const GAP: f32 = 6.0;
+/// Top bar and status bar heights.
+pub const TOP_H: f32 = 44.0;
+pub const STATUS_H: f32 = 24.0;
 
 impl Studio {
     pub fn new(session: Session) -> Studio {
@@ -46,6 +51,7 @@ impl Studio {
             .map(|c| c.id);
         ws.focus = ws.selected_channel.map(Focus::Channel);
         let prefs = Prefs::load();
+        prefs.apply_layout(&mut ws);
         ws.octave = prefs.octave;
         if let Some(dir) = prefs.sample_dir.clone().filter(|d| d.is_dir()) {
             ws.sample_dir = Some(dir);
@@ -58,6 +64,7 @@ impl Studio {
         let screenshot = std::env::var_os("PEEL_SCREENSHOT").is_some();
         let welcome = !cfg!(test) && !screenshot && (prefs.show_welcome || !recovered.is_empty());
         let revision = session.doc.revision();
+        let last_dock = ws.dock;
         let mut studio = Studio {
             session,
             ws,
@@ -71,6 +78,7 @@ impl Studio {
             debug_plugin: std::env::var("PEEL_PLUGIN").ok(),
             last_autosave: std::time::Instant::now(),
             autosaved_revision: revision,
+            last_dock,
         };
         studio.scripts.python = studio.prefs.python.clone();
         studio.open_view();
@@ -105,6 +113,9 @@ impl Studio {
         let sample_dir = self.ws.sample_dir.clone();
         let octave = self.ws.octave;
         self.ws = Workspace::default();
+        // Pane sizes and tabs are the user's, not the project's.
+        self.prefs.apply_layout(&mut self.ws);
+        self.last_dock = self.ws.dock;
         self.ws.sample_dir = sample_dir;
         self.ws.octave = octave;
         self.ws.selected_channel = self
@@ -445,6 +456,7 @@ impl Studio {
         if ui.text_focus() {
             return;
         }
+        crate::layout::shortcuts(ui, self);
         let input = &mut ui.input;
         if input.take_command("z", false)
             && let Some(label) = self.session.doc.undo()
@@ -492,17 +504,19 @@ impl Studio {
         if ui.input.take_named(NamedKey::PageDown) {
             self.session.nudge(bar);
         }
-        let mut switch = |key: NamedKey, tab: DockTab, ws: &mut Workspace| {
+        // Choosing an editor also reveals a hidden dock.
+        for (key, tab) in [
+            (NamedKey::F6, DockTab::Rack),
+            (NamedKey::F7, DockTab::PianoRoll),
+            (NamedKey::F9, DockTab::Mixer),
+            (NamedKey::F10, DockTab::Perform),
+        ] {
             if ui.input.take_named(key) {
-                ws.dock = tab;
+                crate::layout::dock_tab(self, tab, false);
             }
-        };
-        switch(NamedKey::F6, DockTab::Rack, &mut self.ws);
-        switch(NamedKey::F7, DockTab::PianoRoll, &mut self.ws);
-        switch(NamedKey::F9, DockTab::Mixer, &mut self.ws);
-        switch(NamedKey::F10, DockTab::Perform, &mut self.ws);
+        }
         if ui.input.take_named(NamedKey::F8) {
-            crate::scripts::toggle(ui, self);
+            crate::scripts::toggle(self);
         }
         if ui.input.take_named(NamedKey::F1) {
             self.show_keys = !self.show_keys;
@@ -858,23 +872,7 @@ impl Studio {
         if lit {
             ui.request_repaint();
         }
-        row.cut_right(4.0);
-        let help = ui.icon_button(
-            W::new("keys-help"),
-            row.cut_right(24.0),
-            peel_ui::icons::KEYBOARD,
-            false,
-            None,
-        );
-        ui.tooltip(&help, "Keyboard shortcuts (F1)");
-        if help.clicked {
-            self.show_keys = true;
-        }
-        row.cut_right(8.0);
-        // Reserved before the notice so a long message never covers it.
-        let w = crate::scripts::button_width(ui);
-        crate::scripts::status_button(ui, row.cut_right(w), self);
-        row.cut_right(8.0);
+        row.cut_right(10.0);
         if let Some(n) = self.session.notice().cloned() {
             let c = if n.error { t.record } else { t.text_dim };
             ui.text(
@@ -931,13 +929,16 @@ impl Studio {
             }
             row.cut_right(8.0);
         }
-        let right = format!(
-            "{}  ·  {:.0} kHz  ·  octave {}",
-            self.session.device_name(),
-            self.session.sample_rate() / 1000.0,
-            self.ws.octave
-        );
-        ui.text(row, &right, t.caption, t.text_faint, Align::End);
+        if self.prefs.show_status_details {
+            let right = format!(
+                "{}  ·  {:.0} kHz  ·  octave {}",
+                self.session.device_name(),
+                self.session.sample_rate() / 1000.0,
+                self.ws.octave
+            );
+            let right = ui.fit_text(&right, t.caption, row.w * 0.5);
+            ui.text(row, &right, t.caption, t.text_faint, Align::End);
+        }
     }
 }
 
@@ -1038,32 +1039,83 @@ impl Studio {
         let screen = ui.screen();
         ui.scene.rect(screen, 0.0, t.bg);
 
-        // Files dropped from the OS anywhere else open as projects/MIDI.
+        crate::util::set_help(ui, self.prefs.show_help);
+        crate::scripts::sync(self);
+        // Switching editors (a menu, a script, a shortcut) reveals the dock.
+        if self.ws.dock != self.last_dock {
+            self.last_dock = self.ws.dock;
+            if !self.prefs.show_editor {
+                self.prefs.show_editor = true;
+                self.prefs.save();
+            }
+        }
+
+        // Top bar, status bar, then a navigation rail on each side. Panes
+        // show between the rails as the user chooses (View menu, rails,
+        // shortcuts, scripts); the playlist takes what is left.
         let mut area = screen;
-        let top = area.cut_top(52.0);
-        let status = area.cut_bottom(24.0);
-        area = area.shrink2(GAP, 0.0);
-
+        let top = area.cut_top(TOP_H);
+        let status = area.cut_bottom(STATUS_H);
         transport::draw(ui, top, win, self);
+        let left_rail = area.cut_left(t.rail_w);
+        let right_rail = area.cut_right(t.rail_w);
+        crate::layout::left_rail(ui, left_rail, self);
+        crate::layout::right_rail(ui, right_rail, self);
+        area.cut_bottom(GAP);
 
-        let browser_r = area.cut_left(self.ws.browser_w);
-        let d = ui.splitter(W::new("split-browser"), area.cut_left(GAP), true);
-        self.ws.browser_w = (self.ws.browser_w + d).clamp(180.0, 420.0);
-        let inspector_r = area.cut_right(self.ws.inspector_w);
-        let d = ui.splitter(W::new("split-inspector"), area.cut_right(GAP), true);
-        self.ws.inspector_w = (self.ws.inspector_w - d).clamp(240.0, 480.0);
-        let max_dock = (area.h - 160.0).max(180.0);
-        self.ws.dock_h = self.ws.dock_h.clamp(180.0, max_dock);
-        let dock_r = area.cut_bottom(self.ws.dock_h);
-        let d = ui.splitter(W::new("split-dock"), area.cut_bottom(GAP), false);
-        self.ws.dock_h = (self.ws.dock_h - d).clamp(180.0, max_dock);
+        // Side panes give way on small windows without losing the size the
+        // user chose for larger ones.
+        let browser_r = self.prefs.show_browser.then(|| {
+            let w = self.ws.browser_w.min((area.w * 0.24).max(200.0));
+            let r = area.cut_left(w);
+            let d = ui.splitter(W::new("split-browser"), area.cut_left(GAP), true);
+            if d != 0.0 {
+                self.ws.browser_w = (w + d).clamp(180.0, 420.0);
+            }
+            r
+        });
+        let right_r = self.prefs.show_right().then(|| {
+            let w = self.ws.inspector_w.min((area.w * 0.3).max(240.0));
+            let r = area.cut_right(w);
+            let d = ui.splitter(W::new("split-inspector"), area.cut_right(GAP), true);
+            if d != 0.0 {
+                self.ws.inspector_w = (w - d).clamp(240.0, 480.0);
+            }
+            r
+        });
+        let dock_r = if self.prefs.show_editor {
+            let max_dock = (area.h - 160.0).max(180.0);
+            self.ws.dock_h = self.ws.dock_h.clamp(180.0, max_dock);
+            let r = area.cut_bottom(self.ws.dock_h);
+            let d = ui.splitter(W::new("split-dock"), area.cut_bottom(GAP), false);
+            self.ws.dock_h = (self.ws.dock_h - d).clamp(180.0, max_dock);
+            r
+        } else {
+            // Collapsed: only the header, so every editor stays one click away.
+            let r = area.cut_bottom(t.header_h);
+            area.cut_bottom(GAP);
+            r
+        };
         let playlist_r = area;
 
-        browser::draw(ui, browser_r, &mut self.session, &mut self.ws);
+        if let Some(r) = browser_r
+            && browser::draw(ui, r, &mut self.session, &mut self.ws)
+        {
+            crate::layout::toggle_browser(self);
+        }
         playlist::draw(ui, playlist_r, &mut self.session, &mut self.ws);
         dock(ui, dock_r, self);
-        inspector::draw(ui, inspector_r, &mut self.session, &mut self.ws);
+        if let Some(r) = right_r {
+            if self.prefs.show_scripts {
+                crate::scripts::column(ui, r, self);
+            } else {
+                if inspector::draw(ui, r, &mut self.session, &mut self.ws) {
+                    crate::layout::toggle_inspector(self);
+                }
+            }
+        }
         self.status_bar(ui, status);
+        crate::layout::persist(ui, self);
 
         let leftovers = std::mem::take(&mut ui.input.dropped_files);
         for path in leftovers {
@@ -1077,7 +1129,6 @@ impl Studio {
             ui.open_popup(W::new("settings-panel"), Rect::ZERO);
         }
         crate::settings::panel(ui, &mut self.session, &mut self.prefs, self.ws.input_meter);
-        crate::scripts::panel(ui, self);
         if self.welcome {
             self.welcome(ui);
         } else if self.show_keys && crate::keys::overlay(ui) {
@@ -1103,56 +1154,86 @@ fn dock(ui: &mut Ui, r: Rect, studio: &mut Studio) {
     let t = ui.theme.clone();
     ui.scene.rect(r, t.radius_l, t.panel);
     let mut body = r;
-    let mut tabs = body.cut_top(38.0).shrink2(8.0, 6.0);
-    let items = [
-        (DockTab::Rack, peel_ui::icons::ROWS, "Channels"),
-        (DockTab::PianoRoll, peel_ui::icons::PIANO_KEYS, "Piano roll"),
-        (DockTab::Mixer, peel_ui::icons::FADERS, "Mixer"),
-        (DockTab::Perform, peel_ui::icons::SQUARES, "Perform"),
-    ];
-    for (tab, icon, label) in items {
-        // Only the active tab spells out its name.
-        let active = studio.ws.dock == tab;
-        let w = if active {
-            ui.measure(label, t.label).x + 52.0
+    let mut head = body.cut_top(t.header_h).shrink2(6.0, 0.0);
+    let shown = studio.prefs.show_editor;
+
+    // Collapse / expand at the far right.
+    let toggle_r = head.cut_right(30.0).shrink2(0.0, 6.0);
+    let toggle = ui.icon_button(
+        W::new("dock-toggle"),
+        toggle_r,
+        if shown {
+            peel_ui::icons::CARET_DOWN
         } else {
-            38.0
+            peel_ui::icons::CARET_UP
+        },
+        false,
+        None,
+    );
+    ui.name(&toggle, if shown { "Hide editor" } else { "Show editor" });
+    ui.tooltip(
+        &toggle,
+        if shown {
+            "Hide the editor"
+        } else {
+            "Show the editor"
+        },
+    );
+    if toggle.clicked {
+        crate::layout::toggle_editor(studio);
+    }
+    head.cut_right(4.0);
+
+    // Tabs keep their labels while the editor's tools still fit beside
+    // them; otherwise every tab is an icon, so widths never jump.
+    let labels_w: f32 = crate::layout::DOCK_TABS
+        .iter()
+        .map(|(_, _, label, _)| ui.tab_width(label))
+        .sum();
+    let has_picker = matches!(studio.ws.dock, DockTab::Rack | DockTab::PianoRoll);
+    let picker_w = if has_picker { 196.0 } else { 0.0 };
+    let tools_need = match studio.ws.dock {
+        DockTab::Rack => 250.0,
+        DockTab::PianoRoll => 470.0,
+        DockTab::Mixer => 0.0,
+        DockTab::Perform => 300.0,
+    };
+    let show_labels = !shown || head.w - labels_w - picker_w - 16.0 >= tools_need;
+    for (tab, icon, label, key) in crate::layout::DOCK_TABS {
+        let w = if show_labels {
+            ui.tab_width(label)
+        } else {
+            36.0
         };
-        let cell = tabs.cut_left(w);
-        tabs.cut_left(4.0);
-        let id = W::new(("dock-tab", label));
-        let resp = ui.interact_button(id, cell, label);
-        let on = studio.ws.dock == tab;
-        let hot = ui.animate_bool(id, resp.hovered);
-        if on {
-            ui.scene.rect(cell, t.radius_m, t.raised);
-        } else if hot > 0.0 {
-            ui.scene.rect(cell, t.radius_m, t.raised.alpha(hot * 0.5));
-        }
-        let c = if on { t.text } else { t.text_dim };
-        if active {
-            let mut inner = cell.shrink2(10.0, 0.0);
-            ui.icon(inner.cut_left(18.0), icon, 15.0, t.accent);
-            inner.cut_left(6.0);
-            ui.text(inner, label, t.label, c, Align::Start);
-        } else {
-            ui.icon(cell, icon, 15.0, c);
-            let shortcut = match tab {
-                DockTab::Rack => "F6",
-                DockTab::PianoRoll => "F7",
-                DockTab::Mixer => "F9",
-                DockTab::Perform => "F10",
-            };
-            ui.tooltip(&resp, &format!("{label} ({shortcut})"));
-        }
+        let cell = head.cut_left(w);
+        let on = shown && studio.ws.dock == tab;
+        let resp = ui.tab(
+            W::new(("dock-tab", label)),
+            cell,
+            icon,
+            label,
+            show_labels,
+            on,
+        );
+        ui.describe_node(resp.id, peel_ui::Semantics::patch().shortcut(key));
+        ui.tooltip(&resp, &format!("{label} ({key})"));
         if resp.clicked {
-            studio.ws.dock = tab;
-        }
-        if resp.hovered {
-            ui.set_cursor(peel_ui::CursorIcon::Pointer);
+            crate::layout::dock_tab(studio, tab, true);
         }
     }
-    let tools = tabs;
+    if !shown {
+        return;
+    }
+    // The pattern being edited sits with the editors that edit it.
+    let mut tools = head.shrink2(0.0, 6.0);
+    if has_picker {
+        tools.cut_left(10.0);
+        ui.divider_v(tools.cut_left(1.0));
+        tools.cut_left(10.0);
+        let w = (tools.w - tools_need).clamp(110.0, 160.0);
+        transport::pattern_picker(ui, &mut tools, studio, w);
+        tools.cut_left(12.0);
+    }
     let content = body.shrink2(0.0, 0.0);
     match studio.ws.dock {
         DockTab::Rack => rack::draw(ui, content, tools, &mut studio.session, &mut studio.ws),

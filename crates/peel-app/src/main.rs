@@ -5,6 +5,7 @@ mod dialogs;
 mod harmony;
 mod inspector;
 mod keys;
+mod layout;
 mod midi;
 mod mixer;
 mod note_tools;

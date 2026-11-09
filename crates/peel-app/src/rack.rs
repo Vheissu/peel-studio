@@ -39,11 +39,13 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
     };
     let steps_total = (pattern.length.as_f64() * 4.0).round().max(1.0) as usize;
 
-    header_tools(ui, tools, s, pid, &pattern);
     {
-        // Velocity graph toggle, at the left of the header tools.
+        // Velocity graph toggle at the left of the header tools; length and
+        // swing take the rest from the right.
         let mut row = tools;
         let toggle = row.cut_left(30.0);
+        row.cut_left(8.0);
+        header_tools(ui, row, s, pid, &pattern);
         let b = ui.icon_button(
             W::new("rack-graph"),
             toggle,
@@ -51,6 +53,7 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
             ws.rack_graph,
             None,
         );
+        ui.name(&b, "Velocity graph");
         ui.tooltip(&b, "Velocity graph for the selected channel");
         if b.clicked {
             ws.rack_graph = !ws.rack_graph;
@@ -346,11 +349,14 @@ fn header_tools(
 ) {
     let t = ui.theme.clone();
     let mut row = tools;
-    // Pattern length.
+    // Pattern length: shorter, the length, longer, in one well.
     let bars = (pattern.length.as_f64() / 4.0).max(0.25);
+    let well = row.cut_right(28.0 * 2.0 + 56.0 + 4.0);
+    ui.well(well);
+    let mut len_row = well.shrink(2.0);
     let plus = ui.icon_button(
         W::new("rack-len-plus"),
-        row.cut_right(28.0),
+        len_row.cut_right(28.0),
         icons::PLUS,
         false,
         None,
@@ -363,7 +369,7 @@ fn header_tools(
         format!("{bars} bars")
     };
     ui.text(
-        row.cut_right(56.0),
+        len_row.cut_right(56.0),
         &label,
         t.label,
         t.text_dim,
@@ -371,11 +377,13 @@ fn header_tools(
     );
     let minus = ui.icon_button(
         W::new("rack-len-minus"),
-        row.cut_right(28.0),
+        len_row.cut_right(28.0),
         icons::MINUS,
         false,
         None,
     );
+    ui.name(&plus, "Lengthen pattern");
+    ui.name(&minus, "Shorten pattern");
     ui.tooltip(&plus, "Lengthen pattern");
     ui.tooltip(&minus, "Shorten pattern");
     let mut new_len = None;
@@ -407,13 +415,18 @@ fn header_tools(
     if k.released {
         s.doc.end_gesture();
     }
-    ui.text(
-        row.cut_right(44.0),
-        "Swing",
-        t.caption,
-        t.text_faint,
-        Align::End,
-    );
+    // The label goes first when the header is short; the knob keeps its
+    // name and value for tooltips and screen readers.
+    ui.name(&k, "Swing");
+    if row.w >= 48.0 {
+        ui.text(
+            row.cut_right(44.0),
+            "Swing",
+            t.caption,
+            t.text_faint,
+            Align::End,
+        );
+    }
 }
 
 fn channel_button(
@@ -428,10 +441,11 @@ fn channel_button(
     let id = W::new(("rack-name", ch.id));
     let resp = ui.interact_button(id, r, &ch.name);
     let hot = ui.animate_bool(id, resp.hovered);
+    // One step above the panel; the selected channel steps up again.
     let base = if selected {
         t.control_hover
     } else {
-        t.control.mix(t.control_hover, hot * 0.6)
+        t.raised.mix(t.control, hot)
     };
     ui.scene.rect(r, t.radius_m, base);
     let c = col(ch.color);

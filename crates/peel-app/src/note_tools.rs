@@ -680,15 +680,13 @@ fn tool_settings(ui: &mut Ui, mut body: Rect, s: &mut Settings) {
     }
 }
 
+/// How a tool's settings work: inline with hints on, else an info mark.
 fn hint(ui: &mut Ui, body: Rect, text: &str) {
-    let t = ui.theme.clone();
-    ui.text_wrapped(
-        body.min() + peel_ui::vec2(0.0, 4.0),
-        body.w,
-        text,
-        t.caption,
-        t.text_faint,
-    );
+    let r = Rect {
+        y: body.y + 4.0,
+        ..body
+    };
+    crate::util::hint(ui, W::new(("note-tool-hint", text)), r, text);
 }
 
 fn reseed(ui: &mut Ui, r: Rect, s: &mut Settings) {

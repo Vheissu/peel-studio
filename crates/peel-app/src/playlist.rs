@@ -97,7 +97,7 @@ pub fn draw(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) {
     let t = ui.theme.clone();
     ui.scene.rect(r, t.radius_l, t.panel);
     let mut body = r;
-    let head = body.cut_top(38.0);
+    let head = body.cut_top(ui.theme.header_h);
     header(ui, head, s, ws);
     body = body.shrink2(8.0, 0.0);
     body.cut_bottom(6.0);
@@ -337,7 +337,7 @@ pub fn draw(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) {
 
 fn header(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) {
     let t = ui.theme.clone();
-    let mut row = r.shrink2(14.0, 6.0);
+    let mut row = r.shrink2(10.0, 6.0);
     // Arrangement picker (the playlist's title).
     let arr_name = s.project().arrangement().name.clone();
     let title_w = ui.measure(&arr_name, t.label).x.min(150.0) + 58.0;
@@ -355,31 +355,37 @@ fn header(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) {
     let shown = ui.fit_text(&arr_name, t.label, tr.w);
     ui.text(tr, &shown, t.label, t.text, Align::Start);
     ui.tooltip(&tresp, "Arrangements");
+    ui.focus_ring(tresp.id, title, t.radius_m);
     if tresp.clicked {
         ui.open_popup(W::new("arrangement-menu"), title);
     }
     arrangement_menu(ui, title, s);
-    for (tool, icon, tip) in [
+    // Editing tools in one well, then the tempo lane and grid.
+    let tools = [
         (Tool::Draw, icons::PENCIL, "Draw"),
         (Tool::Paint, icons::BRUSH, "Paint"),
         (Tool::Select, icons::CURSOR, "Select"),
         (Tool::Slice, icons::KNIFE, "Slice"),
         (Tool::Erase, icons::ERASER, "Erase"),
-    ] {
-        let b = ui.icon_button(
+    ];
+    let well = row.cut_left(tools.len() as f32 * 30.0 + 4.0);
+    ui.well(well);
+    let mut cells = well.shrink(2.0);
+    for (tool, icon, tip) in tools {
+        let b = ui.tool_button(
             W::new(("pl-tool", tip)),
-            row.cut_left(30.0),
+            cells.cut_left(30.0),
             icon,
+            tip,
             ws.playlist.tool == tool,
-            None,
         );
-        ui.tooltip(&b, tip);
         if b.clicked {
             ws.playlist.tool = tool;
         }
-        row.cut_left(2.0);
     }
-    row.cut_left(10.0);
+    row.cut_left(8.0);
+    ui.divider_v(row.cut_left(1.0));
+    row.cut_left(8.0);
     let tb = ui.icon_button(
         W::new("pl-tempo"),
         row.cut_left(30.0),
@@ -387,32 +393,21 @@ fn header(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) {
         ws.playlist.show_tempo,
         None,
     );
+    ui.name(&tb, "Tempo lane");
     ui.tooltip(&tb, "Tempo changes");
     if tb.clicked {
         ws.playlist.show_tempo = !ws.playlist.show_tempo;
     }
-    row.cut_left(10.0);
-    let snap_r = row.cut_left(78.0);
-    let sresp = ui.interact(W::new("pl-snap"), snap_r);
-    ui.scene.rect(
+    row.cut_left(4.0);
+    let snap_r = row.cut_left(64.0);
+    let sresp = ui.value_button(
+        W::new("pl-snap"),
         snap_r,
-        t.radius_m,
-        if sresp.hovered {
-            t.control_hover
-        } else {
-            t.control
-        },
-    );
-    let mut sr = snap_r.shrink2(8.0, 0.0);
-    ui.icon(sr.cut_left(14.0), icons::MAGNET, 13.0, t.text_dim);
-    ui.text(
-        sr,
+        icons::MAGNET,
         &format_length(ws.playlist.snap),
-        t.label,
-        t.text,
-        Align::Center,
+        "Grid",
+        false,
     );
-    ui.tooltip(&sresp, "Grid");
     if sresp.clicked {
         ui.open_popup(W::new("pl-snap-menu"), snap_r);
     }
@@ -436,14 +431,16 @@ fn header(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) {
     // Selected pattern chip (what painting places).
     let pid = current_pattern(s);
     if let Some(p) = s.project().pattern(pid).cloned() {
-        let w = ui.measure(&p.name, t.label).x + 46.0;
-        let chip = row.cut_right(w.min(220.0));
-        ui.scene.rect(chip, t.radius_m, col(p.color).alpha(0.18));
-        let mut cr = chip.shrink2(10.0, 0.0);
+        // Quiet: a brush in the pattern's color and its name.
+        let w = ui.measure(&p.name, t.label).x + 34.0;
+        let chip = row.cut_right(w.min(200.0).min(row.w.max(0.0)));
+        let resp = ui.interact(W::new("pl-paint-pattern"), chip);
+        let mut cr = chip.shrink2(6.0, 0.0);
         ui.icon(cr.cut_left(16.0), icons::BRUSH, 13.0, col(p.color));
         cr.cut_left(6.0);
         let name = ui.fit_text(&p.name, t.label, cr.w);
-        ui.text(cr, &name, t.label, t.text, Align::Start);
+        ui.text(cr, &name, t.label, t.text_dim, Align::Start);
+        ui.tooltip(&resp, "Pattern the Paint tool places");
     }
 }
 
@@ -2634,7 +2631,6 @@ fn tempo_lane(ui: &mut Ui, head: Rect, r: Rect, v: &View, s: &mut Session) {
         w: head.w - 6.0,
         ..head.shrink2(0.0, 2.0)
     };
-    ui.scene.rect(hrow, t.radius_m, t.raised.alpha(0.55));
     let mut hi = hrow.shrink2(12.0, 8.0);
     ui.text(hi.cut_top(20.0), "Tempo", t.label, t.text, Align::Start);
     let now = map.bpm_at(s.position().max(0.0));
