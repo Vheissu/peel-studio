@@ -13,6 +13,11 @@ pub struct Telemetry {
     /// One selected insert's pre/post audio, copied without blocking the callback.
     pub analysis: crate::analysis::AnalysisTap,
     pub playing: AtomicBool,
+    /// Latency of the compensated master path, in samples.
+    pub compensation_latency: AtomicU32,
+    /// Device latency reports, sampled by the callback without allocating.
+    pub slot_latencies: Box<[AtomicU32]>,
+    pub latency_revision: AtomicU64,
     /// Current content position in quarter notes (f64 bits).
     beat: AtomicU64,
     /// Callback time / deadline, 0..=1+ (f32 bits), smoothed.
@@ -72,6 +77,9 @@ impl Telemetry {
         Telemetry {
             analysis: crate::analysis::AnalysisTap::new(),
             playing: AtomicBool::new(false),
+            compensation_latency: AtomicU32::new(0),
+            slot_latencies: zeros(MAX_SLOTS),
+            latency_revision: AtomicU64::new(0),
             beat: AtomicU64::new(0f64.to_bits()),
             cpu_load: AtomicU32::new(0),
             overruns: AtomicU64::new(0),

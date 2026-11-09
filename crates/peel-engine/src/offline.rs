@@ -21,6 +21,7 @@ pub struct OfflineEngine {
     engine: Engine,
     retired: Consumer<Retired>,
     telemetry: Arc<Telemetry>,
+    compensation: crate::compensation::Control,
 }
 
 impl OfflineEngine {
@@ -34,16 +35,112 @@ impl OfflineEngine {
             engine,
             retired,
             telemetry,
+            compensation: crate::compensation::Control::new(config.device_slots.clamp(1, 16_384)),
         }
     }
 
     /// Applies a command now.
     pub fn send(&mut self, cmd: EngineCommand) {
+        if let EngineCommand::SetPlan(plan) = cmd {
+            if plan.tracks.is_empty() || plan.tracks.len() > crate::MAX_TRACKS
+                || plan.master as usize >= plan.tracks.len()
+                || plan.channels.len() > self.compensation.latencies.len() {
+                // Preserve the raw engine's validation and retirement contract.
+                self.engine.handle_command(EngineCommand::SetPlan(plan));
+            } else {
+                let _ = self.try_set_plan(plan);
+            }
+            return;
+        }
+        let change = match &cmd {
+            EngineCommand::InstallDevice { slot, device } => {
+                Some((*slot as usize, device.latency(), false))
+            }
+            EngineCommand::RemoveDevice { slot } => Some((*slot as usize, 0, false)),
+            EngineCommand::SetBypass { slot, bypass } => Some((
+                *slot as usize,
+                self.compensation
+                    .latencies
+                    .get(*slot as usize)
+                    .copied()
+                    .unwrap_or(0),
+                *bypass,
+            )),
+            _ => None,
+        };
+        let prepared =
+            if let Some(plan) = self.compensation.plan.as_ref().filter(|_| change.is_some()) {
+                match self.compensation.prepare(plan, self.max_block(), change) {
+                    Ok(compensation) => Some(compensation),
+                    Err(error) => {
+                        self.compensation.error = Some(error);
+                        return;
+                    }
+                }
+            } else {
+                None
+            };
+        if let Some((slot, latency, bypass)) = change {
+            if latency > crate::compensation::MAX_LATENCY {
+                self.compensation.error = Some("Unsupported device latency".into());
+                return;
+            }
+            if let Some(dest) = self.compensation.latencies.get_mut(slot) {
+                *dest = latency;
+                self.compensation.bypassed[slot] = bypass;
+            }
+        }
         self.engine.handle_command(cmd);
+        if let Some(compensation) = prepared {
+            self.engine
+                .handle_command(EngineCommand::SetCompensation(compensation));
+        }
+    }
+
+    /// Validates compensation before changing the active graph.
+    pub fn try_set_plan(&mut self, plan: Box<crate::RenderPlan>) -> Result<(), String> {
+        let prepared = self.compensation.prepare(&plan, self.max_block(), None);
+        match prepared {
+            Ok(compensation) => {
+                self.compensation.remember_plan(&plan);
+                self.compensation.error = None;
+                self.engine
+                    .handle_command(EngineCommand::SetCompensatedPlan { plan, compensation });
+                Ok(())
+            }
+            Err(error) => {
+                self.compensation.error = Some(error.clone());
+                Err(error)
+            }
+        }
+    }
+
+    pub fn compensation_latency_samples(&self) -> u32 {
+        self.engine.compensation_latency_samples()
+    }
+    pub fn compensation_error(&self) -> Option<&str> {
+        self.compensation.error.as_deref()
     }
 
     /// Renders `left.len().min(right.len())` frames.
     pub fn render(&mut self, left: &mut [f32], right: &mut [f32]) {
+        if self
+            .compensation
+            .latencies
+            .iter()
+            .enumerate()
+            .any(|(slot, &latency)| self.engine.slot_latency(slot) != latency)
+        {
+            self.compensation.latencies = self.engine.slot_latencies();
+            if let Some(plan) = self.compensation.plan.as_ref() {
+                match self.compensation.prepare(plan, self.max_block(), None) {
+                    Ok(compensation) => self
+                        .engine
+                        .handle_command(EngineCommand::SetCompensation(compensation)),
+                    Err(error) => self.compensation.error = Some(error),
+                }
+            }
+        }
         self.engine.render(left, right);
     }
 

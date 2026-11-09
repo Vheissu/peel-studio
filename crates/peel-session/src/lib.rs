@@ -434,12 +434,8 @@ impl Session {
         if self.analysis_device == Some(inst.id) {
             self.engine.telemetry().analysis.invalidate();
         }
-        if let Some(old) = self.devices.remove(&inst.id) {
-            let _ = self
-                .engine
-                .send(EngineCommand::RemoveDevice { slot: old.slot });
-            self.free_slots.push(old.slot);
-        }
+        // Prepare and validate the replacement before retiring a working slot.
+        let previous_slot = self.devices.get(&inst.id).map(|old| old.slot);
         let Some(mut device) = self.create_device(inst) else {
             self.missing.push(inst.type_id.clone());
             return;
@@ -451,14 +447,17 @@ impl Session {
             }
         }
         device.prepare(self.engine.sample_rate(), self.engine.max_block());
-        let slot = self.free_slots.pop().unwrap_or_else(|| {
+        let slot = previous_slot.unwrap_or_else(|| self.free_slots.pop().unwrap_or_else(|| {
             let s = self.next_slot;
             self.next_slot += 1;
             s
-        });
-        let _ = self
-            .engine
-            .send(EngineCommand::InstallDevice { slot, device });
+        }));
+        if self.engine.send(EngineCommand::InstallDevice { slot, device }).is_err() {
+            if previous_slot.is_none() { self.free_slots.push(slot); }
+            let error = self.engine.compensation_error().unwrap_or("The audio command queue is full").to_string();
+            self.notify(error, true);
+            return;
+        }
         self.devices.insert(
             inst.id,
             DeviceSlot {
@@ -621,9 +620,19 @@ impl Session {
                 self.plan = Some(plan);
             }
             _ => {
-                let _ = self
+                if self
                     .engine
-                    .send(EngineCommand::SetPlan(Box::new(plan.clone())));
+                    .send(EngineCommand::SetPlan(Box::new(plan.clone())))
+                    .is_err()
+                {
+                    let error = self
+                        .engine
+                        .compensation_error()
+                        .unwrap_or("The audio command queue is full")
+                        .to_string();
+                    self.notify(error, true);
+                    return;
+                }
                 self.plan = Some(plan);
             }
         }
@@ -736,7 +745,17 @@ impl Session {
     }
 
     pub fn panic(&mut self) {
+        self.io.bridge.release_all();
         let _ = self.engine.send(EngineCommand::Panic);
+    }
+
+    /// Current mixer/plugin latency, separate from hardware buffer latency.
+    pub fn compensation_latency_samples(&self) -> u32 {
+        self.engine.compensation_latency_samples()
+    }
+
+    pub fn compensation_error(&self) -> Option<&str> {
+        self.engine.compensation_error()
     }
 
     /// Playhead in quarter notes.
@@ -803,12 +822,15 @@ impl Session {
             return;
         };
         if let Some(d) = self.devices.get(&ch.device.id) {
-            let _ = self.engine.send(EngineCommand::LiveNote {
+            let accepted = self.engine.send(EngineCommand::LiveNote {
                 slot: d.slot,
                 key,
                 velocity,
                 on,
-            });
+            }).is_ok();
+            if accepted && on && self.live_target() == Some(channel) {
+                self.io.bridge.clear_key_pressure(key);
+            }
         }
     }
 

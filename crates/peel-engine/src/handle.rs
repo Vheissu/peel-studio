@@ -65,6 +65,7 @@ pub struct EngineHandle {
     live: LiveSide,
     /// Why the requested device was not used, if it was not.
     warning: Option<String>,
+    compensation: crate::compensation::Control,
 }
 
 // The stream or thread variants are held only to keep audio alive until drop.
@@ -142,6 +143,9 @@ impl EngineHandle {
                     reserve: queue_reserve(&config),
                     live: opened.live,
                     warning: opened.warning,
+                    compensation: crate::compensation::Control::new(
+                        config.device_slots.clamp(1, 16_384),
+                    ),
                 })
             }
             Err(reason) => {
@@ -197,6 +201,7 @@ impl EngineHandle {
             reserve: queue_reserve(&config),
             live,
             warning: None,
+            compensation: crate::compensation::Control::new(config.device_slots.clamp(1, 16_384)),
         })
     }
 
@@ -206,16 +211,147 @@ impl EngineHandle {
     /// queue is kept for stop, pause, panic and note-off commands, so a flood
     /// of parameter changes can never prevent silencing the engine.
     pub fn send(&mut self, cmd: EngineCommand) -> Result<(), EngineCommand> {
-        if !is_critical(&cmd) && self.commands.slots() <= self.reserve {
+        if !is_critical(&cmd) && self.commands.slots() <= self.reserve + 1 {
             return Err(cmd);
         }
-        self.commands.push(cmd).map_err(|PushError::Full(cmd)| cmd)
+        let change = match &cmd {
+            EngineCommand::InstallDevice { slot, device } => {
+                Some((*slot as usize, device.latency(), false))
+            }
+            EngineCommand::RemoveDevice { slot } => Some((*slot as usize, 0, false)),
+            EngineCommand::SetBypass { slot, bypass } => Some((
+                *slot as usize,
+                self.compensation
+                    .latencies
+                    .get(*slot as usize)
+                    .copied()
+                    .unwrap_or(0),
+                *bypass,
+            )),
+            _ => None,
+        };
+        let plan = match &cmd {
+            EngineCommand::SetPlan(plan) => Some(plan.as_ref()),
+            _ => self.compensation.plan.as_ref().filter(|_| change.is_some()),
+        };
+        let prepared = if let Some(plan) = plan {
+            match self.compensation.prepare(plan, self.max_block, change) {
+                Ok(compensation) => Some(compensation),
+                Err(error) => {
+                    self.compensation.error = Some(error);
+                    return Err(cmd);
+                }
+            }
+        } else {
+            if let Some((_, latency, _)) = change
+                && latency > crate::compensation::MAX_LATENCY
+            {
+                self.compensation.error = Some(format!(
+                    "Device latency exceeds the {}-sample compensation limit",
+                    crate::compensation::MAX_LATENCY
+                ));
+                return Err(cmd);
+            }
+            None
+        };
+        if let EngineCommand::SetPlan(plan) = cmd {
+            let mut cached = crate::compensation::Control::new(0);
+            cached.remember_plan(&plan);
+            let compensation = prepared.expect("a plan prepares compensation");
+            match self
+                .commands
+                .push(EngineCommand::SetCompensatedPlan { plan, compensation })
+            {
+                Ok(()) => {
+                    self.compensation.plan = cached.plan;
+                    self.compensation.audio_tracks = cached.audio_tracks;
+                    self.compensation.error = None;
+                    Ok(())
+                }
+                Err(PushError::Full(EngineCommand::SetCompensatedPlan { plan, .. })) => {
+                    Err(EngineCommand::SetPlan(plan))
+                }
+                _ => unreachable!(),
+            }
+        } else {
+            self.commands
+                .push(cmd)
+                .map_err(|PushError::Full(cmd)| cmd)?;
+            if let Some((slot, latency, bypass)) = change {
+                if let Some(dest) = self.compensation.latencies.get_mut(slot) {
+                    *dest = latency;
+                    self.compensation.bypassed[slot] = bypass;
+                    self.compensation.pending[slot] = Some(latency);
+                }
+            }
+            if let Some(compensation) = prepared {
+                // The capacity reservation above leaves room for this command.
+                let _ = self
+                    .commands
+                    .push(EngineCommand::SetCompensation(compensation));
+                self.compensation.error = None;
+            }
+            Ok(())
+        }
+    }
+
+    pub fn compensation_latency_samples(&self) -> u32 {
+        self.telemetry.compensation_latency.load(Ordering::Relaxed)
+    }
+
+    pub fn compensation_error(&self) -> Option<&str> {
+        self.compensation.error.as_deref()
+    }
+
+    fn refresh_compensation(&mut self) {
+        let revision = self.telemetry.latency_revision.load(Ordering::Relaxed);
+        if revision == self.compensation.revision {
+            return;
+        }
+        if self.commands.slots() <= self.reserve {
+            return;
+        }
+        let mut changed = false;
+        for (slot, latency) in self
+            .compensation
+            .latencies
+            .iter_mut()
+            .enumerate()
+            .take(self.telemetry.slot_latencies.len())
+        {
+            let reported = self.telemetry.slot_latencies[slot].load(Ordering::Relaxed);
+            if let Some(expected) = self.compensation.pending[slot] {
+                if reported != expected {
+                    continue;
+                }
+                self.compensation.pending[slot] = None;
+            }
+            changed |= *latency != reported;
+            *latency = reported;
+        }
+        self.compensation.revision = revision;
+        if !changed {
+            return;
+        }
+        let Some(plan) = self.compensation.plan.as_ref() else {
+            return;
+        };
+        match self.compensation.prepare(plan, self.max_block, None) {
+            Ok(compensation) => {
+                let _ = self
+                    .commands
+                    .push(EngineCommand::SetCompensation(compensation));
+                self.compensation.error = None;
+            }
+            Err(error) => self.compensation.error = Some(error),
+        }
     }
 
     /// Drops everything the engine has retired (old plans, devices and
     /// samples). Call this regularly from the UI thread; it never blocks.
     /// Returns how many objects were freed.
     pub fn collect_garbage(&mut self) -> usize {
+        self.refresh_compensation();
         let mut n = 0;
         while let Ok(item) = self.retired.pop() {
             drop(item);

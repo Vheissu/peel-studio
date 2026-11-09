@@ -156,7 +156,7 @@ impl Device for Gate {
                     EventKind::AllNotesOff | EventKind::AllSoundOff => {
                         self.voices = [None; 64];
                     }
-                    EventKind::Param { .. } => {}
+                    _ => {}
                 }
                 next += 1;
             }

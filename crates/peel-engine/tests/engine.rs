@@ -354,14 +354,14 @@ fn transport_stops_at_the_end_of_the_material_and_releases() {
 fn plan_swap_retires_the_old_plan() {
     let mut off = rig(plan(constant(120.0), &[], 1, None, 4.0), None);
     // The initial empty plan went back when the first plan was installed.
-    let first = off.drain_retired();
+    let first: Vec<_> = off.drain_retired().into_iter().filter(|r| !matches!(r, Retired::Compensation(_))).collect();
     assert_eq!(first.len(), 1);
     assert!(matches!(&first[0], Retired::Plan(p) if p.revision == 0));
 
     let mut second = plan(constant(120.0), &[], 1, None, 4.0);
     second.revision = 2;
     off.send(EngineCommand::SetPlan(Box::new(second)));
-    let retired = off.drain_retired();
+    let retired: Vec<_> = off.drain_retired().into_iter().filter(|r| !matches!(r, Retired::Compensation(_))).collect();
     assert_eq!(retired.len(), 1);
     assert!(matches!(&retired[0], Retired::Plan(p) if p.revision == 1));
     assert_eq!(off.telemetry().plan_revision.load(Ordering::Relaxed), 2);

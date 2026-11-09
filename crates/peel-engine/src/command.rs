@@ -11,6 +11,13 @@ pub enum EngineCommand {
     /// Activate a new plan at the next block boundary. The previous plan is
     /// returned through [`Retired::Plan`].
     SetPlan(Box<RenderPlan>),
+    /// Plan and delay storage prepared together on the control thread.
+    SetCompensatedPlan {
+        plan: Box<RenderPlan>,
+        compensation: Box<crate::compensation::Compensation>,
+    },
+    /// Reconfigure delays after a device changes its reported latency.
+    SetCompensation(Box<crate::compensation::Compensation>),
     /// Replace secondary output taps; allocation and stream setup are control-side.
     SetOutputRoutes(Box<crate::output::OutputTaps>),
     /// Install a device that was created and `prepare`d (at the engine's
@@ -110,6 +117,7 @@ pub enum EngineCommand {
 /// audio thread.
 pub enum Retired {
     Plan(Box<RenderPlan>),
+    Compensation(Box<crate::compensation::Compensation>),
     Device(Box<dyn Device>),
     Sample(Arc<SampleBuffer>),
     Monitor(Box<MonitorReceiver>),

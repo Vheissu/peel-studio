@@ -353,6 +353,7 @@ pub fn render_with(
         }
         let slot = i as Slot;
         engine.send(EngineCommand::InstallDevice { slot, device });
+        if let Some(error) = engine.compensation_error() { return Err(error.to_string()); }
         slots.insert(inst.id, slot);
     }
     let meters: HashMap<Id, u16> = project
@@ -388,7 +389,7 @@ pub fn render_with(
         return Err("The arrangement is too long to export".into());
     }
     let total = frames as usize;
-    engine.send(EngineCommand::SetPlan(Box::new(plan)));
+    engine.try_set_plan(Box::new(plan))?;
     engine.send(EngineCommand::Seek { beat: 0.0 });
     engine.send(EngineCommand::Play);
 
@@ -402,6 +403,20 @@ pub fn render_with(
     };
     let mut left = allocate()?;
     let mut right = allocate()?;
+    // Render through the complete compensated graph, then discard its leading
+    // latency. Export duration and the arrangement's sample zero stay exact.
+    let mut warmup_left = vec![0.0; engine.max_block()];
+    let mut warmup_right = vec![0.0; engine.max_block()];
+    let mut remaining = engine.compensation_latency_samples() as usize;
+    while remaining > 0 {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("Export cancelled".into());
+        }
+        let n = remaining.min(warmup_left.len());
+        engine.render(&mut warmup_left[..n], &mut warmup_right[..n]);
+        remaining -= n;
+        engine.drain_retired();
+    }
     let chunk = 4096;
     let mut pos = 0;
     while pos < total {

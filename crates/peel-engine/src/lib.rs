@@ -107,6 +107,7 @@ pub mod analysis;
 mod audio;
 mod clock;
 pub mod command;
+pub mod compensation;
 mod engine;
 mod events;
 mod handle;
