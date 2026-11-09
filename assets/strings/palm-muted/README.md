@@ -10,11 +10,11 @@ one unpitched strike is excluded; the manifest records both decisions.
 
 The source is [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 [NOTICE.txt](NOTICE.txt) credits the creators and describes the changes;
-[LICENSE.txt](LICENSE.txt) contains the license. Keep the credit with audio
-you publish that uses this instrument. Peel writes `<audio file>.credits.txt`
-beside affected exports, including stems and rendered clips. When importing
-a Peel export, keep that file beside the audio so its credit follows it.
-Personal templates preserve credits attached to imported audio.
+[LICENSE.txt](LICENSE.txt) contains the license. Include the credit when
+publishing audio that uses these recordings. Exports do not generate
+`.credits.txt` files. You can copy the attribution from NOTICE.txt into your
+release credits. Existing sidecars remain untouched, and imported source
+attribution metadata is preserved in projects and personal templates.
 
 The source MIDI labels locate each note; audio onset detection corrects
 recording offsets. Preparation selects one DI channel, removes low DC and

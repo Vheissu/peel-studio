@@ -445,7 +445,6 @@ pub fn render_with(
         cancel,
     )
     .map_err(|e| e.to_string())?;
-    crate::credits::write(project, &settings.path)?;
     progress(1.0);
     Ok(settings.path.clone())
 }

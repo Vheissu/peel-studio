@@ -157,7 +157,7 @@ fn stems_use_selected_format_and_disambiguate_track_names() {
 }
 
 #[test]
-fn palm_exports_carry_credit_through_import_and_personal_template() {
+fn palm_exports_write_only_audio_and_preserve_existing_credit_metadata() {
     use peel_document::{Clip, ClipContent, Id, Note, Time};
     use std::sync::Arc;
 
@@ -186,7 +186,35 @@ fn palm_exports_carry_credit_through_import_and_personal_template() {
         muted: false,
         content: ClipContent::Pattern { pattern: id },
     });
+    for format in [
+        AudioFormat::Wav,
+        AudioFormat::Mp3,
+        AudioFormat::Flac,
+        AudioFormat::Aiff,
+    ] {
+        let output = dir.file(&format!("chug.{}", format.extension()));
+        render_audio(
+            &project,
+            &HashMap::new(),
+            &settings(&output, format),
+            &AtomicU32::new(0),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert!(
+            decode_file(&output).unwrap().channels[0]
+                .iter()
+                .any(|s| s.abs() > 0.01)
+        );
+        assert!(
+            !dir.file(&format!("chug.{}.credits.txt", format.extension()))
+                .exists()
+        );
+    }
     let output = dir.file("chug.wav");
+    let credit = dir.file("chug.wav.credits.txt");
+    // An existing sidecar must neither be replaced nor prevent audio export.
+    std::fs::write(&credit, "My existing credits").unwrap();
     render_audio(
         &project,
         &HashMap::new(),
@@ -195,18 +223,35 @@ fn palm_exports_carry_credit_through_import_and_personal_template() {
         &AtomicBool::new(false),
     )
     .unwrap();
-    let credit = dir.file("chug.wav.credits.txt");
-    let notice = std::fs::read_to_string(&credit).unwrap();
-    assert!(notice.contains("Guitar-TECHS"));
-    assert!(notice.contains("CC BY 4.0"));
-    assert!(
-        decode_file(&output).unwrap().channels[0]
-            .iter()
-            .any(|s| s.abs() > 0.01)
+    assert_eq!(
+        std::fs::read_to_string(&credit).unwrap(),
+        "My existing credits"
     );
-
-    // A sidecar supplied later must also be inherited on content-hash dedupe.
     std::fs::remove_file(&credit).unwrap();
+
+    let stem_dir = dir.file("stems");
+    std::fs::create_dir_all(&stem_dir).unwrap();
+    let mut stems = Session::new_silent(project.clone());
+    let job = stems.export_stems(settings(&stem_dir.join("Song.wav"), AudioFormat::Wav));
+    let started = Instant::now();
+    loop {
+        if let Some(result) = job.take_result() {
+            assert_eq!(result.unwrap(), stem_dir);
+            break;
+        }
+        assert!(started.elapsed() < Duration::from_secs(30));
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let stem_files: Vec<_> = std::fs::read_dir(&stem_dir)
+        .unwrap()
+        .map(|p| p.unwrap().path())
+        .collect();
+    assert_eq!(stem_files.len(), 1);
+    assert_eq!(stem_files[0].extension().unwrap(), "wav");
+
+    // Preserve attribution metadata when importing an older export whose
+    // sidecar was supplied later, including on content-hash dedupe.
+    let notice = include_str!("../../../assets/strings/palm-muted/NOTICE.txt");
     let mut deduped = Session::new_silent(template::empty());
     let lane = deduped.project().arrangement().tracks[0].id;
     deduped.add_audio_clip(lane, Time::ZERO, &output).unwrap();
@@ -227,7 +272,7 @@ fn palm_exports_carry_credit_through_import_and_personal_template() {
     assert!(!deduped.project().extensions.is_empty());
     deduped.doc.undo();
     assert!(deduped.project().extensions.is_empty());
-    std::fs::write(&credit, &notice).unwrap();
+    std::fs::write(&credit, notice).unwrap();
 
     let mut session = Session::new_silent(template::empty());
     let lane = session.project().arrangement().tracks[0].id;

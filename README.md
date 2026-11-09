@@ -98,8 +98,9 @@ for chugs and Recorded Bass for a picked bass line. These instruments use
 bundled multisamples, with alternate takes, velocity response and no
 external sample files. The guitars include clean and amplified sounds.
 Palm-Muted Guitar uses dedicated palm-muted recordings from Guitar-TECHS
-under CC BY 4.0. Exports include a `.credits.txt` file to keep with audio you
-publish. See [sample credits](assets/strings/palm-muted/README.md).
+under CC BY 4.0. Exports do not generate credit files; the licence still
+requires attribution when publishing audio that uses these recordings. See
+[sample credits](assets/strings/palm-muted/README.md).
 Kick, Snare, Hat and Tom also offer modeled acoustic and 808/909 circuit
 sounds. Existing projects and older presets retain their sound.
 
