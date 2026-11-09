@@ -150,6 +150,17 @@ pub struct Workspace {
     pub export_stems: bool,
 }
 
+impl Workspace {
+    /// A workspace for `project`: the first channel is selected.
+    #[cfg(test)]
+    pub fn new(project: &peel_document::Project) -> Workspace {
+        let mut ws = Workspace::default();
+        ws.selected_channel = project.channels.first().map(|c| c.id);
+        ws.focus = ws.selected_channel.map(Focus::Channel);
+        ws
+    }
+}
+
 impl Default for Workspace {
     fn default() -> Self {
         Workspace {

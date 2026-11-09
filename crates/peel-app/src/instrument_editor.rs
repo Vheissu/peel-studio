@@ -538,14 +538,14 @@ fn piano(ui: &mut Ui, r: Rect, ch: &peel_document::Channel, s: &mut Session, ws:
 
 // ---- right rail ----
 
-struct Rows {
-    x: f32,
-    w: f32,
-    y: f32,
+pub(crate) struct Rows {
+    pub x: f32,
+    pub w: f32,
+    pub y: f32,
 }
 
 impl Rows {
-    fn row(&mut self, h: f32) -> Rect {
+    pub fn row(&mut self, h: f32) -> Rect {
         let r = Rect {
             x: self.x,
             y: self.y,
@@ -555,12 +555,12 @@ impl Rows {
         self.y += h;
         r
     }
-    fn gap(&mut self, h: f32) {
+    pub fn gap(&mut self, h: f32) {
         self.y += h;
     }
 }
 
-fn section(ui: &mut Ui, rows: &mut Rows, name: &str) {
+pub(crate) fn section(ui: &mut Ui, rows: &mut Rows, name: &str) {
     let t = ui.theme.clone();
     let r = rows.row(22.0);
     ui.scene.hline(r.x, r.right(), r.y, t.line);
@@ -573,7 +573,7 @@ fn section(ui: &mut Ui, rows: &mut Rows, name: &str) {
     );
 }
 
-fn switch(ui: &mut Ui, id: W, r: Rect, label: &str, tip: &str, on: bool, color: Color) -> bool {
+pub(crate) fn switch(ui: &mut Ui, id: W, r: Rect, label: &str, tip: &str, on: bool, color: Color) -> bool {
     let t = ui.theme.clone();
     let resp = ui.interact_node(
         id,

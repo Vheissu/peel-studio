@@ -2826,3 +2826,93 @@ fn an_expanded_mixer_takes_the_whole_workspace_and_restores() {
     assert_eq!(h.rect(W::new(("fader", id))).h, before.min(h.rect(W::new(("fader", id))).h));
     assert!(h.studio.ws.mixer_restore_h.is_none());
 }
+
+// ---- audio input, recording and routing sheet ----
+
+#[test]
+fn the_audio_sheet_opens_from_the_status_bar_and_closes_with_escape() {
+    let mut h = Harness::new();
+    h.click(W::new("audio-open"));
+    assert!(h.studio.ws.io_open);
+    h.frames(2);
+    assert!(h.ui.widget_rect(W::new("io-record")).is_some());
+    h.ui.input.keys.push(escape());
+    h.ui.input.had_event = true;
+    h.frames(2);
+    assert!(!h.studio.ws.io_open);
+    // Opening an instrument closes it, and the other way round.
+    h.studio.ws.io_open = true;
+    open_instrument(&mut h);
+    assert!(!h.studio.ws.io_open);
+}
+
+#[test]
+fn a_new_lane_is_armed_and_record_stays_blocked_until_an_input_is_open() {
+    let mut h = Harness::new();
+    h.studio.ws.io_open = true;
+    h.frames(3);
+    let lanes = h.session().project().arrangement().tracks.len();
+    h.click(W::new("io-lane"));
+    h.frames(2);
+    h.click(W::new("io-lane").with("menu").with(("item", lanes + 1)));
+    h.frames(2);
+    assert_eq!(h.session().project().arrangement().tracks.len(), lanes + 1);
+    assert_eq!(h.session().armed_lanes().len(), 1);
+    // The silent test engine has no input: the reason is shown, nothing starts.
+    assert!(h.session().record_blocker().is_some());
+    h.click(W::new("io-record"));
+    assert!(!h.studio.recorder.armed);
+    assert!(!h.session().is_recording());
+}
+
+#[test]
+fn extra_outputs_report_why_they_cannot_start_and_save_nothing() {
+    let mut h = Harness::new();
+    h.studio.ws.io_open = true;
+    h.frames(3);
+    if h.ui.widget_rect(W::new("io-route-add")).is_none() {
+        return;
+    }
+    h.click(W::new("io-route-add"));
+    h.frames(2);
+    // A silent session has no hardware to route to: the refusal is kept
+    // and neither the session nor the preferences change.
+    assert!(h.session().output_routes().is_empty());
+    assert!(h.studio.prefs.output_routes.is_empty());
+}
+
+#[test]
+fn the_midi_channel_choice_reaches_the_session_and_preferences() {
+    let mut h = Harness::new();
+    open_instrument(&mut h);
+    h.click(W::new("inst-midi-channel"));
+    h.frames(2);
+    h.click(W::new("inst-midi-channel").with("menu").with(("item", 4usize)));
+    assert_eq!(h.session().midi_channel_filter(), Some(3));
+    assert_eq!(h.studio.prefs.midi_channel, Some(3));
+    // All channels again.
+    h.click(W::new("inst-midi-channel"));
+    h.frames(2);
+    h.click(W::new("inst-midi-channel").with("menu").with(("item", 0usize)));
+    assert_eq!(h.session().midi_channel_filter(), None);
+}
+
+#[test]
+fn saved_mappings_for_another_project_are_skipped_with_a_notice() {
+    let mut h = Harness::new();
+    h.studio.prefs.midi_mappings = vec![peel_session::MidiMapping {
+        controller: 21,
+        channel: None,
+        target: peel_session::MidiControlTarget::TrackGain { track: peel_document::Id::new() },
+        min: -60.0,
+        max: 12.0,
+    }];
+    h.studio.apply_io_prefs();
+    assert!(h.session().midi_control_mappings().is_empty());
+    assert!(
+        h.session().notice().is_some_and(|n| n.text.contains("another project")),
+        "{:?}",
+        h.session().notice()
+    );
+    assert_eq!(h.studio.prefs.midi_mappings.len(), 1, "kept for the project it belongs to");
+}

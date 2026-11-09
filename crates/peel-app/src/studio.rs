@@ -173,10 +173,10 @@ impl Studio {
             })
             .cloned()
             .collect();
-        if usable != self.session.output_routes() {
-            if let Err(e) = self.session.configure_output_routes(usable) {
-                self.session.notify(format!("Outputs: {e}"), true);
-            }
+        if usable != self.session.output_routes()
+            && let Err(e) = self.session.configure_output_routes(usable)
+        {
+            self.session.notify(format!("Outputs: {e}"), true);
         }
         if let Some(c) = prefs.primary_output
             && self.session.primary_output_channels() != c
@@ -568,6 +568,9 @@ impl Studio {
                 .map(|c| c.id)
         {
             crate::instrument_editor::open(&mut self.session, &mut self.ws, c);
+        }
+        if std::env::var_os("PEEL_AUDIO_SHEET").is_some() {
+            self.ws.io_open = true;
         }
         if std::env::var_os("PEEL_EXPORT").is_some() {
             self.ws.export_panel = true;
@@ -998,6 +1001,24 @@ impl Studio {
                 ui.request_repaint();
             }
         }
+        let audio_w = ui.quiet_button_width(true, "Audio", false);
+        let audio = ui.quiet_button(
+            W::new("audio-open"),
+            row.cut_right(audio_w).shrink2(0.0, 1.0),
+            Some(peel_ui::icons::HEADPHONES),
+            "Audio",
+            false,
+            self.ws.io_open,
+        );
+        ui.tooltip(&audio, "Input, recording and output routing");
+        if audio.clicked {
+            self.ws.io_open = !self.ws.io_open;
+            if self.ws.io_open {
+                crate::instrument_editor::close(&mut self.session, &mut self.ws);
+                self.ws.fx.close();
+            }
+        }
+        row.cut_right(6.0);
         let gear = ui.icon_button(
             W::new("settings-open"),
             row.cut_right(24.0),
@@ -1319,6 +1340,14 @@ impl Studio {
             &mut self.session,
             &mut self.ws,
             &mut self.prefs,
+        );
+        crate::audio_io::draw(
+            ui,
+            sheet_area,
+            &mut self.session,
+            &mut self.ws,
+            &mut self.prefs,
+            &mut self.recorder,
         );
         crate::layout::persist(ui, self);
 

@@ -8,6 +8,7 @@ mod eq_resonance;
 mod fx_editor;
 mod harmony;
 mod inspector;
+mod audio_io;
 mod instrument_editor;
 mod keys;
 mod layout;
