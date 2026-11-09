@@ -932,3 +932,126 @@ fn grand_sixteen_note_chord_is_cheap_and_clean() {
     // debug-profile test build (dependencies are optimized).
     assert!(elapsed < 1.0, "took {elapsed} s for 4 s of audio");
 }
+
+// ---------------------------------------------------------------- guitar
+
+/// Fundamental from normalized autocorrelation around `expect`, with
+/// parabolic refinement.
+fn autocorr_pitch(buf: &[f32], expect: f32) -> f32 {
+    let lo = (SR / (expect * 1.06)) as usize;
+    let hi = (SR / (expect * 0.94)) as usize + 1;
+    let n = buf.len() - hi - 1;
+    let ac = |lag: usize| -> f32 { (0..n).map(|i| buf[i] * buf[i + lag]).sum::<f32>() };
+    let r: Vec<f32> = (lo - 1..=hi + 1).map(ac).collect();
+    let mut best = 1;
+    for i in 1..r.len() - 1 {
+        if r[i] > r[best] {
+            best = i;
+        }
+    }
+    let (a, b, c) = (r[best - 1], r[best], r[best + 1]);
+    let frac = 0.5 * (a - c) / (a - 2.0 * b + c);
+    SR / ((lo - 1 + best) as f32 + frac)
+}
+
+#[test]
+fn guitar_notes_are_in_tune() {
+    for (key, hz) in [
+        (40u8, 82.407f32),
+        (45, 110.0),
+        (57, 220.0),
+        (69, 440.0),
+        (81, 880.0),
+    ] {
+        for gain in [0.1f32, 0.9] {
+            let mut d = fresh("peel.guitar.electric");
+            set(d.as_mut(), "amp.gain", gain);
+            let (l, _) = render(d.as_mut(), &[note_on(0, key, 0.8, 1)], 40_000, 256);
+            let f = autocorr_pitch(&l[6_000..30_000], hz);
+            let cents = 1200.0 * (f / hz).log2();
+            assert!(
+                cents.abs() < 6.0,
+                "key {key} gain {gain}: {f} Hz, {cents} cents"
+            );
+        }
+    }
+}
+
+#[test]
+fn guitar_chord_is_polyphonic_and_every_preset_is_clean() {
+    let chord = [
+        note_on(0, 40, 0.9, 1),
+        note_on(300, 47, 0.9, 2),
+        note_on(600, 52, 0.9, 3),
+        note_on(900, 59, 0.9, 4),
+        note_off(30_000, 40, 1),
+        note_off(30_000, 47, 2),
+        note_off(30_000, 52, 3),
+        note_off(30_000, 59, 4),
+    ];
+    for preset in peel_instruments::presets("peel.guitar.electric") {
+        let mut d = fresh("peel.guitar.electric");
+        for (key, value) in preset.params {
+            set(d.as_mut(), key, *value);
+        }
+        let (l, r) = render(d.as_mut(), &chord, 48_000 * 3, 256);
+        assert!(all_finite(&l) && all_finite(&r), "{}", preset.name);
+        let pk = peak(&l);
+        assert!((0.05..1.5).contains(&pk), "{}: peak {pk}", preset.name);
+        let mean = l.iter().sum::<f32>() / l.len() as f32;
+        assert!(mean.abs() < 0.01, "{}: DC {mean}", preset.name);
+        assert!(
+            rms(&l[2_000..20_000]) > 0.02,
+            "{}: chord too quiet",
+            preset.name
+        );
+    }
+}
+
+#[test]
+fn guitar_palm_mute_shortens_the_note() {
+    let tail = |palm: f32| {
+        let mut d = fresh("peel.guitar.electric");
+        set(d.as_mut(), "string.palm_mute", palm);
+        let (l, _) = render(d.as_mut(), &[note_on(0, 45, 0.9, 1)], 48_000 * 2, 256);
+        rms(&l[48_000..48_000 + 4_800]) / rms(&l[2_400..7_200])
+    };
+    assert!(
+        tail(1.0) < tail(0.0) * 0.1,
+        "{} vs {}",
+        tail(1.0),
+        tail(0.0)
+    );
+}
+
+#[test]
+fn guitar_velocity_brightens_the_attack() {
+    let bright = |vel: f32| {
+        let mut d = fresh("peel.guitar.electric");
+        let (l, _) = render(d.as_mut(), &[note_on(0, 57, vel, 1)], 12_000, 256);
+        let seg = &l[1_000..9_000];
+        let diff: f32 = seg.windows(2).map(|w| (w[1] - w[0]).powi(2)).sum();
+        let tot: f32 = seg.iter().map(|x| x * x).sum();
+        diff / tot
+    };
+    assert!(
+        bright(1.0) > bright(0.2),
+        "{} vs {}",
+        bright(1.0),
+        bright(0.2)
+    );
+}
+
+#[test]
+fn guitar_rings_out_and_goes_exactly_silent() {
+    let mut d = fresh("peel.guitar.electric");
+    let (l, _) = render(
+        d.as_mut(),
+        &[note_on(0, 45, 1.0, 1), note_off(24_000, 45, 1)],
+        48_000 * 3,
+        256,
+    );
+    assert!(rms(&l[10_000..14_000]) > 0.02);
+    assert_eq!(peak(&l[48_000 * 2..]), 0.0);
+    assert!(d.is_silent());
+}

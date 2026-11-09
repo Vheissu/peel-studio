@@ -8,7 +8,7 @@ use peel_dsp::{Device, DeviceEvent, EventKind, ProcessContext, SampleBuffer};
 
 pub const SR: f32 = 48_000.0;
 
-pub const REQUIRED: [&str; 10] = [
+pub const REQUIRED: [&str; 11] = [
     "peel.drum.kick",
     "peel.drum.snare",
     "peel.drum.hat",
@@ -18,6 +18,7 @@ pub const REQUIRED: [&str; 10] = [
     "peel.synth.bass",
     "peel.keys.tine",
     "peel.keys.grand",
+    "peel.guitar.electric",
     "peel.sampler",
 ];
 
