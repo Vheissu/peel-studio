@@ -80,6 +80,8 @@ for live state, and `peel_read_project` for the document and its revision.
 | Import | `peel_import_audio`, `peel_import_midi` |
 | Export | `peel_export_audio`, `peel_export_job`, `peel_export_midi`, `peel_bounce_clip` |
 | Hardware | `peel_audio_devices`, `peel_configure_audio`, `peel_configure_midi`, `peel_rescan_plugins` |
+| Routing | `peel_output_routes`, `peel_configure_output_routes`, `peel_configure_output_channels` |
+| Controllers | `peel_midi_controls`, `peel_configure_midi_controls`, `peel_midi_learn`, `peel_midi_control` |
 | Record | `peel_configure_recording`, `peel_arm_lane`, `peel_recording`, `peel_close_input` |
 | Perform | `peel_performance_slots`, `peel_performance` |
 
@@ -172,3 +174,44 @@ the window remains available for the user to continue working.
 The tools operate on the musical session. They do not automate pane sizing,
 file chooser dialogs or third-party plugin editor windows. Plugin parameters
 and saved state are accessible through the document and device tools.
+
+## Output routes
+
+`peel_output_routes` reads primary channel mapping and additional output health.
+`peel_configure_output_channels` maps primary playback to `left` or a `left`/`right`
+pair. Hardware channel indices start at zero.
+
+`peel_configure_output_routes` takes `routes`, an array of up to four destinations.
+Each entry has `name`, `device` (ID or exact name from `peel_audio_devices`),
+`left`, optional `right`, optional `track` (mixer track ID; omit for master),
+`gain_db` (default 0) and `muted` (default false). An empty array closes the
+additional outputs. Invalid routes or a failed device opening leave the current
+configuration intact.
+
+Additional outputs are buffered, drift-corrected monitor feeds. They can feed a
+cue interface while the main output uses the computer speakers. Independent
+hardware clocks are not phase-aligned. Use an OS aggregate device for
+synchronous multichannel playback. The master route excludes metronome,
+preview and direct input monitoring.
+
+## Controllers
+
+`peel_configure_midi_controls` replaces `mappings` and sets `channel_filter`
+(0–15; omit for omni). A mapping has `controller` (0–127), optional `channel`,
+`target`, `min` and `max`. Targets are:
+
+```json
+{"kind":"device_param","device":"DEVICE_ID","key":"cutoff"}
+```
+
+Other target kinds are `track_gain` / `track_pan` with `track`, and
+`channel_gain` / `channel_pan` with `channel`. Device ranges are plain values
+from `peel_devices`; logarithmic controls retain their parameter curve.
+CC64, CC120 and CC123 retain their sustain and panic roles.
+
+`peel_midi_learn` with a target waits for the next accepted controller; omit
+`target` to cancel. `peel_midi_controls` reads mappings, filter, Learn status and
+stale-target errors. `peel_midi_control` sends `channel`, `controller` and `value`
+through the same filter and mapping path as hardware, so scripts can operate
+learned controls without a physical controller. These calls configure the live
+host; mappings do not travel in project files.

@@ -309,3 +309,120 @@ fn closing_input_and_disconnecting_release_the_audio_input() {
     h.c.disconnect(&mut h.s);
     assert!(!h.s.input_is_open());
 }
+
+#[test]
+fn controller_tools_share_hardware_filter_learn_and_parameter_paths() {
+    let mut h = Host::new();
+    let ch = h.channel();
+    let param = peel_devices::descriptor("peel.drum.kick").unwrap().params[0];
+    let mapping = json!({"controller":21,"channel":0,"target":{"kind":"device_param","device":ch["device"],"key":param.key},"min":param.min,"max":param.max});
+    h.call(
+        "configure_midi_controls",
+        json!({"channel_filter":0,"mappings":[mapping]}),
+    )
+    .unwrap();
+    h.call(
+        "midi_control",
+        json!({"channel":0,"controller":21,"value":127}),
+    )
+    .unwrap();
+    assert_eq!(
+        h.s.project().channels[0].device.params[param.key],
+        param.max
+    );
+    h.call(
+        "midi_control",
+        json!({"channel":1,"controller":21,"value":0}),
+    )
+    .unwrap();
+    assert_eq!(
+        h.s.project().channels[0].device.params[param.key],
+        param.max
+    );
+    let before = h.call("midi_controls", json!({})).unwrap();
+    assert!(h.call("configure_midi_controls", json!({"channel_filter":2,"mappings":[{"controller":21,"target":{"kind":"device_param","device":ch["device"],"key":"missing"},"min":0,"max":1}]})).is_err());
+    assert_eq!(h.call("midi_controls", json!({})).unwrap(), before);
+    assert!(
+        h.call(
+            "midi_control",
+            json!({"channel":16,"controller":21,"value":1})
+        )
+        .is_err()
+    );
+    h.call(
+        "midi_learn",
+        json!({"target":{"kind":"track_pan","track":ch["track"]}}),
+    )
+    .unwrap();
+    assert_eq!(
+        h.call("midi_controls", json!({})).unwrap()["learn"]["state"],
+        "waiting"
+    );
+    h.call(
+        "midi_control",
+        json!({"channel":0,"controller":22,"value":127}),
+    )
+    .unwrap();
+    let learned = h.call("midi_controls", json!({})).unwrap();
+    assert_eq!(learned["learn"]["state"], "learned");
+    assert_eq!(learned["learn"]["mapping"]["controller"], 22);
+    let track = h.s.project().channels[0].track;
+    assert_eq!(h.s.project().mixer.track(track).unwrap().pan, 1.0);
+}
+
+#[test]
+fn hardware_route_tools_validate_before_opening_devices() {
+    let mut h = Host::new();
+    let initial = h.call("output_routes", json!({})).unwrap();
+    assert!(
+        h.call("configure_output_channels", json!({"left":65535}))
+            .is_err()
+    );
+    assert_eq!(
+        h.call("output_routes", json!({})).unwrap()["primary_channels"],
+        initial["primary_channels"]
+    );
+    assert!(h.call("configure_output_routes", json!({"routes":[{"name":"Cue","track":Id::new(),"device":"Not a device","left":0,"right":1}]})).is_err());
+    assert!(
+        h.call("output_routes", json!({})).unwrap()["routes"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    h.call("configure_output_routes", json!({"routes":[]}))
+        .unwrap();
+}
+
+#[test]
+fn mastering_is_discoverable_and_editable_through_scripts_host_actions() {
+    let mut h = Host::new();
+    let catalog = h
+        .call("devices", json!({"type_id":"peel.fx.mastering"}))
+        .unwrap();
+    assert_eq!(
+        catalog["devices"][0]["params"].as_array().unwrap().len(),
+        13
+    );
+    assert!(
+        catalog["devices"][0]["presets"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("Balanced"))
+    );
+    let master = h.s.project().mixer.tracks[0].id;
+    let effect = h
+        .call(
+            "add_effect",
+            json!({"track":master,"type_id":"peel.fx.mastering"}),
+        )
+        .unwrap();
+    h.call(
+        "set_device",
+        json!({"device":effect["device"],"preset":"Balanced","params":{"ceiling":-1.2}}),
+    )
+    .unwrap();
+    assert_eq!(
+        h.s.project().mixer.tracks[0].inserts[0].params["ceiling"],
+        -1.2
+    );
+}

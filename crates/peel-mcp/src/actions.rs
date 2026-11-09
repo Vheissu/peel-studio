@@ -151,6 +151,27 @@ pub enum Action {
         port: Option<String>,
         channel: Option<String>,
     },
+    /// Read primary output channels and all additional hardware routes, including stream health and clock correction.
+    OutputRoutes {},
+    /// Replace additional hardware outputs atomically (up to four). Empty routes closes them. Each source is master or a mixer track; channels are zero-based. Independent devices are drift-corrected monitor feeds.
+    ConfigureOutputRoutes { routes: Vec<OutputRouteInput> },
+    /// Map primary playback to a mono output or a stereo pair on the current audio device. Channels are zero-based.
+    ConfigureOutputChannels { left: u16, right: Option<u16> },
+    /// Read MIDI channel filter, controller mappings, Learn status and mapping errors.
+    MidiControls {},
+    /// Replace MIDI controller mappings and choose an input channel filter (0..15; omit for omni). Controller ranges use plain parameter values.
+    ConfigureMidiControls {
+        channel_filter: Option<u8>,
+        mappings: Vec<MidiMappingInput>,
+    },
+    /// Learn the next accepted MIDI controller for a target. Omit target to cancel Learn.
+    MidiLearn { target: Option<MidiTargetInput> },
+    /// Send an internal MIDI controller event through the same filter and Learn/mapping path as hardware. Channel is 0..15, controller and value are 0..127.
+    MidiControl {
+        channel: u8,
+        controller: u8,
+        value: u8,
+    },
     /// Configure audio recording input and monitoring. Input channels are zero-based; omit right for mono. This may open the microphone.
     ConfigureRecording {
         device: Option<String>,
@@ -178,6 +199,40 @@ pub enum Action {
         scene: Option<usize>,
         capture: Option<bool>,
     },
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OutputRouteInput {
+    pub name: String,
+    pub track: Option<String>,
+    pub device: String,
+    pub left: u16,
+    pub right: Option<u16>,
+    #[serde(default)]
+    pub gain_db: f32,
+    #[serde(default)]
+    pub muted: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum MidiTargetInput {
+    DeviceParam { device: String, key: String },
+    TrackGain { track: String },
+    TrackPan { track: String },
+    ChannelGain { channel: String },
+    ChannelPan { channel: String },
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MidiMappingInput {
+    pub controller: u8,
+    pub channel: Option<u8>,
+    pub target: MidiTargetInput,
+    pub min: f32,
+    pub max: f32,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

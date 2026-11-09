@@ -6,6 +6,7 @@
 mod actions;
 mod compose;
 mod control;
+mod io_control;
 
 pub use actions::{Action, decode};
 pub use control::Control;
@@ -203,6 +204,8 @@ fn build_tools() -> Vec<Tool> {
                     | "devices"
                     | "new_ids"
                     | "audio_devices"
+                    | "output_routes"
+                    | "midi_controls"
                     | "browse_files"
                     | "performance_slots"
             );

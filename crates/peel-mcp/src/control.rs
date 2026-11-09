@@ -567,6 +567,43 @@ impl Control {
                 }
                 Ok(json!({"enabled": s.midi_enabled(), "channel": s.live_target()}))
             }
+            Action::OutputRoutes {} => Ok(crate::io_control::output_routes(s)),
+            Action::ConfigureOutputRoutes { routes } => {
+                crate::io_control::configure_routes(s, routes)?;
+                Ok(crate::io_control::output_routes(s))
+            }
+            Action::ConfigureOutputChannels { left, right } => {
+                s.set_primary_output_channels(
+                    right.map_or(peel_session::OutputChannels::Mono(left), |r| {
+                        peel_session::OutputChannels::Stereo(left, r)
+                    }),
+                )?;
+                Ok(crate::io_control::output_routes(s))
+            }
+            Action::MidiControls {} => Ok(crate::io_control::midi_controls(s)),
+            Action::ConfigureMidiControls {
+                channel_filter,
+                mappings,
+            } => {
+                crate::io_control::configure_midi(s, channel_filter, mappings)?;
+                Ok(crate::io_control::midi_controls(s))
+            }
+            Action::MidiLearn { target } => {
+                if let Some(target) = target {
+                    s.begin_midi_learn(crate::io_control::midi_target(target)?)?;
+                } else {
+                    s.cancel_midi_learn();
+                }
+                Ok(crate::io_control::midi_controls(s))
+            }
+            Action::MidiControl {
+                channel,
+                controller,
+                value,
+            } => {
+                crate::io_control::send_control(s, channel, controller, value)?;
+                Ok(crate::io_control::midi_controls(s))
+            }
             Action::ConfigureRecording {
                 device,
                 left,
