@@ -24,8 +24,9 @@ effects. There is no web view.
   effects (EQ with an interactive curve, compressor, limiter, delay, reverb,
   drive, filter, chorus, utility), with over a hundred factory presets in
   the Browser. Installed CLAP plugins show up next to them.
-- Arrangement: pattern, audio and automation clips; trims, fades, marquee
-  selection, Alt-drag copies, loop range, lane management.
+- Arrangement: pattern, audio and automation clips; trims, fades, slicing,
+  marquee selection, Alt-drag copies, markers, tempo changes, alternate
+  arrangements; audio loops that follow the tempo; render to audio.
 - Mixing: console-style strips with inserts, bus routing, post-fader sends,
   sidechain compression, gain reduction meters, pan, faders, meters, mute
   and solo; curved automation of any device parameter, track volume or pan.

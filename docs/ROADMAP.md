@@ -26,7 +26,7 @@ processing, persistence and tests all exist.
 | Hardware MIDI input | Live playing with sustain, device hotplug, note recording | Done |
 | Markers and arrangements | Arrangement markers, alternate arrangements, slice tool | Done |
 | Tempo and curves | Tempo changes and ramps in the Playlist, curved automation segments | Done |
-| Audio clips | Gain, reverse, normalize and routing in the inspector | Done |
+| Audio clips | Gain, reverse, normalize, routing, render to audio, tempo following with time-stretch | Done |
 | Note tools | Legato, articulate, chop, arpeggiate, strum, flam, humanize, levels, flip, tidy with live preview | Done |
 | Sidechain and stems | Sidechain keys as graph dependencies, gain reduction meters, solo through buses and returns, stem export | Done |
 | Audio device selection | Choose output and buffer size | Done |
@@ -38,8 +38,8 @@ processing, persistence and tests all exist.
 
 ## Phase 2: recording and deeper editing
 
-Take lanes and comping, sample and waveform editor, time stretching,
-dedicated Core Audio / WASAPI / ASIO backends, engine process isolation.
+Take lanes and comping, sample and waveform editor, dedicated Core
+Audio / WASAPI / ASIO backends, engine process isolation.
 
 ## Phase 3: plugins
 
