@@ -1013,10 +1013,10 @@ const CABINETS: [CabVoicing; 3] = [
 ];
 
 /// The shared amp and cabinet. Mono in, mono out.
-struct Amp {
+pub(crate) struct Amp {
     sr: f32,
-    pickup: Biquad,
-    cable: Biquad,
+    pub(crate) pickup: Biquad,
+    pub(crate) cable: Biquad,
     pre_hp: Biquad,
     pre_mid: Biquad,
     up: [Biquad; 4],
@@ -1039,7 +1039,7 @@ struct Amp {
     bias_out: f32,
     power: f32,
     makeup: f32,
-    pickup_gain: f32,
+    pub(crate) pickup_gain: f32,
     sag_env: f32,
     sag_amt: f32,
     sag_att: f32,
@@ -1049,7 +1049,7 @@ struct Amp {
 }
 
 impl Amp {
-    fn new() -> Amp {
+    pub(crate) fn new() -> Amp {
         let id = Biquad::new(Coeffs::IDENTITY);
         Amp {
             sr: 48_000.0,
@@ -1087,7 +1087,7 @@ impl Amp {
         }
     }
 
-    fn reset(&mut self) {
+    pub(crate) fn reset(&mut self) {
         for b in [
             &mut self.pickup,
             &mut self.cable,
@@ -1117,7 +1117,7 @@ impl Amp {
     }
 
     /// Fixed filters; called from `prepare`.
-    fn prepare(&mut self, sr: f32) {
+    pub(crate) fn prepare(&mut self, sr: f32) {
         self.sr = sr;
         let sr_os = sr * OS as f32;
         let mut sec = [Coeffs::IDENTITY; 4];
@@ -1148,7 +1148,7 @@ impl Amp {
         self.pickup_gain = gain;
     }
 
-    fn set_cab_type(&mut self, kind: usize, tone: f32) {
+    pub(crate) fn set_cab_type(&mut self, kind: usize, tone: f32) {
         let v = &CABINETS[kind.min(CABINETS.len() - 1)];
         self.cab_hp.coeffs = Coeffs::design(FilterKind::HighPass, self.sr, v.hp.0, v.hp.1, 0.0);
         for (b, &(f, q, db)) in self.cab_peaks.iter_mut().zip(v.peaks.iter()) {
@@ -1163,7 +1163,7 @@ impl Amp {
     /// Bass, mid and treble in dB. The stack has the fixed mid scoop of a
     /// Fender style circuit at low gain, moving up and shallower towards a
     /// Marshall style voicing as gain rises.
-    fn set_tone(&mut self, bass: f32, mid: f32, treble: f32) {
+    pub(crate) fn set_tone(&mut self, bass: f32, mid: f32, treble: f32) {
         let g = self.gain;
         self.low.coeffs = Coeffs::design(FilterKind::LowShelf, self.sr, 110.0, 0.7, bass);
         self.mid.coeffs = Coeffs::design(FilterKind::Peak, self.sr, 650.0, 0.7, mid);
@@ -1178,7 +1178,7 @@ impl Amp {
     }
 
     /// Gain-dependent staging for `gain` in 0..1.
-    fn set_gain(&mut self, gain: f32) {
+    pub(crate) fn set_gain(&mut self, gain: f32) {
         let g = gain.clamp(0.0, 1.0);
         self.gain = g;
         self.pre = db_to_gain(-6.0 + 54.0 * g);
@@ -1197,7 +1197,7 @@ impl Amp {
         self.sag_amt = self.sag_param * (0.2 + 0.5 * g);
     }
 
-    fn set_sag(&mut self, sag: f32) {
+    pub(crate) fn set_sag(&mut self, sag: f32) {
         self.sag_param = sag;
         self.sag_amt = sag * (0.2 + 0.5 * self.gain);
     }
@@ -1219,7 +1219,7 @@ impl Amp {
     }
 
     #[inline]
-    fn process(&mut self, x: f32) -> f32 {
+    pub(crate) fn process(&mut self, x: f32) -> f32 {
         let mut s = self.cable.process(self.pickup.process(x)) * self.pickup_gain * self.pre;
         s = self.pre_hp.process(s);
         s = self.pre_mid.process(s);

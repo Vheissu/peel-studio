@@ -16,6 +16,8 @@
 //! | `peel.keys.grand`  | Grand   | Keys     | Synthesized acoustic piano (modal)           |
 //! | `peel.wind.sax`    | Sax     | Wind     | Saxophone: reed and breath model, legato     |
 //! | `peel.guitar.electric` | Guitar | Guitar | Plucked string through pickup, amp and cabinet |
+//! | `peel.guitar.recorded` | Recorded Guitar | Guitar | Recorded sustained and muted notes through amp and cabinet |
+//! | `peel.bass.recorded` | Recorded Bass | Guitar | Recorded picked bass: velocity layers, alternate takes |
 //! | `peel.sampler`     | Sampler | Sampler  | Pitched one-shot / looping sample player     |
 //! | `peel.strings.violin` | Violin | Strings | Bowed-string waveguide, body, ensemble, pizzicato |
 //! | `peel.perc.mallet` | Mallet | Percussion | Pitched modal bars, membranes, plates and bells |
@@ -77,6 +79,7 @@ mod kick;
 mod mallet;
 mod poly;
 mod recorded;
+mod recorded_strings;
 mod sampler;
 mod sax;
 mod snare;
@@ -87,7 +90,7 @@ mod zither;
 
 use peel_dsp::{Device, DeviceDescriptor, Preset};
 
-static ALL: [&DeviceDescriptor; 17] = [
+static ALL: [&DeviceDescriptor; 19] = [
     &kick::DESC,
     &snare::DESC,
     &hat::DESC,
@@ -101,6 +104,8 @@ static ALL: [&DeviceDescriptor; 17] = [
     &tine::DESC,
     &grand::DESC,
     &guitar::DESC,
+    &recorded_strings::GUITAR_DESC,
+    &recorded_strings::BASS_DESC,
     &sampler::DESC,
     &sax::DESC,
     &violin::DESC,
@@ -129,6 +134,8 @@ pub fn create(type_id: &str) -> Option<Box<dyn Device>> {
         "peel.keys.tine" => Some(tine::create()),
         "peel.keys.grand" => Some(grand::create()),
         "peel.guitar.electric" => Some(guitar::create()),
+        "peel.guitar.recorded" => Some(recorded_strings::create_guitar()),
+        "peel.bass.recorded" => Some(recorded_strings::create_bass()),
         "peel.sampler" => Some(sampler::create()),
         "peel.wind.sax" => Some(sax::create()),
         "peel.strings.violin" => Some(violin::create()),
@@ -154,6 +161,8 @@ pub fn presets(type_id: &str) -> &'static [Preset] {
         "peel.keys.tine" => &tine::PRESETS,
         "peel.keys.grand" => &grand::PRESETS,
         "peel.guitar.electric" => &guitar::PRESETS,
+        "peel.guitar.recorded" => &recorded_strings::GUITAR_PRESETS,
+        "peel.bass.recorded" => &recorded_strings::BASS_PRESETS,
         "peel.sampler" => &sampler::PRESETS,
         "peel.wind.sax" => &sax::PRESETS,
         "peel.strings.violin" => &violin::PRESETS,

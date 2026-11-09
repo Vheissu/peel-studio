@@ -232,10 +232,11 @@ impl Control {
             }
             Action::AddChannel { name, type_id } => {
                 let version = device_version(s, &type_id, DeviceKind::Instrument)?;
-                let root_key = if type_id == "peel.drum.acoustic" {
-                    36
-                } else {
-                    60
+                let root_key = match type_id.as_str() {
+                    "peel.drum.acoustic" => 36,
+                    "peel.guitar.recorded" => 40,
+                    "peel.bass.recorded" => 28,
+                    _ => 60,
                 };
                 let mut p = s.project().clone();
                 let color = p.next_channel_color();

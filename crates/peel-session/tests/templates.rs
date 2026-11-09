@@ -119,7 +119,7 @@ fn save_as_brings_managed_media_to_the_new_file() {
 }
 
 #[test]
-fn recorded_kit_templates_need_no_external_sample_files() {
+fn recorded_instrument_templates_need_no_external_sample_files() {
     let dir = temp_dir("recorded-kit-template");
     let session = Session::new_silent(template::rock_metal());
     let template = session
@@ -145,6 +145,23 @@ fn recorded_kit_templates_need_no_external_sample_files() {
         assert_eq!(channel.device.params.get("kit.piece"), Some(&piece));
         assert!(channel.device.sample.is_none());
         assert!(peel_devices::create(&channel.device.type_id).is_some());
+    }
+    for (name, kind, preset, root) in [
+        ("Guitar", "peel.guitar.recorded", "High Gain", 40),
+        ("Chug", "peel.guitar.recorded", "Palm Mute", 40),
+        ("Bass", "peel.bass.recorded", "Rock Pick", 28),
+    ] {
+        let channel = loaded
+            .project
+            .channels
+            .iter()
+            .find(|c| c.name == name)
+            .unwrap();
+        assert_eq!(channel.device.type_id, kind);
+        assert_eq!(channel.device.preset.as_deref(), Some(preset));
+        assert_eq!(channel.root_key, root);
+        assert!(channel.device.sample.is_none());
+        assert!(peel_devices::create(kind).is_some());
     }
     assert!(
         loaded

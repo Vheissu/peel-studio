@@ -47,6 +47,8 @@ jobs:
           Copy-Item LICENSE, README.md, assets/LICENSES.md, docs/SCRIPTING.md dist/PeelStudio/
           New-Item -ItemType Directory -Force dist/PeelStudio/sound-licenses | Out-Null
           Copy-Item assets/drums/big-rusty/LICENSE.txt, assets/drums/big-rusty/README.md, assets/drums/big-rusty/manifest.json dist/PeelStudio/sound-licenses/
+          New-Item -ItemType Directory -Force dist/PeelStudio/sound-licenses/strings | Out-Null
+          Copy-Item assets/strings/recorded/LICENSE-guitar.txt, assets/strings/recorded/LICENSE-bass.txt, assets/strings/recorded/README.md, assets/strings/recorded/manifest.json dist/PeelStudio/sound-licenses/strings/
           Compress-Archive -Path dist/PeelStudio -DestinationPath dist/Peel-Studio-windows-x64.zip
       - name: Package Linux
         if: runner.os == 'Linux'
@@ -60,6 +62,8 @@ jobs:
           cp LICENSE README.md assets/LICENSES.md docs/SCRIPTING.md dist/peel-studio/
           mkdir -p dist/peel-studio/sound-licenses
           cp assets/drums/big-rusty/LICENSE.txt assets/drums/big-rusty/README.md assets/drums/big-rusty/manifest.json dist/peel-studio/sound-licenses/
+          mkdir -p dist/peel-studio/sound-licenses/strings
+          cp assets/strings/recorded/LICENSE-guitar.txt assets/strings/recorded/LICENSE-bass.txt assets/strings/recorded/README.md assets/strings/recorded/manifest.json dist/peel-studio/sound-licenses/strings/
           tar -C dist -czf dist/Peel-Studio-linux-x64.tar.gz peel-studio
       - uses: actions/upload-artifact@v4
         with:

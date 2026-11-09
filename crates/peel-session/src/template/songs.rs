@@ -771,9 +771,9 @@ pub fn rock_metal() -> Project {
     let hat = s.part("Hat", 2, "peel.drum.acoustic", "Closed Hat", HIT, -11.0);
     let crash = s.part("Crash", 3, "peel.drum.acoustic", "Crash", HIT, -15.0);
     let tom = s.part("Toms", 8, "peel.drum.acoustic", "Floor Tom", HIT, -7.0);
-    let bass = s.part("Bass", 6, "peel.synth.bass", "Fingered", 28, -8.0);
-    let gtr = s.part("Guitar", 4, "peel.guitar.electric", "High Gain", 40, -14.0);
-    let chug = s.part("Chug", 5, "peel.guitar.electric", "Palm Mute", 40, -12.0);
+    let bass = s.part("Bass", 6, "peel.bass.recorded", "Rock Pick", 28, -3.0);
+    let gtr = s.part("Guitar", 4, "peel.guitar.recorded", "High Gain", 40, -14.0);
+    let chug = s.part("Chug", 5, "peel.guitar.recorded", "Palm Mute", 40, -12.0);
     s.fx(snare, "peel.fx.reverb", "Drum Room");
     s.fx(gtr, "peel.fx.reverb", "Tight Ambience");
 

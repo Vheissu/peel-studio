@@ -1189,10 +1189,11 @@ pub fn add_instrument_preset(s: &mut Session, type_id: &str, preset: Option<&str
     let mut new_id = None;
     // The recorded kit's Full Kit preset follows GM drum keys. Start its
     // steps on the kick; per-piece presets use the usual C5 root.
-    let root = if type_id == "peel.drum.acoustic" && preset.is_none_or(|p| p == "Full Kit") {
-        36
-    } else {
-        60
+    let root = match type_id {
+        "peel.drum.acoustic" if preset.is_none_or(|p| p == "Full Kit") => 36,
+        "peel.guitar.recorded" => 40,
+        "peel.bass.recorded" => 28,
+        _ => 60,
     };
     s.doc.edit(format!("Add {name}"), |p| {
         let n = p.channels.len();
@@ -1424,6 +1425,15 @@ pub(crate) mod tests {
                 }
             );
             assert_eq!(ch.device.type_id, "peel.drum.acoustic");
+        }
+    }
+
+    #[test]
+    fn recorded_strings_start_on_their_low_e_notes() {
+        let mut s = Session::new_silent(template::empty());
+        for (kind, root) in [("peel.guitar.recorded", 40), ("peel.bass.recorded", 28)] {
+            let id = super::add_instrument(&mut s, kind).unwrap();
+            assert_eq!(s.project().channel(id).unwrap().root_key, root);
         }
     }
 

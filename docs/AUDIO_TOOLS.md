@@ -119,6 +119,33 @@ Kick, 909 Snare, 808 Snare, 808 Closed, 808 Open, 909 Closed, 808 Tom and
 Retriggering a hat still chokes the previous hit, and Cut On Release
 still works in every model.
 
+## Guitar and bass
+
+**Recorded Guitar** plays sustained, staccato and release recordings from
+Karoryfer's Black And Green Guitars. Sustains have three velocity layers;
+each sampled note has two alternate takes. Clean, High Gain and Palm Mute
+presets cover ringing chords and short riffs. The Palm Mute preset uses
+recorded staccato notes with extra damping, rather than shortening the
+sustain recording alone.
+
+Articulation chooses sustained or muted notes. Mute adds damping; Release
+sets how quickly a note ends after key-up, and Fret Noise controls the
+recorded release sound. Output chooses the amp/cabinet or direct signal.
+The amp has Gain, Bass, Mid, Treble and Cabinet controls. It reuses Peel's
+oversampled guitar amp; the string sound comes from recordings.
+
+**Recorded Bass** uses a picked five-string bass from Black And Blue
+Basses, with two velocity layers and three alternate takes. Picked keeps
+the clean attack; Rock Pick adds drive and a darker tone. Mono keeps the
+line on one note at a time. Mute, Release, Drive and Tone shape the sound.
+The low B sample is MIDI 23 and low E is 28, at their sounding pitch.
+
+New Rock / Metal songs use both instruments with Acoustic Kit. Their
+recordings are embedded, so saved projects and personal templates need no
+external files. The original modeled Guitar and synth Bass remain
+available. Sources, licences and processing are in
+`assets/strings/recorded/`.
+
 ## MIDI
 
 Choose an input port and optional MIDI channel filter in Audio and MIDI.
