@@ -1,10 +1,18 @@
-//! Algorithmic reverb built on an eight-line feedback delay network.
+//! Algorithmic reverb built on a sixteen-line feedback delay network.
 //!
 //! Signal path: stereo pre-delay, two chains of four Schroeder all-pass
-//! diffusers (different lengths for left and right), an eight-line FDN with
-//! Hadamard mixing, modulated delay lines and in-loop damping, a stereo
-//! output tap matrix, low and high cuts on the wet signal, mid/side width,
-//! and a linear dry/wet mix.
+//! diffusers (different lengths for left and right), a sixteen-line FDN
+//! with a fast Hadamard feedback matrix, in-loop absorption filters and
+//! slowly drifting modulated delay lines, a stereo output tap matrix, low
+//! and high cuts on the wet signal, mid/side width, and a linear dry/wet mix.
+//!
+//! The design follows Jot's FDN reverberator (per-line gain from the
+//! requested T60 plus a lossy low-pass for frequency-dependent decay), with
+//! the line count, length spread and modulation chosen for modal and echo
+//! density: sixteen unrelated lengths between about 30 and 130 ms give around
+//! one mode per hertz at medium size, and the Hadamard mix multiplies echoes
+//! sixteen-fold per trip, so the tail turns into smooth noise within about
+//! a hundred milliseconds instead of ringing.
 //!
 //! * **Size** scales all line lengths from 0.25x to 2x (an exponential map),
 //!   so small values are rooms and large values are halls. Changes glide
@@ -18,16 +26,18 @@
 //! * **Early** sets the level of six discrete early reflections per side,
 //!   read from the pre-delay line with times that scale with size. They fill
 //!   the gap before the FDN's shortest line speaks.
-//! * **Modulation** wobbles the line lengths a few samples at unrelated slow
-//!   rates, which breaks up metallic ringing.
+//! * **Modulation** drifts the line lengths by a few samples with two
+//!   unrelated slow sine rates per line (a quasi-random walk with no
+//!   audible period), which breaks up metallic ringing and gives the tail a
+//!   gentle chorus without a pitch wobble.
 
 use peel_dsp::biquad::{OnePoleHighpass, OnePoleLowpass};
-use peel_dsp::delay::{DelayLine, TimeGlide};
+use peel_dsp::delay::{DelayLine, TimeGlide, fast_sin_turns};
 use peel_dsp::device::{DeviceDescriptor, DeviceKind, ProcessContext};
 use peel_dsp::param::{ParamDescriptor, ParamId, Unit};
 use peel_dsp::preset::Preset;
-use peel_dsp::reverb::{Allpass, Fdn8, Mixing};
-use peel_dsp::util::Smoothed;
+use peel_dsp::reverb::Allpass;
+use peel_dsp::util::{Smoothed, sanitize};
 
 use crate::common::{Fx, ParamStore, RAMP_SECONDS, SilenceTracker, impl_device, refresh_all};
 
@@ -167,7 +177,7 @@ pub static DESCRIPTOR: DeviceDescriptor = DeviceDescriptor {
     params: &PARAMS,
 };
 
-pub static PRESETS: [Preset; 6] = [
+pub static PRESETS: [Preset; 12] = [
     Preset {
         name: "Room",
         params: &[],
@@ -239,11 +249,108 @@ pub static PRESETS: [Preset; 6] = [
             ("mix", 0.18),
         ],
     },
+    Preset {
+        name: "Big Hall",
+        params: &[
+            ("size", 0.85),
+            ("decay", 4.5),
+            ("predelay", 28.0),
+            ("damping", 0.5),
+            ("diffusion", 0.9),
+            ("modulation", 0.35),
+            ("lowcut", 110.0),
+            ("highcut", 14_000.0),
+            ("mix", 0.28),
+        ],
+    },
+    Preset {
+        name: "Plate",
+        params: &[
+            ("size", 0.4),
+            ("decay", 2.2),
+            ("predelay", 0.0),
+            ("damping", 0.3),
+            ("diffusion", 1.0),
+            ("early", 0.0),
+            ("modulation", 0.4),
+            ("lowcut", 150.0),
+            ("mix", 0.25),
+        ],
+    },
+    Preset {
+        name: "Vocal Plate",
+        params: &[
+            ("size", 0.45),
+            ("decay", 1.8),
+            ("predelay", 30.0),
+            ("damping", 0.4),
+            ("diffusion", 1.0),
+            ("early", 0.1),
+            ("modulation", 0.35),
+            ("lowcut", 220.0),
+            ("highcut", 11_000.0),
+            ("mix", 0.2),
+        ],
+    },
+    Preset {
+        name: "Clean Wash",
+        params: &[
+            ("size", 0.9),
+            ("decay", 8.0),
+            ("predelay", 50.0),
+            ("damping", 0.55),
+            ("diffusion", 1.0),
+            ("early", 0.0),
+            ("modulation", 0.2),
+            ("lowcut", 250.0),
+            ("highcut", 9_000.0),
+            ("width", 1.2),
+            ("mix", 0.35),
+        ],
+    },
+    Preset {
+        name: "Huge Space",
+        params: &[
+            ("size", 1.0),
+            ("decay", 12.0),
+            ("predelay", 40.0),
+            ("damping", 0.45),
+            ("diffusion", 1.0),
+            ("early", 0.25),
+            ("modulation", 0.5),
+            ("lowcut", 250.0),
+            ("highcut", 10_000.0),
+            ("width", 1.3),
+            ("mix", 0.35),
+        ],
+    },
+    Preset {
+        name: "Drum Room",
+        params: &[
+            ("size", 0.22),
+            ("decay", 0.5),
+            ("predelay", 0.0),
+            ("damping", 0.5),
+            ("diffusion", 0.8),
+            ("early", 0.6),
+            ("modulation", 0.1),
+            ("lowcut", 100.0),
+            ("mix", 0.2),
+        ],
+    },
 ];
 
-/// Base line lengths in milliseconds at size scale 1.0. Spread widely and
-/// not harmonically related, so the modes do not stack.
-const LINE_MS: [f32; 8] = [31.0, 37.7, 43.9, 51.1, 59.3, 67.7, 77.9, 89.3];
+/// Lines in the feedback delay network.
+const N: usize = 16;
+
+/// Base line lengths in milliseconds at size scale 1.0. Roughly geometric
+/// from 30 to 130 ms with a small irregular nudge so no two lines share a
+/// common factor, then shuffled so the short and long lines alternate
+/// across the stereo taps.
+const LINE_MS: [f32; N] = [
+    30.9, 68.0, 42.0, 93.1, 49.1, 119.9, 33.2, 71.6, 55.4, 124.7, 35.3, 77.9, 56.8, 108.6, 42.9,
+    91.7,
+];
 /// Left and right input diffuser lengths in milliseconds.
 const DIFFUSER_MS: [[f32; 4]; 2] = [[4.77, 7.31, 11.13, 16.07], [5.21, 8.17, 12.39, 17.61]];
 
@@ -259,16 +366,255 @@ const ER_GAIN: [[f32; 6]; 2] = [
 ];
 
 /// FDN injection signs. Even lines take the left diffuser, odd lines the
-/// right one. The patterns are not Hadamard rows, so the first mixing pass
+/// right one. The pattern is not a Hadamard row, so the first mixing pass
 /// spreads the input over all lines instead of concentrating it.
-const INJECT: [f32; 8] = [1.0, 1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 1.0];
-/// Output tap signs: two orthogonal Hadamard rows decorrelate left and right.
-const TAP_L: [f32; 8] = [1.0, 1.0, -1.0, -1.0, 1.0, 1.0, -1.0, -1.0];
-const TAP_R: [f32; 8] = [1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0];
+const INJECT: [f32; N] = [
+    1.0, 1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, -1.0, 1.0, -1.0,
+];
+/// Feedback sign flips applied before the Hadamard matrix. A diagonal sign
+/// matrix keeps the loop orthogonal but breaks the matrix's regularity.
+const FLIP: [f32; N] = [
+    1.0, -1.0, -1.0, 1.0, 1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0, 1.0,
+];
 
-/// 1/sqrt(8) keeps the tap sum at unity RMS for uncorrelated lines; the extra
+/// Row `r` of the sixteen-point Sylvester Hadamard matrix.
+const fn hadamard_row(r: usize) -> [f32; N] {
+    let mut out = [0.0; N];
+    let mut c = 0;
+    while c < N {
+        out[c] = if (r & c).count_ones() & 1 == 0 {
+            1.0
+        } else {
+            -1.0
+        };
+        c += 1;
+    }
+    out
+}
+/// Output taps: two orthogonal Hadamard rows decorrelate left and right.
+const TAP_L: [f32; N] = hadamard_row(5);
+const TAP_R: [f32; N] = hadamard_row(10);
+
+/// 1/sqrt(16) keeps the tap sum at unity RMS for uncorrelated lines; the extra
 /// 3 dB puts a sustained wet signal at a useful level next to the dry one.
-const TAP_NORM: f32 = 0.353_553_4 * 1.41;
+const TAP_NORM: f32 = 0.25 * 1.41;
+/// Per-line injection gain, calibrated so a sustained signal comes out at the
+/// same level as it did with the former eight-line network.
+const INJECT_GAIN: f32 = 0.53;
+
+/// In-place orthonormal 16-point Walsh-Hadamard transform.
+#[inline]
+fn hadamard16(x: &mut [f32; N]) {
+    let mut h = 8;
+    while h >= 1 {
+        let mut base = 0;
+        while base < N {
+            for i in base..base + h {
+                let (a, b) = (x[i], x[i + h]);
+                x[i] = a + b;
+                x[i + h] = a - b;
+            }
+            base += 2 * h;
+        }
+        h /= 2;
+    }
+    for v in x.iter_mut() {
+        *v *= 0.25;
+    }
+}
+
+/// Samples between recomputations of modulation, gliding lengths and
+/// per-line decay gains. Delay offsets are interpolated linearly in between.
+const CONTROL: usize = 8;
+
+/// Slow modulation rates in hertz, two per line. Distinct and unrelated,
+/// so the drift never lines up into an audible pattern.
+const MOD_HZ: [[f32; 2]; N] = [
+    [0.13, 0.31],
+    [0.17, 0.43],
+    [0.21, 0.57],
+    [0.11, 0.71],
+    [0.19, 0.83],
+    [0.23, 0.97],
+    [0.15, 1.13],
+    [0.27, 1.27],
+    [0.12, 0.37],
+    [0.16, 0.49],
+    [0.22, 0.61],
+    [0.14, 0.77],
+    [0.18, 0.89],
+    [0.24, 1.03],
+    [0.26, 1.19],
+    [0.29, 0.53],
+];
+
+/// Sixteen-line feedback delay network with absorption filters and drifting
+/// delay lengths.
+struct Fdn {
+    lines: [DelayLine; N],
+    sample_rate: f32,
+    max_len: f32,
+    len_target: [f32; N],
+    len_cur: [f32; N],
+    len_coeff: f32,
+    /// Current delay including modulation, and its per-sample step.
+    delay: [f32; N],
+    step: [f32; N],
+    t60: f32,
+    gains: [f32; N],
+    damp_a: f32,
+    damp_state: [f32; N],
+    mod_depth: f32,
+    phase: [[f32; 2]; N],
+    inc: [[f32; 2]; N],
+    ctrl: usize,
+}
+
+impl Fdn {
+    fn new(sample_rate: f32, max_len: usize) -> Fdn {
+        let lines = std::array::from_fn(|_| DelayLine::new(max_len + 64));
+        let mut phase = [[0.0; 2]; N];
+        let mut inc = [[0.0; 2]; N];
+        for i in 0..N {
+            for k in 0..2 {
+                // Spread the start phases so the drift is uncorrelated from
+                // the first sample.
+                phase[i][k] = ((i * 7 + k * 5) % N) as f32 / N as f32;
+                inc[i][k] = MOD_HZ[i][k] / sample_rate.max(1.0);
+            }
+        }
+        let default_len = LINE_MS.map(|ms| ms * 0.001 * sample_rate * 0.7);
+        let mut f = Fdn {
+            lines,
+            sample_rate,
+            max_len: max_len as f32,
+            len_target: default_len,
+            len_cur: default_len,
+            len_coeff: 1.0 - (-(CONTROL as f32) / (0.15 * sample_rate.max(1.0))).exp(),
+            delay: default_len,
+            step: [0.0; N],
+            t60: 2.0,
+            gains: [0.9; N],
+            damp_a: 0.0,
+            damp_state: [0.0; N],
+            mod_depth: 0.0,
+            phase,
+            inc,
+            ctrl: 0,
+        };
+        f.update_gains();
+        f
+    }
+
+    /// Sets the base delay of each line in samples. With `immediate` the
+    /// lengths jump; otherwise they glide (about 150 ms time constant).
+    fn set_lengths(&mut self, lengths: [f32; N], immediate: bool) {
+        for (i, len) in lengths.iter().enumerate() {
+            self.len_target[i] = len.clamp(8.0, self.max_len);
+            if immediate {
+                self.len_cur[i] = self.len_target[i];
+                self.delay[i] = self.len_target[i];
+            }
+        }
+        if immediate {
+            self.update_gains();
+            self.step = [0.0; N];
+        }
+    }
+
+    fn set_t60(&mut self, seconds: f32) {
+        self.t60 = seconds.clamp(0.01, 600.0);
+    }
+
+    /// In-loop damping low-pass. At or above 0.45 of the sample rate the
+    /// filter is bypassed.
+    fn set_damping_hz(&mut self, hz: f32) {
+        if hz >= self.sample_rate * 0.45 {
+            self.damp_a = 0.0;
+        } else {
+            self.damp_a = (-std::f32::consts::TAU * hz.max(20.0) / self.sample_rate).exp();
+        }
+    }
+
+    /// Peak delay deviation of the modulation in samples.
+    fn set_mod_depth(&mut self, samples: f32) {
+        self.mod_depth = samples.clamp(0.0, 32.0);
+    }
+
+    fn len_target(&self) -> [f32; N] {
+        self.len_target
+    }
+
+    fn clear(&mut self) {
+        for l in &mut self.lines {
+            l.clear();
+        }
+        self.damp_state = [0.0; N];
+        self.ctrl = 0;
+    }
+
+    fn update_gains(&mut self) {
+        for i in 0..N {
+            self.gains[i] = 10f32.powf(-3.0 * self.len_cur[i] / (self.t60 * self.sample_rate));
+        }
+    }
+
+    /// Runs every `CONTROL` samples: glides lengths, refreshes the decay
+    /// gains and sets up the linear delay ramps for the next stretch.
+    fn control(&mut self) {
+        for i in 0..N {
+            self.len_cur[i] += (self.len_target[i] - self.len_cur[i]) * self.len_coeff;
+        }
+        self.update_gains();
+        let advance = CONTROL as f32;
+        for i in 0..N {
+            let m = if self.mod_depth > 0.0 {
+                let p0 = self.phase[i][0] + self.inc[i][0] * advance;
+                let p1 = self.phase[i][1] + self.inc[i][1] * advance;
+                self.phase[i][0] = p0 - p0.floor();
+                self.phase[i][1] = p1 - p1.floor();
+                self.mod_depth
+                    * (0.62 * fast_sin_turns(self.phase[i][0])
+                        + 0.38 * fast_sin_turns(self.phase[i][1]))
+            } else {
+                0.0
+            };
+            let next = (self.len_cur[i] + m).clamp(4.0, self.max_len + 32.0);
+            self.step[i] = (next - self.delay[i]) / advance;
+        }
+    }
+
+    /// Advances one sample. Returns the damped line outputs.
+    #[inline]
+    fn process(&mut self, input: &[f32; N]) -> [f32; N] {
+        if self.ctrl == 0 {
+            self.control();
+            self.ctrl = CONTROL;
+        }
+        self.ctrl -= 1;
+
+        let mut fed = [0.0f32; N];
+        let mut outs = [0.0f32; N];
+        let a = self.damp_a;
+        for i in 0..N {
+            self.delay[i] += self.step[i];
+            let tap = self.lines[i].read_hermite(self.delay[i]);
+            let damped = if a > 0.0 {
+                sanitize((1.0 - a) * tap + a * self.damp_state[i])
+            } else {
+                tap
+            };
+            self.damp_state[i] = damped;
+            outs[i] = damped;
+            fed[i] = damped * self.gains[i] * FLIP[i];
+        }
+        hadamard16(&mut fed);
+        for i in 0..N {
+            self.lines[i].push(sanitize(input[i] + fed[i]));
+        }
+        outs
+    }
+}
 
 /// Reverb effect. See the module docs.
 pub struct Reverb {
@@ -277,7 +623,7 @@ pub struct Reverb {
     pre: [DelayLine; 2],
     pre_glide: TimeGlide,
     diffusers: [[Allpass; 4]; 2],
-    fdn: Fdn8,
+    fdn: Fdn,
     low_cut: [OnePoleHighpass; 2],
     high_cut: [OnePoleLowpass; 2],
     low_cut_on: bool,
@@ -314,7 +660,7 @@ impl Reverb {
             pre: [DelayLine::new(16), DelayLine::new(16)],
             pre_glide: TimeGlide::new(2.0),
             diffusers: make_diffusers(48_000.0),
-            fdn: Fdn8::new(48_000.0, 64),
+            fdn: Fdn::new(48_000.0, 64),
             low_cut: [OnePoleHighpass::default(); 2],
             high_cut: [OnePoleLowpass::default(); 2],
             low_cut_on: false,
@@ -359,9 +705,8 @@ impl Fx for Reverb {
         self.pre_glide.configure(sr, 0.08, 0.4);
         self.diffusers = make_diffusers(sr);
         // Longest line at the largest size, plus modulation headroom.
-        let max_line = (LINE_MS[7] * 0.001 * sr * 2.0) as usize + 64;
-        self.fdn = Fdn8::new(sr, max_line);
-        self.fdn.set_mixing(Mixing::Hadamard);
+        let max_line = (130.0 * 0.001 * sr * 2.0) as usize + 64;
+        self.fdn = Fdn::new(sr, max_line);
         self.width.set_ramp(sr, RAMP_SECONDS);
         self.mix.set_ramp(sr, RAMP_SECONDS);
         self.early.set_ramp(sr, RAMP_SECONDS);
@@ -397,7 +742,7 @@ impl Fx for Reverb {
                 self.fdn.set_damping_hz(hz);
             }
             ID_DIFFUSION => {
-                let g = 0.7 * value;
+                let g = 0.75 * value;
                 for chain in &mut self.diffusers {
                     for a in chain {
                         a.set_gain(g);
@@ -471,14 +816,14 @@ impl Fx for Reverb {
                 b = self.diffusers[1][k].process(b);
             }
 
-            let mut feed = [0.0f32; 8];
+            let mut feed = [0.0f32; N];
             for (i, f) in feed.iter_mut().enumerate() {
-                *f = 0.5 * INJECT[i] * if i % 2 == 0 { a } else { b };
+                *f = INJECT_GAIN * INJECT[i] * if i % 2 == 0 { a } else { b };
             }
             let taps = self.fdn.process(&feed);
             let mut wl = 0.0;
             let mut wr = 0.0;
-            for i in 0..8 {
+            for i in 0..N {
                 wl += TAP_L[i] * taps[i];
                 wr += TAP_R[i] * taps[i];
             }
@@ -676,5 +1021,107 @@ mod tests {
             rv.process(&ctx, &[], &mut l, &mut r);
         }
         assert!(rv.is_silent());
+    }
+
+    /// Normalized echo density (Abel and Huang): share of samples in a
+    /// Hann-weighted window that exceed the window's RMS, divided by the
+    /// 31.7% a Gaussian noise tail would give. 1.0 means fully diffuse.
+    fn echo_density(x: &[f32], start: usize, win: usize) -> f32 {
+        let w: Vec<f32> = (0..win)
+            .map(|i| 0.5 - 0.5 * (std::f32::consts::TAU * (i as f32 + 0.5) / win as f32).cos())
+            .collect();
+        let wsum: f32 = w.iter().sum();
+        let seg = &x[start..start + win];
+        let rms = (seg.iter().zip(&w).map(|(v, w)| v * v * w).sum::<f32>() / wsum).sqrt();
+        let above: f32 = seg
+            .iter()
+            .zip(&w)
+            .filter(|(v, _)| v.abs() > rms)
+            .map(|(_, w)| w)
+            .sum();
+        above / wsum / 0.3173
+    }
+
+    #[test]
+    fn echo_density_builds_within_a_few_tens_of_milliseconds() {
+        let mut rv = Reverb::new();
+        rv.set_param(ID_MIX, 1.0);
+        rv.set_param(ID_PREDELAY, 0.0);
+        rv.prepare(SR, 512);
+        let (l, _) = impulse_response(&mut rv, 48_000);
+        let mut sum = 0.0;
+        for k in 0..8 {
+            sum += echo_density(&l, 4_800 + k * 1_024, 1_024);
+        }
+        let mean = sum / 8.0;
+        assert!(
+            (0.85..1.2).contains(&mean),
+            "mean echo density {mean} between 100 and 270 ms"
+        );
+    }
+
+    #[test]
+    fn tail_spectrum_is_smooth_not_ringing() {
+        // A diffuse tail has an exponentially distributed power spectrum
+        // (standard deviation 5.6 dB around its local mean). Ringing modes
+        // push the spread and the worst peaks well past that.
+        for decay in [1.0f32, 4.0] {
+            let mut rv = Reverb::new();
+            rv.set_param(ID_MIX, 1.0);
+            rv.set_param(ID_DECAY, decay);
+            rv.set_param(ID_DAMPING, 0.3);
+            rv.prepare(SR, 512);
+            let (l, _) = impulse_response(&mut rv, 24_576);
+            let n = 8_192;
+            let seg = &l[4_800..4_800 + n];
+            // Naive DFT over 200 Hz .. 5 kHz at the FFT bin spacing.
+            let k0 = (200.0 / SR * n as f32) as usize;
+            let k1 = (5_000.0 / SR * n as f32) as usize;
+            let power: Vec<f32> = (k0..k1)
+                .map(|k| {
+                    let (mut re, mut im) = (0.0f64, 0.0f64);
+                    for (i, v) in seg.iter().enumerate() {
+                        let w = 0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / n as f64).cos();
+                        let ph = std::f64::consts::TAU * (k * i % n) as f64 / n as f64;
+                        re += f64::from(*v) * w * ph.cos();
+                        im -= f64::from(*v) * w * ph.sin();
+                    }
+                    (re * re + im * im) as f32
+                })
+                .collect();
+            let db: Vec<f32> = (16..power.len() - 16)
+                .map(|i| {
+                    let local = power[i - 16..=i + 16].iter().sum::<f32>() / 33.0;
+                    10.0 * (power[i] / local).max(1e-12).log10()
+                })
+                .collect();
+            let mean = db.iter().sum::<f32>() / db.len() as f32;
+            let std = (db.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / db.len() as f32).sqrt();
+            let worst = db.iter().fold(f32::MIN, |m, v| m.max(*v));
+            assert!(std < 7.0, "decay {decay}: spectral spread {std} dB");
+            assert!(
+                worst < 14.0,
+                "decay {decay}: peak {worst} dB over local mean"
+            );
+        }
+    }
+
+    #[test]
+    fn damping_shortens_high_frequency_decay_only() {
+        let mut rv = Reverb::new();
+        rv.set_param(ID_MIX, 1.0);
+        rv.set_param(ID_DECAY, 3.0);
+        rv.set_param(ID_DAMPING, 0.7);
+        rv.set_param(ID_PREDELAY, 0.0);
+        rv.prepare(SR, 512);
+        let (l, _) = impulse_response(&mut rv, (SR * 6.0) as usize);
+        // Split with one-pole filters: below 400 Hz and above 6 kHz.
+        let mut lo = OnePoleLowpass::new(SR, 400.0);
+        let mut hi = OnePoleHighpass::new(SR, 6_000.0);
+        let low: Vec<f32> = l.iter().map(|v| lo.process(*v)).collect();
+        let high: Vec<f32> = l.iter().map(|v| hi.process(*v)).collect();
+        let (tl, th) = (t60_from_edc(&edc_db(&low)), t60_from_edc(&edc_db(&high)));
+        assert!(tl > 2.4 && tl < 3.8, "low band t60 {tl}");
+        assert!(th < tl * 0.4, "high band t60 {th} vs low {tl}");
     }
 }
