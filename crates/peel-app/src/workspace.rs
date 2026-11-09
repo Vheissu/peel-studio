@@ -35,6 +35,20 @@ pub enum Tool {
     Slice,
 }
 
+/// Mixer strip size. Compact fits many tracks, Expanded names inserts and
+/// shows level scales, Full adds sends and numeric fields.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum MixerSize {
+    Compact,
+    #[default]
+    Expanded,
+    Full,
+}
+
+impl MixerSize {
+    pub const ALL: [MixerSize; 3] = [MixerSize::Compact, MixerSize::Expanded, MixerSize::Full];
+}
+
 /// What the inspector shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Focus {
@@ -103,6 +117,11 @@ pub struct Workspace {
     pub roll: RollView,
     pub playlist: PlaylistView,
     pub mixer_scroll: f32,
+    pub mixer_size: MixerSize,
+    /// Dock height before the mixer was given the whole window.
+    pub mixer_restore_h: Option<f32>,
+    /// The large effect editor (insert, EQ, mastering) and its view state.
+    pub fx: crate::fx_editor::FxState,
     pub rack_scroll: f32,
     pub rack_graph: bool,
     pub octave: i32,
@@ -163,6 +182,9 @@ impl Default for Workspace {
                 fit: 8,
             },
             mixer_scroll: 0.0,
+            mixer_size: MixerSize::default(),
+            mixer_restore_h: None,
+            fx: Default::default(),
             rack_scroll: 0.0,
             rack_graph: false,
             octave: 4,

@@ -601,7 +601,7 @@ fn is_wide_choice(p: &ParamDescriptor) -> bool {
     p.is_choice() && (p.choices.len() > 2 || p.choices != ["Off", "On"])
 }
 
-fn device_panel(
+pub(crate) fn device_panel(
     ui: &mut Ui,
     r: Rect,
     dev: &DeviceInstance,
@@ -1280,11 +1280,12 @@ fn sends_section(ui: &mut Ui, body: &mut Rect, tr: &peel_document::MixerTrack, s
 /// True if audio from `from` can reach `to` through outputs and sends.
 /// Gain reduction of a dynamics insert, drawn from the right edge leftwards
 /// over 0 to 24 dB, held and released smoothly.
-fn reduction_meter(ui: &mut Ui, r: Rect, s: &Session, device: Id) {
+pub(crate) fn reduction_meter(ui: &mut Ui, r: Rect, s: &Session, device: Id) {
     let t = ui.theme.clone();
     let fall = 0.05f32.powf(ui.dt().clamp(0.0, 0.1));
+    let now = crate::util::reduction_db(ui, s, device);
     let held = ui.state::<f32>(W::new(("gr-meter", device)));
-    *held = (*held * fall).max(s.take_reduction_db(device));
+    *held = (*held * fall).max(now);
     let db = *held;
     let bar = Rect::from_center(r.center(), r.w, 6.0);
     ui.scene.rect(bar, 3.0, t.bg);
@@ -1305,7 +1306,7 @@ fn reduction_meter(ui: &mut Ui, r: Rect, s: &Session, device: Id) {
 }
 
 /// Chooses which mixer track keys a sidechain-capable insert.
-fn sidechain_row(ui: &mut Ui, row: Rect, s: &mut Session, track: Id, dev: &DeviceInstance) {
+pub(crate) fn sidechain_row(ui: &mut Ui, row: Rect, s: &mut Session, track: Id, dev: &DeviceInstance) {
     let t = ui.theme.clone();
     let mut rr = row;
     ui.text(

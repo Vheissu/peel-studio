@@ -1,11 +1,16 @@
 //! Peel Studio desktop application.
 
+mod analysis_view;
 mod browser;
 mod dialogs;
+mod eq_editor;
+mod eq_resonance;
+mod fx_editor;
 mod harmony;
 mod inspector;
 mod keys;
 mod layout;
+mod mastering_ui;
 mod midi;
 mod mixer;
 mod note_tools;

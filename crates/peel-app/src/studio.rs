@@ -439,6 +439,56 @@ impl Studio {
                 .edit("Add EQ", |p| p.mixer.tracks[0].inserts.insert(0, eq));
             self.ws.focus = Some(Focus::Track(master));
         }
+        // `PEEL_FX=eq|mastering` opens that effect's editor on the master
+        // (adding the effect first); `PEEL_FX_MODE=advanced` picks the
+        // Mastering view, `PEEL_FX_TAB=resonance` the EQ's suggestions
+        // (with `PEEL_FX_LISTEN=1` already listening) and
+        // `PEEL_MIXER_SIZE=compact|full` the strip size. Real devices only.
+        if let Ok(size) = std::env::var("PEEL_MIXER_SIZE") {
+            self.ws.mixer_size = match size.as_str() {
+                "compact" => crate::workspace::MixerSize::Compact,
+                "full" => crate::workspace::MixerSize::Full,
+                _ => crate::workspace::MixerSize::Expanded,
+            };
+        }
+        if let Ok(fx) = std::env::var("PEEL_FX") {
+            let master = self.session.project().mixer.tracks[0].id;
+            match fx.as_str() {
+                "eq" => {
+                    let existing = self.session.project().mixer.tracks[0]
+                        .inserts
+                        .iter()
+                        .find(|d| d.type_id == "peel.fx.eq")
+                        .map(|d| d.id);
+                    let id = existing.unwrap_or_else(|| {
+                        let eq = peel_session::template::device(
+                            "peel.fx.eq",
+                            Some("Vocal Presence"),
+                        );
+                        let id = eq.id;
+                        self.session
+                            .doc
+                            .edit("Add EQ", |p| p.mixer.tracks[0].inserts.insert(0, eq));
+                        id
+                    });
+                    self.ws.fx.open(master, id);
+                    self.ws.focus = Some(Focus::Track(master));
+                    if std::env::var("PEEL_FX_TAB").as_deref() == Ok("resonance") {
+                        self.ws.fx.eq.tab = crate::eq_editor::Tab::Resonance;
+                    }
+                    if std::env::var_os("PEEL_FX_LISTEN").is_some() {
+                        self.ws.fx.eq.learn = crate::eq_editor::Learn::Listening;
+                    }
+                }
+                "mastering" => {
+                    crate::mixer::open_mastering(&mut self.session, &mut self.ws);
+                    if std::env::var("PEEL_FX_MODE").as_deref() == Ok("advanced") {
+                        self.ws.fx.mastering.advanced = true;
+                    }
+                }
+                _ => {}
+            }
+        }
         if std::env::var_os("PEEL_EXPORT").is_some() {
             self.ws.export_panel = true;
         }
@@ -535,6 +585,9 @@ impl Studio {
         }
         if ui.input.take_named(NamedKey::F1) {
             self.show_keys = !self.show_keys;
+        }
+        if self.ws.fx.is_open() && !ui.any_popup() && ui.input.take_named(NamedKey::Escape) {
+            self.ws.fx.close();
         }
         if ui.input.take_named(NamedKey::Escape) {
             self.session.stop_preview();
@@ -1130,6 +1183,16 @@ impl Studio {
             }
         }
         self.status_bar(ui, status);
+        crate::fx_editor::draw(
+            ui,
+            Rect {
+                y: top.bottom(),
+                h: status.y - top.bottom(),
+                ..screen
+            },
+            &mut self.session,
+            &mut self.ws,
+        );
         crate::layout::persist(ui, self);
 
         let leftovers = std::mem::take(&mut ui.input.dropped_files);
@@ -1211,7 +1274,7 @@ fn dock(ui: &mut Ui, r: Rect, studio: &mut Studio) {
     let tools_need = match studio.ws.dock {
         DockTab::Rack => 230.0,
         DockTab::PianoRoll => 360.0,
-        DockTab::Mixer => 0.0,
+        DockTab::Mixer => 270.0,
         DockTab::Perform => 300.0,
     };
     let show_labels = !shown || head.w - labels_w - picker_w - 16.0 >= tools_need;
@@ -1259,7 +1322,7 @@ fn dock(ui: &mut Ui, r: Rect, studio: &mut Studio) {
         DockTab::PianoRoll => {
             piano_roll::draw(ui, content, tools, &mut studio.session, &mut studio.ws)
         }
-        DockTab::Mixer => mixer::draw(ui, content, &mut studio.session, &mut studio.ws),
+        DockTab::Mixer => mixer::draw(ui, content, tools, &mut studio.session, &mut studio.ws),
         DockTab::Perform => {
             crate::perform::draw(ui, content, tools, &mut studio.session, &mut studio.ws)
         }

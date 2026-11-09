@@ -205,7 +205,7 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
         right.cut_right(12.0);
         let meter_r = right.cut_right(96.0).shrink2(0.0, 9.0);
         let master = studio.session.project().mixer.tracks[0].id;
-        let peaks = studio.session.take_track_meter(master);
+        let peaks = crate::util::track_peaks(ui, &studio.session, master);
         horizontal_meter(ui, W::new("master-meter"), meter_r, peaks);
         right.cut_right(10.0);
         let load = studio.session.cpu_load();

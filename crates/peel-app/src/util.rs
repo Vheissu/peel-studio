@@ -157,3 +157,60 @@ pub fn hint(ui: &mut Ui, id: W, r: Rect, text: &str) -> f32 {
         18.0
     }
 }
+
+/// Peak of a mixer track since the previous frame. Telemetry is read
+/// destructively, so every view of the same track (the mixer strip, the
+/// top-bar meter) shares one read per frame.
+pub fn track_peaks(ui: &mut Ui, s: &peel_session::Session, track: peel_document::Id) -> (f32, f32) {
+    let now = ui.time();
+    let st = ui.state::<(f64, (f32, f32))>(W::new(("track-peaks", track)));
+    if st.0 != now {
+        *st = (now, s.take_track_meter(track));
+    }
+    st.1
+}
+
+/// Gain reduction (dB, positive) of a dynamics device since the previous
+/// frame, read once per frame however many views show it.
+pub fn reduction_db(ui: &mut Ui, s: &peel_session::Session, device: peel_document::Id) -> f32 {
+    let now = ui.time();
+    let st = ui.state::<(f64, f32)>(W::new(("reduction-read", device)));
+    if st.0 != now {
+        *st = (now, s.take_reduction_db(device));
+    }
+    st.1
+}
+
+/// Linear peak as dBFS text; `-inf` below -90.
+pub fn peak_text(peak: f32) -> String {
+    if peak <= 3.2e-5 {
+        "-inf".into()
+    } else {
+        format!("{:+.1}", 20.0 * peak.log10())
+    }
+}
+
+/// Pan as the console legend: `C`, `L35`, `R100`.
+pub fn format_pan(pan: f32) -> String {
+    let v = (pan.abs() * 100.0).round() as i32;
+    match v {
+        0 => "C".into(),
+        _ if pan < 0.0 => format!("L{v}"),
+        _ => format!("R{v}"),
+    }
+}
+
+#[cfg(test)]
+mod audio_tests {
+    use super::*;
+
+    #[test]
+    fn pan_and_peak_legends() {
+        assert_eq!(format_pan(0.0), "C");
+        assert_eq!(format_pan(-0.35), "L35");
+        assert_eq!(format_pan(1.0), "R100");
+        assert_eq!(peak_text(0.0), "-inf");
+        assert_eq!(peak_text(1.0), "+0.0");
+        assert_eq!(peak_text(0.5), "-6.0");
+    }
+}

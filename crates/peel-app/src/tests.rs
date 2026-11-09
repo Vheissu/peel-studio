@@ -2251,3 +2251,419 @@ fn inspector_knob_labels_fit_at_the_default_width() {
         );
     }
 }
+
+// ---- mixer, effect editor, EQ and Mastering ----
+
+use crate::workspace::{Focus, MixerSize};
+
+impl Harness {
+    fn open_mixer(&mut self) {
+        self.studio.ws.dock = DockTab::Mixer;
+        self.frames(4);
+    }
+
+    fn master(&self) -> peel_document::Id {
+        self.session().project().mixer.tracks[0].id
+    }
+
+    fn add_device(&mut self, track: peel_document::Id, type_id: &str) -> peel_document::Id {
+        let dev = template::device(type_id, None);
+        let id = dev.id;
+        self.studio
+            .session
+            .doc
+            .edit("Add device", |p| p.mixer.track_mut(track).unwrap().inserts.push(dev));
+        self.frames(2);
+        id
+    }
+
+    fn param(&self, device: peel_document::Id, key: &str) -> f32 {
+        let d = peel_session::find_device(self.session().project(), device).unwrap();
+        d.params.get(key).copied().unwrap_or_else(|| {
+            peel_devices::descriptor(&d.type_id)
+                .and_then(|x| x.param_by_key(key))
+                .map_or(0.0, |p| p.default)
+        })
+    }
+}
+
+/// Every strip control sits inside the dock at both window sizes and every
+/// strip size, and the fader keeps a usable length.
+#[test]
+fn mixer_strips_fit_the_dock_at_both_window_sizes() {
+    for size in [vec2(1200.0, 720.0), vec2(1440.0, 900.0)] {
+        for mixer_size in MixerSize::ALL {
+            let mut h = Harness::new();
+            h.size = size;
+            h.studio.ws.mixer_size = mixer_size;
+            h.open_mixer();
+            h.frames(3);
+            let tracks = h.session().project().mixer.tracks.clone();
+            let master = tracks[0].id;
+            let screen = Rect { x: 0.0, y: 0.0, w: size.x, h: size.y };
+            for tr in [&tracks[1], &tracks[0]] {
+                let fader = h.rect(W::new(("fader", tr.id)));
+                assert!(fader.h >= 80.0, "{size:?} {mixer_size:?}: fader {}", fader.h);
+                for id in [
+                    W::new(("mute", tr.id)),
+                    W::new(("strip-pan", tr.id)),
+                    W::new(("peak-reset", tr.id)),
+                ] {
+                    let r = h.rect(id);
+                    assert!(
+                        screen.contains(r.min()) && screen.contains(vec2(r.right(), r.bottom())),
+                        "{size:?} {mixer_size:?}: {id:?} {r:?}"
+                    );
+                    assert!(r.bottom() <= fader.bottom() + 120.0);
+                }
+                // Mute sits below the fader, not over it.
+                assert!(h.rect(W::new(("mute", tr.id))).y >= fader.bottom() - 1.0);
+            }
+            // Master is pinned to the right of every other strip.
+            let m = h.rect(W::new(("fader", master)));
+            let first = h.rect(W::new(("fader", tracks[1].id)));
+            assert!(m.x > first.x);
+            assert!(m.right() <= size.x);
+        }
+    }
+}
+
+#[test]
+fn strip_size_changes_width() {
+    let mut h = Harness::new();
+    h.open_mixer();
+    let id = h.session().project().mixer.tracks[1].id;
+    let mut widths = Vec::new();
+    for size in MixerSize::ALL {
+        h.studio.ws.mixer_size = size;
+        h.frames(2);
+        widths.push(h.rect(W::new(("strip-bg", id))).w);
+    }
+    assert!(widths[0] < widths[1] && widths[1] < widths[2], "{widths:?}");
+}
+
+#[test]
+fn mute_and_solo_toggle_and_undo() {
+    let mut h = Harness::new();
+    h.open_mixer();
+    let id = h.session().project().mixer.tracks[1].id;
+    h.click(W::new(("mute", id)));
+    assert!(h.session().project().mixer.track(id).unwrap().muted);
+    h.click(W::new(("solo", id)));
+    assert!(h.session().project().mixer.track(id).unwrap().solo);
+    h.studio.session.doc.undo();
+    assert!(!h.session().project().mixer.track(id).unwrap().solo);
+    h.studio.session.doc.undo();
+    assert!(!h.session().project().mixer.track(id).unwrap().muted);
+}
+
+#[test]
+fn a_fader_drag_is_one_undo_step() {
+    let mut h = Harness::new();
+    h.open_mixer();
+    let id = h.session().project().mixer.tracks[1].id;
+    let before = h.session().project().mixer.track(id).unwrap().gain_db;
+    let c = h.rect(W::new(("fader", id))).center();
+    h.drag(c, c + vec2(0.0, 40.0), 12);
+    assert!(h.session().project().mixer.track(id).unwrap().gain_db < before - 2.0);
+    h.studio.session.doc.undo();
+    assert_eq!(h.session().project().mixer.track(id).unwrap().gain_db, before);
+}
+
+#[test]
+fn clicking_a_peak_readout_clears_its_clip_lamp() {
+    let mut h = Harness::new();
+    h.open_mixer();
+    let id = h.session().project().mixer.tracks[1].id;
+    let key = W::new(("peak-hold", id));
+    {
+        let hold = h.ui.state::<crate::mixer::PeakHold>(key);
+        hold.clipped = true;
+        hold.max = 1.3;
+    }
+    h.frame();
+    h.click(W::new(("peak-reset", id)));
+    let hold = h.ui.state::<crate::mixer::PeakHold>(key);
+    assert!(!hold.clipped && hold.max == 0.0);
+}
+
+#[test]
+fn every_insert_is_reachable_by_scrolling_the_chain() {
+    let mut h = Harness::new();
+    h.studio.ws.mixer_size = MixerSize::Expanded;
+    h.open_mixer();
+    let id = h.session().project().mixer.tracks[1].id;
+    for _ in 0..8 {
+        h.add_device(id, "peel.fx.limiter");
+    }
+    let n = h.session().project().mixer.track(id).unwrap().inserts.len();
+    assert!(n >= 8);
+    let last = W::new(("insert", id, n - 1));
+    let visible = |h: &Harness| {
+        let strip = h.rect(W::new(("strip-bg", id)));
+        h.ui.widget_rect(last)
+            .is_some_and(|r| r.y >= strip.y && r.bottom() <= strip.bottom())
+    };
+    assert!(!visible(&h), "the last insert starts below the visible rows");
+    let at = h.rect(W::new(("insert", id, 0usize))).center();
+    h.move_to(at);
+    for _ in 0..12 {
+        h.ui.input.scroll = vec2(0.0, -60.0);
+        h.ui.input.had_event = true;
+        h.frame();
+    }
+    assert!(visible(&h), "scrolling reaches the last insert");
+}
+
+#[test]
+fn clicking_an_insert_opens_its_editor_and_escape_closes_it() {
+    let mut h = Harness::new();
+    h.open_mixer();
+    let id = h.session().project().mixer.tracks[1].id;
+    let eq = h.add_device(id, "peel.fx.eq");
+    let comp = h.add_device(id, "peel.fx.compressor");
+    let eq_slot = h.session().project().mixer.track(id).unwrap().inserts.iter().position(|d| d.id == eq).unwrap();
+    let comp_slot = h.session().project().mixer.track(id).unwrap().inserts.iter().position(|d| d.id == comp).unwrap();
+    h.click(W::new(("insert", id, eq_slot)));
+    let t = h.studio.ws.fx.target.expect("editor open");
+    assert_eq!((t.track, t.device), (id, eq));
+    assert_eq!(h.studio.ws.focus, Some(Focus::Track(id)));
+    // Chain chips switch the open effect.
+    h.click(W::new(("fx-chip", comp)));
+    assert_eq!(h.studio.ws.fx.target.unwrap().device, comp);
+    let _ = comp_slot;
+    h.ui.input.keys.push(escape());
+    h.ui.input.had_event = true;
+    h.frames(2);
+    assert!(h.studio.ws.fx.target.is_none());
+}
+
+fn escape() -> peel_ui::input::KeyPress {
+    peel_ui::input::KeyPress {
+        key: peel_ui::Key::Named(peel_ui::NamedKey::Escape),
+        code: None,
+        repeat: false,
+        modifiers: Default::default(),
+        consumed: false,
+    }
+}
+
+#[test]
+fn the_effect_editor_fits_inside_both_window_sizes() {
+    for size in [vec2(1200.0, 720.0), vec2(1440.0, 900.0)] {
+        let area = Rect { x: 0.0, y: 44.0, w: size.x, h: size.y - 44.0 - 24.0 };
+        let sheet = crate::fx_editor::sheet_rect(area);
+        assert!(sheet.x >= area.x && sheet.right() <= area.right(), "{size:?} {sheet:?}");
+        assert!(sheet.y >= area.y && sheet.bottom() <= area.bottom(), "{size:?} {sheet:?}");
+        assert!(sheet.w >= 900.0 && sheet.h >= 560.0);
+    }
+}
+
+#[test]
+fn the_editor_follows_a_moved_device_and_closes_when_it_is_removed() {
+    let mut h = Harness::new();
+    h.open_mixer();
+    let a = h.session().project().mixer.tracks[1].id;
+    let b = h.session().project().mixer.tracks[2].id;
+    let eq = h.add_device(a, "peel.fx.eq");
+    h.studio.ws.fx.open(a, eq);
+    h.frames(2);
+    h.studio.session.doc.edit("Move", |p| {
+        let d = p.mixer.track_mut(a).unwrap().inserts.pop().unwrap();
+        p.mixer.track_mut(b).unwrap().inserts.push(d);
+    });
+    h.frames(3);
+    assert_eq!(h.studio.ws.fx.target.map(|t| t.track), Some(b));
+    h.studio.session.doc.edit("Remove", |p| p.mixer.track_mut(b).unwrap().inserts.clear());
+    h.frames(3);
+    assert!(h.studio.ws.fx.target.is_none());
+}
+
+#[test]
+fn the_mastering_button_adds_the_effect_once_and_opens_it() {
+    let mut h = Harness::new();
+    h.open_mixer();
+    let master = h.master();
+    let count = |h: &Harness| {
+        h.session().project().mixer.tracks[0]
+            .inserts
+            .iter()
+            .filter(|d| d.type_id == "peel.fx.mastering")
+            .count()
+    };
+    assert_eq!(count(&h), 0);
+    h.click(W::new("master-mastering"));
+    assert_eq!(count(&h), 1);
+    let dev = h.studio.ws.fx.target.expect("opened").device;
+    h.studio.ws.fx.close();
+    h.frames(2);
+    h.click(W::new("master-mastering"));
+    assert_eq!(count(&h), 1, "second click opens rather than adds");
+    assert_eq!(h.studio.ws.fx.target.unwrap().device, dev);
+    assert_eq!(h.studio.ws.focus, Some(Focus::Track(master)));
+}
+
+#[test]
+fn mastering_modes_show_the_same_values() {
+    let mut h = Harness::new();
+    h.open_mixer();
+    crate::mixer::open_mastering(&mut h.studio.session, &mut h.studio.ws);
+    h.frames(3);
+    let dev = h.studio.ws.fx.target.unwrap().device;
+    h.click(W::new(("master-preset", dev, 4usize)));
+    let before = peel_session::find_device(h.session().project(), dev).unwrap().params.clone();
+    assert!(before.get("input").copied().unwrap_or(0.0) > 1.0, "Loud preset applied");
+    let revision = h.session().doc.revision();
+    h.click(W::new("master-mode").with(1usize));
+    assert!(h.studio.ws.fx.mastering.advanced);
+    h.click(W::new("master-mode").with(0usize));
+    assert!(!h.studio.ws.fx.mastering.advanced);
+    let after = peel_session::find_device(h.session().project(), dev).unwrap().params.clone();
+    assert_eq!(before, after, "switching views never edits the sound");
+    assert_eq!(revision, h.session().doc.revision());
+}
+
+#[test]
+fn a_mastering_knob_drag_is_one_undo_step() {
+    let mut h = Harness::new();
+    h.open_mixer();
+    crate::mixer::open_mastering(&mut h.studio.session, &mut h.studio.ws);
+    h.frames(3);
+    let dev = h.studio.ws.fx.target.unwrap().device;
+    let desc = peel_devices::descriptor("peel.fx.mastering").unwrap();
+    let id = desc.param_by_key("input").unwrap().id;
+    let c = h.rect(W::new(("mknob", dev, id))).center();
+    h.drag(c, c + vec2(0.0, -40.0), 10);
+    assert!(h.param(dev, "input") > 2.0);
+    h.studio.session.doc.undo();
+    assert_eq!(h.param(dev, "input"), 0.0);
+}
+
+fn open_eq(h: &mut Harness) -> peel_document::Id {
+    h.open_mixer();
+    let master = h.master();
+    let eq = h.add_device(master, "peel.fx.eq");
+    h.studio.ws.fx.open(master, eq);
+    h.frames(4);
+    eq
+}
+
+#[test]
+fn dragging_an_eq_node_edits_frequency_and_gain_in_one_undo_step() {
+    let mut h = Harness::new();
+    let eq = open_eq(&mut h);
+    let (f0, g0) = (h.param(eq, "band3.freq"), h.param(eq, "band3.gain"));
+    let c = h.rect(W::new(("eq-node", eq, 3usize))).center();
+    h.drag(c, c + vec2(-60.0, -40.0), 12);
+    let (f1, g1) = (h.param(eq, "band3.freq"), h.param(eq, "band3.gain"));
+    assert!(f1 < f0 * 0.8, "{f0} -> {f1}");
+    assert!(g1 > g0 + 2.0, "{g0} -> {g1}");
+    assert_eq!(h.studio.ws.fx.eq.band, 3, "dragging selects the band");
+    h.studio.session.doc.undo();
+    assert_eq!(h.param(eq, "band3.freq"), f0);
+    assert_eq!(h.param(eq, "band3.gain"), g0);
+}
+
+#[test]
+fn scrolling_over_a_node_changes_q_and_double_click_toggles_it() {
+    let mut h = Harness::new();
+    let eq = open_eq(&mut h);
+    let c = h.rect(W::new(("eq-node", eq, 2usize))).center();
+    let q0 = h.param(eq, "band2.q");
+    h.move_to(c);
+    h.ui.input.scroll = vec2(0.0, 80.0);
+    h.ui.input.had_event = true;
+    h.frame();
+    assert!(h.param(eq, "band2.q") > q0);
+    let on = h.param(eq, "band2.enable");
+    h.move_to(c);
+    h.move_to(c);
+    h.ui.input.double_clicked = true;
+    h.press(0);
+    h.release(0);
+    assert_ne!(h.param(eq, "band2.enable"), on);
+}
+
+#[test]
+fn eq_presets_reset_and_compare_use_real_parameters() {
+    let mut h = Harness::new();
+    let eq = open_eq(&mut h);
+    let presets = peel_devices::presets("peel.fx.eq");
+    let air = presets.iter().position(|p| p.name == "Air").unwrap();
+    h.click(W::new(("eq-preset", eq)));
+    h.frames(2);
+    h.click(W::new(("eq-preset", eq)).with("menu").with(("item", air)));
+    assert_eq!(h.param(eq, "band4.gain"), 4.0);
+    // B starts as a copy; change it, flip back to A and the preset returns.
+    h.click(W::new(("eq-ab", eq)).with(1usize));
+    assert_eq!(h.param(eq, "band4.gain"), 4.0);
+    h.studio.session.doc.edit("tweak", |p| {
+        peel_session::find_device_mut(p, eq).unwrap().params.insert("band4.gain".into(), -3.0);
+    });
+    h.frames(2);
+    h.click(W::new(("eq-ab", eq)).with(0usize));
+    assert_eq!(h.param(eq, "band4.gain"), 4.0, "A kept the preset");
+    h.click(W::new(("eq-reset", eq)));
+    assert_eq!(h.param(eq, "band4.gain"), 0.0);
+}
+
+fn candidate(freq: f32) -> peel_engine::analysis::Resonance {
+    peel_engine::analysis::Resonance { frequency_hz: freq, q: 6.0, cut_db: -3.0, prominence_db: 8.0 }
+}
+
+#[test]
+fn resonance_cuts_use_a_free_bell_and_replacing_needs_a_second_click() {
+    let mut h = Harness::new();
+    let eq = open_eq(&mut h);
+    h.studio.ws.fx.eq.tab = crate::eq_editor::Tab::Resonance;
+    h.studio.ws.fx.eq.band = 1;
+    h.studio.ws.fx.held.insert(eq, vec![candidate(1800.0), candidate(5200.0)]);
+    h.frames(3);
+    // Band 3 is free (flat) after Band 2 is given a cut: use Band 2 first.
+    h.studio.session.doc.edit("busy", |p| {
+        let d = peel_session::find_device_mut(p, eq).unwrap();
+        d.params.insert("band2.enable".into(), 1.0);
+        d.params.insert("band2.gain".into(), -4.0);
+        d.params.insert("band3.enable".into(), 0.0);
+    });
+    h.frames(3);
+    h.click(W::new(("eq-apply", 0usize)));
+    assert_eq!(h.param(eq, "band3.freq"), 1800.0);
+    assert_eq!(h.param(eq, "band3.gain"), -3.0);
+    assert_eq!(h.param(eq, "band3.enable"), 1.0);
+    assert_eq!(h.param(eq, "band2.gain"), -4.0, "the user's band is untouched");
+    // Both bells are now in use: the next cut must be confirmed.
+    h.frames(2);
+    h.click(W::new(("eq-apply", 1usize)));
+    assert_eq!(h.param(eq, "band2.freq"), 400.0, "first click only arms the replacement");
+    assert!(h.studio.ws.fx.eq.confirm.is_some());
+    h.frames(2);
+    h.click(W::new(("eq-apply", 1usize)));
+    assert_eq!(h.param(eq, "band2.freq"), 5200.0);
+    assert!(h.studio.ws.fx.eq.confirm.is_none());
+}
+
+#[test]
+fn silence_gives_no_suggestions() {
+    let mut h = Harness::new();
+    let eq = open_eq(&mut h);
+    h.studio.ws.fx.eq.tab = crate::eq_editor::Tab::Resonance;
+    h.frames(2);
+    h.click(W::new("eq-listen"));
+    h.frames(30);
+    assert_eq!(h.studio.ws.fx.eq.learn, crate::eq_editor::Learn::Listening);
+    assert!(crate::eq_resonance::candidates(&h.studio.ws, eq).is_empty());
+    assert!(h.ui.widget_rect(W::new(("eq-apply", 0usize))).is_none());
+}
+
+#[test]
+fn editors_fit_with_every_pane_hidden() {
+    let mut h = Harness::new();
+    h.size = vec2(1200.0, 720.0);
+    h.studio.prefs.show_browser = false;
+    h.studio.prefs.set_inspector(false);
+    h.studio.prefs.show_editor = false;
+    let eq = open_eq(&mut h);
+    let r = h.rect(W::new(("eq-node", eq, 2usize)));
+    assert!(r.x > 0.0 && r.right() < 1200.0 && r.bottom() < 720.0);
+}
