@@ -49,9 +49,27 @@ impl Engine {
                 key,
                 velocity,
                 voice,
-            } => self.scoped_live_note(slot, key, velocity, voice, true, offset),
+                pitch,
+                pressure,
+                timbre,
+            } => {
+                if self.scoped_live_note(slot, key, velocity, voice, true, offset) {
+                    // One queued operation owns both events, even at the chunk's
+                    // live-event budget boundary. The note preflights two slots.
+                    self.stage.push_on(
+                        slot as usize,
+                        offset,
+                        EventKind::VoiceExpression {
+                            voice,
+                            pitch,
+                            pressure,
+                            timbre,
+                        },
+                    );
+                }
+            }
             LiveOp::VoiceOff { slot, key, voice } => {
-                self.scoped_live_note(slot, key, 0.0, voice, false, offset)
+                self.scoped_live_note(slot, key, 0.0, voice, false, offset);
             }
             LiveOp::On {
                 slot,
@@ -80,11 +98,11 @@ impl Engine {
         voice: u32,
         on: bool,
         offset: u32,
-    ) {
+    ) -> bool {
         let s = slot as usize;
         if on {
             if !self.slots.get(s).is_some_and(Option::is_some) {
-                return;
+                return false;
             }
             if let Some(previous) = self.active.remove_live_voice(slot, voice) {
                 self.stage_note_off(previous, offset);
@@ -104,7 +122,7 @@ impl Engine {
                 self.telemetry
                     .dropped_notes
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                return;
+                return false;
             }
             self.active.push(ActiveNote {
                 slot,
@@ -128,6 +146,7 @@ impl Engine {
                 },
             );
         }
+        true
     }
 
     /// Releases every live note on a slot (every slot for

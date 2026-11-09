@@ -111,11 +111,19 @@ impl MidiBridge {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .reset();
         if let Some(live) = guard.as_ref() {
+            let config = self
+                .mpe
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .config();
+            let range = if config.mode == super::MpeMode::Off {
+                self.expression.range()
+            } else {
+                config.manager_bend_range
+            };
             live.expression_batch(&[
                 EventKind::ResetExpression,
-                EventKind::PitchBendRange {
-                    semitones: self.expression.range(),
-                },
+                EventKind::PitchBendRange { semitones: range },
             ]);
         }
     }

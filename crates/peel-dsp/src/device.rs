@@ -78,7 +78,7 @@ pub enum EventKind {
     NoteOff { key: u8, velocity: f32, voice: u32 },
     /// Sample-accurate parameter change (plain value).
     Param { id: ParamId, value: f32 },
-    /// Live pitch displacement in semitones (finite, -48..=48).
+    /// Live pitch displacement in semitones (finite, -120..=120).
     PitchBend { semitones: f32 },
     /// MIDI pitch-wheel sensitivity. Native DSP already receives actual semitones.
     PitchBendRange { semitones: f32 },

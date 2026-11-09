@@ -105,6 +105,7 @@ pub(super) struct MpeState {
     channels: [Channel; 16],
     notes: [[Note; 128]; 16],
     pedal: bool,
+    manager_dirty: bool,
     next_voice: u32,
 }
 impl Default for MpeState {
@@ -115,6 +116,7 @@ impl Default for MpeState {
             channels: [Channel::default(); 16],
             notes: [[Note::default(); 128]; 16],
             pedal: false,
+            manager_dirty: false,
             next_voice: peel_engine::LIVE_VOICE_BASE + 128,
         }
     }
@@ -127,6 +129,7 @@ impl MpeState {
         self.channels.fill(Channel::default());
         self.notes.fill([Note::default(); 128]);
         self.pedal = false;
+        self.manager_dirty = false;
     }
     pub(super) fn configure(&mut self, config: MpeConfig) {
         self.reset();
@@ -165,6 +168,29 @@ impl MpeState {
             }
         }
     }
+    fn send_manager(&mut self, live: &LiveInput) {
+        let manager = self.channels[usize::from(self.config.manager())];
+        self.manager_dirty = !live.expression_batch(&[
+            peel_dsp::EventKind::PitchBendRange {
+                semitones: self.config.manager_bend_range,
+            },
+            peel_dsp::EventKind::PitchBend {
+                semitones: manager.bend * self.config.manager_bend_range,
+            },
+            peel_dsp::EventKind::ChannelPressure {
+                value: manager.pressure,
+            },
+        ]);
+    }
+    pub(super) fn zone_change(&self, event: MidiEvent) -> bool {
+        let manager = if self.listen_mode == MpeMode::Upper {
+            15
+        } else {
+            0
+        };
+        matches!(event,MidiEvent::ControlChange{channel,controller:6,..} if self.listen_mode!=MpeMode::Off && channel==manager
+            && self.channels[usize::from(channel)].rpn_msb==0 && self.channels[usize::from(channel)].rpn_lsb==6)
+    }
     pub(super) fn flush(&mut self, live: &LiveInput) {
         // Releases precede expression retries and keep their critical reserve.
         for ch in 0..16u8 {
@@ -179,6 +205,9 @@ impl MpeState {
                     note.held = false;
                 }
             }
+        }
+        if self.manager_dirty {
+            self.send_manager(live);
         }
         for ch in 0..16u8 {
             let (pitch, pressure, timbre) = self.snapshot(ch);
@@ -338,9 +367,16 @@ impl MpeState {
                 let previous = self.notes[usize::from(ch)][usize::from(key)];
                 if previous.voice != 0
                     && (previous.held || previous.sustained || previous.release_due)
-                    && !live.voice_off(previous.slot, previous.voice, key, ch)
                 {
-                    return true;
+                    if !live.voice_off(previous.slot, previous.voice, key, ch) {
+                        // Overload drops the new strike; only its old release retries.
+                        let previous = &mut self.notes[usize::from(ch)][usize::from(key)];
+                        previous.held = false;
+                        previous.sustained = false;
+                        previous.release_due = true;
+                        return true;
+                    }
+                    self.notes[usize::from(ch)][usize::from(key)] = Note::default();
                 }
                 // A reallocated member channel stops controlling old release tails.
                 for note in &mut self.notes[usize::from(ch)] {
@@ -386,6 +422,7 @@ impl MpeState {
                 self.channels[usize::from(ch)].bend =
                     f32::from(value) / if value < 0 { 8192.0 } else { 8191.0 };
                 if manager {
+                    self.send_manager(live);
                     self.update_all(live);
                 } else {
                     self.update(live, ch);
@@ -395,6 +432,7 @@ impl MpeState {
             MidiEvent::ChannelPressure { value, .. } => {
                 self.channels[usize::from(ch)].pressure = f32::from(value.min(127)) / 127.0;
                 if manager {
+                    self.send_manager(live);
                     self.update_all(live);
                 } else {
                     self.update(live, ch);
@@ -477,6 +515,7 @@ impl MpeState {
                                 (f32::from(c.coarse) + f32::from(c.fine) * 0.01).clamp(0.0, 96.0);
                             if manager {
                                 self.config.manager_bend_range = range;
+                                self.send_manager(live);
                             } else {
                                 self.config.member_bend_range = range;
                             }
@@ -514,6 +553,19 @@ impl Session {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .configure(config);
+        let guard = self
+            .io
+            .bridge
+            .live
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if config.mode != MpeMode::Off
+            && let Some(live) = guard.as_ref()
+        {
+            live.expression(peel_dsp::EventKind::PitchBendRange {
+                semitones: config.manager_bend_range,
+            });
+        }
         Ok(())
     }
     pub fn mpe_config(&self) -> MpeConfig {
@@ -523,5 +575,125 @@ impl Session {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .config()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use peel_engine::{EngineConfig, OfflineEngine, RecordedPerformanceKind};
+    #[test]
+    fn pending_poly_pressure_and_note_release_retry_after_queue_saturation() {
+        let mut engine = OfflineEngine::new(
+            48_000.0,
+            &EngineConfig {
+                device_slots: 1,
+                max_block: 64,
+                ..Default::default()
+            },
+        );
+        let live = engine.take_live_input().unwrap();
+        live.target().set(Some(0));
+        let mut recorded = engine.take_recorded().unwrap();
+        let mut state = MpeState::default();
+        state.configure(MpeConfig {
+            mode: MpeMode::Lower,
+            members: 3,
+            ..Default::default()
+        });
+        state.handle(
+            &live,
+            MidiEvent::NoteOn {
+                channel: 1,
+                key: 60,
+                velocity: 100,
+            },
+        );
+        let voice = state.notes[1][60].voice;
+        while live.expression(peel_dsp::EventKind::ChannelPressure { value: 0.5 }) {}
+        for _ in 0..128 {
+            live.voice_off(0, peel_engine::LIVE_VOICE_BASE + 1000, 50, 1);
+        }
+        state.handle(
+            &live,
+            MidiEvent::PolyPressure {
+                channel: 1,
+                key: 60,
+                value: 127,
+            },
+        );
+        assert!(state.notes[1][60].dirty);
+        state.handle(
+            &live,
+            MidiEvent::NoteOff {
+                channel: 1,
+                key: 60,
+                velocity: 0,
+            },
+        );
+        assert!(state.notes[1][60].release_due);
+        let (mut l, mut r) = ([0.0; 64], [0.0; 64]);
+        engine.render(&mut l, &mut r);
+        state.flush(&live);
+        assert!(!state.notes[1][60].release_due);
+        assert!(!state.notes[1][60].dirty);
+        let mut events = Vec::new();
+        recorded.drain_performance_into(&mut events);
+        assert!(
+            events
+                .iter()
+                .any(|e| e.voice == voice
+                    && matches!(e.kind, RecordedPerformanceKind::NoteOff { .. }))
+        );
+        assert!(events.iter().any(|e| e.voice == voice
+            && matches!(
+                e.kind,
+                RecordedPerformanceKind::Expression { pressure: 1.0, .. }
+            )));
+    }
+    #[test]
+    fn recording_overflow_is_bounded_and_reported_independently_from_legacy_notes() {
+        let mut engine = OfflineEngine::new(
+            48_000.0,
+            &EngineConfig {
+                device_slots: 1,
+                max_block: 64,
+                ..Default::default()
+            },
+        );
+        let live = engine.take_live_input().unwrap();
+        live.target().set(Some(0));
+        let mut receiver = engine.take_recorded().unwrap();
+        let (mut l, mut r) = ([0.0; 64], [0.0; 64]);
+        for _ in 0..8 {
+            for i in 0..800 {
+                assert!(live.voice_expression(
+                    0,
+                    peel_engine::LIVE_VOICE_BASE + 200,
+                    1,
+                    (i % 48) as f32,
+                    0.5,
+                    0.5
+                ));
+            }
+            for _ in 0..3 {
+                engine.render(&mut l, &mut r);
+            }
+        }
+        assert!(
+            live.stats()
+                .performance_dropped
+                .load(std::sync::atomic::Ordering::Relaxed)
+                > 0
+        );
+        assert_eq!(
+            live.stats()
+                .record_dropped
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        let mut events = Vec::new();
+        receiver.drain_performance_into(&mut events);
+        assert_eq!(events.len(), peel_engine::live::RECORD_CAPACITY);
     }
 }

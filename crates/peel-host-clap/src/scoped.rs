@@ -191,7 +191,13 @@ impl ClapDevice {
     }
     pub(super) fn midi_member_off(&mut self, time: u32, id: i32, key: u8, velocity: f32) -> bool {
         let Some(index) = self.scoped.channel(id) else {
-            return true;
+            // Notes started before MPE was enabled still belong to channel zero.
+            return self.events.push_midi(
+                time,
+                0,
+                [0x80, key, (unit(velocity) * 127.0).round() as u8],
+                true,
+            );
         };
         self.events.push_midi(
             time,
@@ -364,6 +370,9 @@ impl ClapDevice {
                 let ch = index as u8 + 1;
                 self.events
                     .push_midi(time, 0, [0xb0 | ch, if choke { 120 } else { 123 }, 0], true);
+                self.scoped.age = self.scoped.age.wrapping_add(1);
+                self.scoped.members[index].held = false;
+                self.scoped.members[index].age = self.scoped.age;
             }
         }
     }

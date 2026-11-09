@@ -282,13 +282,32 @@ impl LiveShared {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum LiveKind {
-    NoteOn { key: u8, velocity: f32 },
-    NoteOff { key: u8 },
-    Sustain { down: bool },
+    NoteOn {
+        key: u8,
+        velocity: f32,
+    },
+    NoteOff {
+        key: u8,
+    },
+    Sustain {
+        down: bool,
+    },
     AllNotesOff,
-    Expression { kind: EventKind },
-    VoiceOn { key: u8, velocity: f32, voice: u32 },
-    VoiceOff { key: u8, voice: u32 },
+    Expression {
+        kind: EventKind,
+    },
+    VoiceOn {
+        key: u8,
+        velocity: f32,
+        voice: u32,
+        pitch: f32,
+        pressure: f32,
+        timbre: f32,
+    },
+    VoiceOff {
+        key: u8,
+        voice: u32,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -322,6 +341,11 @@ pub struct LiveInput {
 }
 
 impl LiveInput {
+    /// Timestamp on the same monotonic clock as recorded performance events.
+    pub fn timestamp_ns(&self) -> u64 {
+        self.inner.shared.now_ns()
+    }
+
     /// Plays or releases `key` on the instrument in `slot`.
     pub fn note(&self, slot: Slot, key: u8, velocity: f32, on: bool) -> bool {
         self.note_channel(slot, key, velocity, on, None)
@@ -450,12 +474,12 @@ impl LiveInput {
             *output = match kind {
                 EventKind::PitchBend { semitones } if semitones.is_finite() => {
                     EventKind::PitchBend {
-                        semitones: semitones.clamp(-48.0, 48.0),
+                        semitones: semitones.clamp(-120.0, 120.0),
                     }
                 }
                 EventKind::PitchBendRange { semitones } if semitones.is_finite() => {
                     EventKind::PitchBendRange {
-                        semitones: semitones.clamp(0.0, 48.0),
+                        semitones: semitones.clamp(0.0, 96.0),
                     }
                 }
                 EventKind::ChannelPressure { value } if value.is_finite() => {
@@ -572,6 +596,9 @@ pub(crate) enum LiveOp {
         key: u8,
         velocity: f32,
         voice: u32,
+        pitch: f32,
+        pressure: f32,
+        timbre: f32,
     },
     VoiceOff {
         slot: u32,
@@ -819,6 +846,9 @@ impl LiveState {
                 key,
                 velocity,
                 voice,
+                pitch,
+                pressure,
+                timbre,
             } => emit(
                 out,
                 offset,
@@ -827,6 +857,9 @@ impl LiveState {
                     key,
                     velocity,
                     voice,
+                    pitch,
+                    pressure,
+                    timbre,
                 },
             ),
             LiveKind::VoiceOff { key, voice } => emit(

@@ -824,3 +824,39 @@ fn mpe_lsb_only_range_change_keeps_coarse_and_cc74_midpoint_is_neutral() {
         .unwrap();
     assert_eq!(mpe_expression(&events, on.voice), (0.0, 0.0, 0.5));
 }
+
+#[test]
+fn mpe_wide_manager_range_reaches_internal_and_member_recording_without_global_clipping() {
+    let mut s = mpe_session(MpeMode::Lower, 2);
+    s.configure_mpe(MpeConfig {
+        mode: MpeMode::Lower,
+        members: 2,
+        manager_bend_range: 96.0,
+        ..Default::default()
+    })
+    .unwrap();
+    let piano = s.live_target().unwrap();
+    s.take_recorded_performance();
+    s.live_note(piano, 0, 0.8, true);
+    assert!(s.pitch_bend(1.0));
+    mpe_on(&mut s, 1, 0);
+    let events = s.take_recorded_performance();
+    let voices: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e.kind, RecordedPerformanceKind::NoteOn { .. }))
+        .map(|e| e.voice)
+        .collect();
+    assert_eq!(voices.len(), 2);
+    assert_eq!(s.pitch_bend_range(), 96.0);
+    for voice in &voices {
+        assert_eq!(mpe_expression(&events, *voice).0, 96.0);
+    }
+    s.handle_midi_event(MidiEvent::PitchBend {
+        channel: 0,
+        value: -8192,
+    });
+    let events = s.take_recorded_performance();
+    for voice in &voices {
+        assert_eq!(mpe_expression(&events, *voice).0, -96.0);
+    }
+}

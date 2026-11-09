@@ -590,3 +590,46 @@ fn all_sound_off_clears_global_and_scoped_expression_before_new_notes() {
         );
     }
 }
+
+#[test]
+fn midi_mpe_only_note_dialect_is_recognized_and_legacy_releases_survive_mode_entry() {
+    let port = NotePortInfo {
+        supported_dialects: CLAP_NOTE_DIALECT_MIDI_MPE,
+    };
+    assert_eq!(pick_dialect(&[port]), Dialect::Midi);
+    let mut dev = device(fixture::MIDI_SINE);
+    on(&mut dev, 60, 100);
+    dev.scoped.midi_enabled = true;
+    dev.events.clear();
+    push(
+        &mut dev,
+        0,
+        EventKind::NoteOff {
+            key: 60,
+            velocity: 0.0,
+            voice: 100,
+        },
+    );
+    assert_eq!(
+        dev.events.midi_at(0).unwrap().data,
+        [0x80, 60, 0],
+        "pre-MPE notes still release on channel zero"
+    );
+}
+
+#[test]
+fn midi_all_notes_off_releases_member_allocation_for_the_next_phrase() {
+    let mut dev = device(fixture::MIDI_SINE);
+    dev.scoped.midi_enabled = true;
+    for voice in 1..=15 {
+        on(&mut dev, 60, voice);
+    }
+    dev.release_all(0, false);
+    dev.events.clear();
+    on(&mut dev, 60, 1000);
+    assert!(
+        (0..dev.events.len())
+            .filter_map(|i| dev.events.midi_at(i))
+            .any(|e| e.data[0] & 0xf0 == 0x90)
+    );
+}

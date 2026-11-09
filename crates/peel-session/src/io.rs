@@ -150,24 +150,13 @@ impl MidiBridge {
                 let mut mpe = self.mpe.lock().unwrap_or_else(PoisonError::into_inner);
                 let manager =
                     mpe.config().mode != MpeMode::Off && event.channel() == mpe.config().manager();
+                let zone_change = mpe.zone_change(*event);
                 if mpe.handle(live, *event) {
+                    if zone_change {
+                        self.expression.clear();
+                    }
                     if manager {
                         self.expression.readback_controller(*event);
-                        match *event {
-                            MidiEvent::PitchBend { value, .. } => {
-                                let value =
-                                    f32::from(value) / if value < 0 { 8192.0 } else { 8191.0 };
-                                live.expression(peel_dsp::EventKind::PitchBend {
-                                    semitones: value * mpe.config().manager_bend_range,
-                                });
-                            }
-                            MidiEvent::ChannelPressure { value, .. } => {
-                                live.expression(peel_dsp::EventKind::ChannelPressure {
-                                    value: f32::from(value.min(127)) / 127.0,
-                                });
-                            }
-                            _ => {}
-                        }
                     }
                     return;
                 }
@@ -675,7 +664,10 @@ impl Session {
             .saturating_sub(MAX_PENDING_RECORDED);
         if excess_performance > 0 {
             self.io.performance.drain(..excess_performance);
-            self.engine.live_stats().performance_dropped.fetch_add(excess_performance as u64,Ordering::Relaxed);
+            self.engine
+                .live_stats()
+                .performance_dropped
+                .fetch_add(excess_performance as u64, Ordering::Relaxed);
         }
         let excess = self.io.recorded.len().saturating_sub(MAX_PENDING_RECORDED);
         if excess > 0 {
@@ -723,6 +715,17 @@ impl Session {
                 );
             }
         }
+    }
+
+    /// Current time on the recording producer's clock (unavailable during an engine swap).
+    pub fn performance_time_ns(&self) -> Option<u64> {
+        self.io
+            .bridge
+            .live
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .map(LiveInput::timestamp_ns)
     }
 
     /// Drains accepted notes and full per-note expression in arrival order.

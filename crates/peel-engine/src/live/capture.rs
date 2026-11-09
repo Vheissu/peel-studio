@@ -266,7 +266,7 @@ impl LiveInput {
         let shared = &self.inner.shared;
         let t = shared.now_ns();
         let mut tx = self.lock();
-        if tx.events.slots() < LIVE_QUEUE_RESERVE + 2 {
+        if tx.events.slots() < LIVE_QUEUE_RESERVE + 1 {
             shared.stats.dropped.fetch_add(1, Ordering::Relaxed);
             return false;
         }
@@ -287,17 +287,10 @@ impl LiveInput {
                     key,
                     velocity,
                     voice,
+                    pitch: pitch.clamp(-120.0, 120.0),
+                    pressure: pressure.clamp(0.0, 1.0),
+                    timbre: timbre.clamp(0.0, 1.0),
                 },
-            },
-            false,
-        );
-        push_event(
-            &mut tx,
-            shared,
-            LiveEvent {
-                t_ns: t,
-                slot,
-                kind: LiveKind::Expression { kind: expression },
             },
             false,
         );

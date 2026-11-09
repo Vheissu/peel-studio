@@ -337,3 +337,28 @@ fn a_saturated_live_release_queue_has_a_bounded_emergency_reset_fence() {
     }
     assert!(e.active.as_mut_slice().iter().all(|n| !n.live));
 }
+
+#[test]
+fn the_last_live_operation_in_a_chunk_keeps_the_note_and_initial_expression_together() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut e = engine(&seen);
+    let live = e.take_live_input().unwrap();
+    for _ in 0..MAX_EVENTS_PER_BLOCK - 1 {
+        assert!(live.push_at(
+            1,
+            3,
+            LiveKind::Expression {
+                kind: EventKind::ChannelPressure { value: 0.5 }
+            }
+        ));
+    }
+    let voice = crate::LIVE_VOICE_BASE + 2000;
+    assert!(live.voice_on(0, voice, 60, 0.8, 1, 12.0, 0.7, 0.8));
+    let (mut l, mut r) = ([0.0; 256], [0.0; 256]);
+    e.render(&mut l, &mut r);
+    let seen = seen.lock().unwrap();
+    assert!(seen.iter().any(|(frame, offset, kind)| *frame == 0
+        && *offset == 0
+        && matches!(kind,EventKind::NoteOn{voice:v,..}if *v==voice)));
+    assert!(seen.iter().any(|(frame,offset,kind)|*frame==0 && *offset==0 && matches!(kind,EventKind::VoiceExpression{voice:v,pitch:12.0,pressure,..}if *v==voice && (*pressure-0.7).abs()<1e-6)));
+}

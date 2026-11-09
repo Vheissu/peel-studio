@@ -293,3 +293,62 @@ fn deferred_expression_resets_and_replay_do_not_allocate() {
         assert_eq!(dev.stats().process_errors, 0);
     }
 }
+
+#[test]
+fn scoped_mpe_expression_and_member_reuse_never_allocate() {
+    for id in [fixture::SINE, fixture::MIDI_SINE] {
+        let mut dev = ClapDevice::load(&fixture::info(id), fixture::SR, fixture::BLOCK).unwrap();
+        let ctx = ProcessContext::new(fixture::SR);
+        let (mut l, mut r) = ([0.0; fixture::BLOCK], [0.0; fixture::BLOCK]);
+        let mut events = Vec::new();
+        for voice in 1..=15 {
+            events.push(at(
+                0,
+                EventKind::NoteOn {
+                    key: 60,
+                    velocity: 0.7,
+                    voice,
+                },
+            ));
+            events.push(at(
+                0,
+                EventKind::VoiceExpression {
+                    voice,
+                    pitch: voice as f32 - 7.0,
+                    pressure: 0.5,
+                    timbre: 0.7,
+                },
+            ));
+        }
+        let mut releases = Vec::new();
+        for voice in 1..=15 {
+            releases.push(at(
+                0,
+                EventKind::VoiceExpression {
+                    voice,
+                    pitch: 0.0,
+                    pressure: 0.0,
+                    timbre: 0.5,
+                },
+            ));
+            releases.push(at(
+                0,
+                EventKind::NoteOff {
+                    key: 60,
+                    velocity: 0.0,
+                    voice,
+                },
+            ));
+        }
+        let allocations = count_allocations(|| {
+            for _ in 0..8 {
+                dev.process(&ctx, &events, &mut l, &mut r);
+                dev.process(&ctx, &releases, &mut l, &mut r);
+            }
+            dev.reset();
+            dev.process(&ctx, &[], &mut l, &mut r);
+        });
+        assert_eq!(allocations, 0, "{id}: MPE scoped processing allocated");
+        assert_eq!(dev.stats().process_errors, 0);
+    }
+}

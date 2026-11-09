@@ -9,7 +9,9 @@ use clap_sys::events::{
     CLAP_TRANSPORT_HAS_BEATS_TIMELINE, CLAP_TRANSPORT_HAS_TEMPO, CLAP_TRANSPORT_IS_PLAYING,
     clap_event_header, clap_event_transport,
 };
-use clap_sys::ext::note_ports::{CLAP_NOTE_DIALECT_CLAP, CLAP_NOTE_DIALECT_MIDI};
+use clap_sys::ext::note_ports::{
+    CLAP_NOTE_DIALECT_CLAP, CLAP_NOTE_DIALECT_MIDI, CLAP_NOTE_DIALECT_MIDI_MPE,
+};
 use clap_sys::fixedpoint::CLAP_BEATTIME_FACTOR;
 use clap_sys::process::{
     CLAP_PROCESS_CONTINUE_IF_NOT_QUIET, CLAP_PROCESS_ERROR, CLAP_PROCESS_SLEEP, clap_process,
@@ -60,7 +62,7 @@ fn pick_dialect(ports: &[NotePortInfo]) -> Dialect {
     };
     if port.supported_dialects & CLAP_NOTE_DIALECT_CLAP != 0 {
         Dialect::Clap
-    } else if port.supported_dialects & CLAP_NOTE_DIALECT_MIDI != 0 {
+    } else if port.supported_dialects & (CLAP_NOTE_DIALECT_MIDI | CLAP_NOTE_DIALECT_MIDI_MPE) != 0 {
         Dialect::Midi
     } else {
         Dialect::None
@@ -256,13 +258,19 @@ impl ClapDevice {
         let dialect = pick_dialect(&shared.note_in);
         let audio = build_audio(&shared, kind, max_block);
         let params = shared.table.len();
+        let mut scoped = crate::scoped::Scoped::default();
+        scoped.midi_enabled = dialect == Dialect::Midi
+            && shared
+                .note_in
+                .first()
+                .is_some_and(|port| port.supported_dialects & CLAP_NOTE_DIALECT_MIDI_MPE != 0);
         Ok(ClapDevice {
             events: EventList::with_capacity(BASE_EVENT_SLOTS + 2 * params, RELEASE_RESERVE),
             pending: PendingParams::new(params),
             voices: ActiveNotes::new(),
             expression: Expression::default(),
             pending_expression: PendingExpression::default(),
-            scoped: crate::scoped::Scoped::default(),
+            scoped,
             transport: new_transport(),
             steady_time: 0,
             info: info.clone(),
@@ -421,6 +429,7 @@ impl ClapDevice {
                     .scoped
                     .note_on(id, key, self.expression.bend, self.expression.pressure)
                 {
+                    self.shared.dropped_events.fetch_add(1, Ordering::Relaxed);
                     return;
                 }
                 let ok = match self.dialect {
@@ -550,13 +559,13 @@ impl ClapDevice {
         // Invalid values never become pending and never reach plugin code.
         let kind = match kind {
             EventKind::PitchBend { semitones } if semitones.is_finite() => {
-                let semitones = semitones.clamp(-48.0, 48.0);
+                let semitones = semitones.clamp(-120.0, 120.0);
                 self.expression.bend = semitones;
                 self.pending_expression.bend = true;
                 EventKind::PitchBend { semitones }
             }
             EventKind::PitchBendRange { semitones } if semitones.is_finite() => {
-                let semitones = semitones.clamp(0.0, 48.0);
+                let semitones = semitones.clamp(0.0, 96.0);
                 self.expression.range = semitones;
                 self.pending_expression.range = true;
                 EventKind::PitchBendRange { semitones }

@@ -336,6 +336,15 @@ impl ActiveNotes {
         Some(self.notes.swap_remove(i))
     }
 
+    /// Removes a staged note by the actual device voice, including rebased sequence voices.
+    pub fn remove_runtime_voice(&mut self, slot: u32, voice: u32) -> Option<ActiveNote> {
+        let i = self
+            .notes
+            .iter()
+            .rposition(|n| n.slot == slot && n.voice == voice)?;
+        Some(self.notes.swap_remove(i))
+    }
+
     /// Removes the live note for `(slot, key)`.
     pub fn remove_live(&mut self, slot: u32, key: u8) -> Option<ActiveNote> {
         let i = self
