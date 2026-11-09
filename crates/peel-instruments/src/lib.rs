@@ -11,7 +11,7 @@
 //! | `peel.drum.tom`    | Tom     | Drums    | Pitched membrane with sweep                  |
 //! | `peel.synth.poly`  | Poly    | Synth    | Polyphonic subtractive synth                 |
 //! | `peel.synth.bass`  | Bass    | Synth    | Monophonic bass with glide and drive         |
-//! | `peel.keys.tine`   | Tine    | Keys     | FM electric piano                            |
+//! | `peel.keys.tine`   | Tine    | Keys     | Electric piano: tine and pickup model        |
 //! | `peel.keys.grand`  | Grand   | Keys     | Synthesized acoustic piano (modal)           |
 //! | `peel.wind.sax`    | Sax     | Wind     | Saxophone: reed and breath model, legato     |
 //! | `peel.guitar.electric` | Guitar | Guitar | Plucked string through pickup, amp and cabinet |

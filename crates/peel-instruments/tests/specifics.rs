@@ -1419,3 +1419,145 @@ fn violin_phrase_analysis() {
     );
     assert!(all_finite(&l) && w(28, 30) > 0.5 * w(1, 2) && w(28, 30) < 2.0 * w(1, 2));
 }
+
+// ------------------------------------------------ tine (pickup model)
+
+fn tine_note(setup: &[(&str, f32)], key: u8, vel: f32, frames: usize) -> Vec<f32> {
+    let mut d = fresh("peel.keys.tine");
+    set(d.as_mut(), "trem.depth", 0.0);
+    set(d.as_mut(), "out.width", 0.0);
+    for (k, v) in setup {
+        set(d.as_mut(), k, *v);
+    }
+    render(d.as_mut(), &[note_on(0, key, vel, 1)], frames, 256).0
+}
+
+#[test]
+fn tine_bell_is_a_short_inharmonic_ping() {
+    // Only the bell amount differs, so the difference is the overtones and
+    // what they intermodulate with. It must die away within a fraction of a
+    // second while the fundamental keeps ringing.
+    let plain = tine_note(&[("tone.bell", 0.0)], 60, 0.9, 72_000);
+    let belled = tine_note(&[("tone.bell", 1.0)], 60, 0.9, 72_000);
+    let diff: Vec<f32> = plain.iter().zip(&belled).map(|(a, b)| b - a).collect();
+    let early = rms(&diff[48..4_800]);
+    let late = rms(&diff[48_000..60_000]);
+    assert!(early > 0.002, "no bell: {early}");
+    assert!(late < early * 0.03, "bell rings on: {early} -> {late}");
+    assert!(rms(&plain[48_000..60_000]) > 0.01, "fundamental died");
+}
+
+#[test]
+fn tine_bark_relaxes_as_the_note_decays() {
+    // Harmonic content relative to the fundamental: a hard note barks and
+    // then clears up (the pickup nonlinearity sees a smaller swing); a soft
+    // note stays almost clean throughout.
+    let ratio = |buf: &[f32], f0: f32| {
+        let h: f32 = (2..=4)
+            .map(|k| tone_level(buf, f0 * k as f32).powi(2))
+            .sum();
+        (h.sqrt() / tone_level(buf, f0)).max(1e-6)
+    };
+    let f0 = 261.63f32;
+    let hard = tine_note(&[("amp.decay", 4.0)], 60, 1.0, 192_000);
+    let soft = tine_note(&[("amp.decay", 4.0)], 60, 0.2, 192_000);
+    let hard_early = ratio(&hard[2_400..14_400], f0);
+    let hard_late = ratio(&hard[144_000..192_000], f0);
+    let soft_early = ratio(&soft[2_400..14_400], f0);
+    assert!(hard_early > 0.3, "hard note does not bark: {hard_early}");
+    assert!(hard_late < hard_early * 0.4, "{hard_early} -> {hard_late}");
+    assert!(soft_early < hard_early * 0.3, "soft {soft_early}");
+}
+
+#[test]
+fn tine_pickup_voicing_changes_the_harmonics() {
+    let f0 = 261.63f32;
+    let even_odd = |pickup: f32| {
+        let b = tine_note(&[("tone.pickup", pickup)], 60, 1.0, 14_400);
+        let seg = &b[2_400..14_400];
+        tone_level(seg, f0 * 2.0) / tone_level(seg, f0 * 3.0).max(1e-9)
+    };
+    let a = even_odd(0.0);
+    let b = even_odd(1.0);
+    assert!(
+        (a / b - 1.0).abs() > 0.2,
+        "voicing does nothing: {a} vs {b}"
+    );
+}
+
+#[test]
+fn tine_low_notes_keep_exact_pitch() {
+    // The mode oscillators run in double precision; a single precision
+    // rotation would be several cents off down here.
+    let b = tine_note(&[], 33, 0.7, 96_000);
+    let seg = &b[9_600..90_000];
+    let nominal = 55.0f32;
+    let mut best = (0.0f32, nominal);
+    let mut f = nominal * 0.99;
+    while f < nominal * 1.01 {
+        let level = tone_level(seg, f);
+        if level > best.0 {
+            best = (level, f);
+        }
+        f += 0.01;
+    }
+    let cents = 1200.0 * (best.1 / nominal).log2();
+    assert!(
+        cents.abs() < 4.0,
+        "A1 is {cents} cents off at {} Hz",
+        best.1
+    );
+}
+
+#[test]
+fn tine_damper_mutes_the_note_quickly() {
+    let mut d = fresh("peel.keys.tine");
+    set(d.as_mut(), "trem.depth", 0.0);
+    let (l, _) = render(
+        d.as_mut(),
+        &[note_on(0, 60, 0.8, 1), note_off(24_000, 60, 1)],
+        48_000,
+        256,
+    );
+    let held = rms(&l[22_000..24_000]);
+    let after = rms(&l[36_000..48_000]);
+    assert!(after < held * 0.01, "{held} -> {after}");
+}
+
+#[test]
+fn tine_tremolo_can_follow_the_tempo() {
+    // Auto-pan at a quarter note per cycle: two sweeps per second at 120 bpm.
+    let mut d = fresh("peel.keys.tine");
+    set(d.as_mut(), "trem.depth", 1.0);
+    set(d.as_mut(), "trem.mode", 1.0);
+    set(d.as_mut(), "trem.sync", 2.0);
+    set(d.as_mut(), "trem.rate", 9.0);
+    set(d.as_mut(), "out.width", 0.0);
+    let (l, r) = render(d.as_mut(), &[note_on(0, 60, 1.0, 1)], 96_000, 256);
+    let side: Vec<f32> = rms_windows(&l, 480)
+        .iter()
+        .zip(rms_windows(&r, 480))
+        .map(|(a, b)| a - b)
+        .collect();
+    let flips = side
+        .windows(2)
+        .filter(|w| w[0].signum() != w[1].signum())
+        .count();
+    // Two seconds at 2 Hz: eight crossings of the centre, give or take one.
+    assert!((7..=9).contains(&flips), "{flips} channel flips in 2 s");
+}
+
+#[test]
+fn tine_chorus_widens_a_centered_note() {
+    let width = |chorus: f32| {
+        let mut d = fresh("peel.keys.tine");
+        set(d.as_mut(), "trem.depth", 0.0);
+        set(d.as_mut(), "out.width", 0.0);
+        set(d.as_mut(), "out.chorus", chorus);
+        let (l, r) = render(d.as_mut(), &[note_on(0, 60, 0.8, 1)], 48_000, 256);
+        let side: Vec<f32> = l.iter().zip(&r).map(|(a, b)| a - b).collect();
+        rms(&side[12_000..]) / rms(&l[12_000..])
+    };
+    assert!(width(0.0) < 1e-4);
+    assert!(width(0.8) > 0.05);
+}
