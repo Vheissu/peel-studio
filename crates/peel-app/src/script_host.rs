@@ -29,14 +29,15 @@ pub fn pump(studio: &mut Studio) {
                 name,
                 args,
             );
-            if studio.session.project().id != before {
-                studio.reset_workspace();
-            }
             if recording != studio.session.is_recording() {
                 studio.recorder.armed = studio.session.is_recording();
             }
             if target != studio.session.live_target() {
                 studio.ws.selected_channel = studio.session.live_target();
+            }
+            if studio.session.project().id != before {
+                studio.reset_workspace();
+                studio.session.set_live_target(studio.ws.selected_channel);
             }
             result
         });
@@ -270,6 +271,31 @@ fn update(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn opening_a_project_from_a_script_updates_selection_before_the_next_call() {
+        let session = Session::new_silent(peel_session::template::beat_and_melody());
+        let mut studio = Studio::new(session);
+        studio.scripts.factory=vec![peel_extensions::Script {
+            name:"New project".into(),language:peel_extensions::Language::JavaScript,
+            source:"peel.call('new_project',{title:'Fresh',demo:true,discard_changes:true}); const ui=peel.call('ui.get'); if(!ui.channel) throw Error('no selected channel');".into()
+        }];
+        studio.scripts.selected = Some(crate::scripts::Pick::Factory(0));
+        studio
+            .scripts
+            .run_selected(&studio.session, &studio.ws, false)
+            .unwrap();
+        let start = std::time::Instant::now();
+        while studio.scripts.is_running() {
+            assert!(start.elapsed() < std::time::Duration::from_secs(5));
+            pump(&mut studio);
+            studio.scripts.poll(&mut studio.session, false);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert!(studio.scripts.last.as_ref().unwrap().result.is_ok());
+        assert!(studio.ws.selected_channel.is_some());
+        assert_eq!(studio.session.live_target(), studio.ws.selected_channel);
+    }
+
     #[test]
     fn view_calls_control_selection_and_reject_bad_requests_atomically() {
         let mut session = Session::new_silent(peel_session::template::beat_and_melody());
