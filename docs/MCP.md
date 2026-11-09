@@ -81,7 +81,7 @@ for live state, and `peel_read_project` for the document and its revision.
 | Export | `peel_export_audio`, `peel_export_job`, `peel_export_midi`, `peel_bounce_clip` |
 | Hardware | `peel_audio_devices`, `peel_configure_audio`, `peel_configure_midi`, `peel_rescan_plugins` |
 | Routing | `peel_output_routes`, `peel_configure_output_routes`, `peel_configure_output_channels` |
-| Controllers | `peel_midi_controls`, `peel_configure_midi_controls`, `peel_midi_learn`, `peel_midi_control` |
+| Controllers | `peel_midi_controls`, `peel_configure_midi_controls`, `peel_midi_learn`, `peel_midi_control`, `peel_midi_expression` |
 | Record | `peel_configure_recording`, `peel_arm_lane`, `peel_recording`, `peel_close_input` |
 | Perform | `peel_performance_slots`, `peel_performance` |
 
@@ -218,3 +218,25 @@ stale-target errors. `peel_midi_control` sends `channel`, `controller` and `valu
 through the same filter and mapping path as hardware, so scripts can operate
 learned controls without a physical controller. These calls configure the live
 host; mappings do not travel in project files.
+
+## Expression
+
+`peel_midi_expression` reads or sends live expression for the selected
+instrument. `bend` is -1..1, `pressure` is 0..1, and `key_pressure` is an
+array of `{ "key": 60, "value": 0.5 }` entries. `bend_range` sets sensitivity
+in semitones (0..48, default 2). Send `{ "reset": true }` separately to
+center bend and clear pressure while keeping the range and sounding notes.
+Select a target with `peel_configure_midi` and its `channel` argument first.
+An empty request reads the latest accepted state.
+
+```js
+peel.call("configure_midi", {channel});
+peel.call("live_note", {channel, key: 60, velocity: 0.8, on: true});
+peel.call("midi_expression", {bend_range: 12, bend: 0.5, pressure: 0.3});
+peel.call("midi_expression", {reset: true});
+```
+
+These controls are transient performance events, not saved device values or
+pattern automation. `peel_midi_controls` includes the same expression
+readback. `peel_status` reports `compensation_latency_samples` and
+`compensation_latency_ms` for the active audio graph.

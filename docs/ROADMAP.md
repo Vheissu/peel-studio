@@ -23,7 +23,7 @@ processing, persistence and tests all exist.
 | Harmony | Scales, chord stamping, quantize, clipboard | Done |
 | Workflow | Welcome screen, recent projects, crash recovery, shortcuts overlay, export panel | Done |
 | Packaging | macOS app bundle and DMG, release workflow for macOS, Windows and Linux | Done |
-| Hardware MIDI input | Live playing with sustain, device hotplug, note recording | Done |
+| Hardware MIDI input | Live playing, sustain, pitch bend, channel and polyphonic aftertouch, device hotplug, note recording | Done |
 | Markers and arrangements | Arrangement markers, alternate arrangements, slice tool | Done |
 | Tempo and curves | Tempo changes and ramps in the Playlist, curved automation segments | Done |
 | Audio clips | Gain, reverse, normalize, routing, render to audio, tempo following with time-stretch | Done |
@@ -35,6 +35,7 @@ processing, persistence and tests all exist.
 | Automation | Clips for device parameters, track volume and pan | Done |
 | Mixer routing | Bus outputs, post-fader sends, loop-free validation | Done |
 | Audio recording | Input devices and channels, input meter, monitoring, armed lanes, durable takes placed with latency compensation | Done |
+| Delay compensation | Instruments, audio, buses, sends, insert sidechains, metronome and export timing | Done |
 | CLAP plugins | Isolated scanning, hosting as native devices, saved state, offline export | Done |
 
 ## Phase 2: recording and deeper editing
@@ -45,8 +46,7 @@ Audio / WASAPI / ASIO backends, engine process isolation.
 ## Phase 3: plugins
 
 Plugin windows for CLAP, a scan cache and quarantine, VST3 hosting,
-isolated plugin workers, Audio Units on macOS, plugin delay compensation
-across the graph.
+isolated plugin workers and Audio Units on macOS.
 
 ## Phase 4: the rest of the specification
 

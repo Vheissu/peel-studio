@@ -130,7 +130,7 @@ a WAV file while the take is captured: the header is valid from the first
 byte and is refreshed every 100 ms, so a crash loses almost nothing and a
 stalled UI loses nothing. The first input callback after the transport runs
 snapshots the playhead and the callback timings; the clip position is the
-playhead moved back by the output and input latency (`peel_engine::latency`,
+playhead moved back by the output, input and compensated graph latency (`peel_engine::latency`,
 one function). `Session::stop_recording` finishes the file, imports it into
 the project's managed media if the project is saved, and adds one audio clip
 per armed lane in a single undoable edit. While a take runs, the transport

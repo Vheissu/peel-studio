@@ -65,6 +65,9 @@ impl Control {
                 "selected_pattern": s.selected_pattern(), "looping": s.looping(), "metronome": s.metronome(),
                 "audio_device": s.audio_device_name(), "sample_rate": s.sample_rate(),
                 "audio_healthy": s.audio_is_healthy(), "audio_warning": s.audio_warning(),
+                "compensation_latency_samples": s.compensation_latency_samples(),
+                "compensation_error": s.compensation_error(),
+                "compensation_latency_ms": s.compensation_latency_samples() as f32 / s.sample_rate().max(1.0) * 1000.0,
                 "assets": s.project().assets.iter().map(|a| json!({"id":a.id,"loading":s.audio_loading(a.id),"duration_seconds":s.asset_duration_seconds(a.id)})).collect::<Vec<_>>(),
                 "missing_devices": s.missing_devices(), "plugins_scanning": s.plugins_scanning(),
                 "recording": s.is_recording(), "armed_lanes": s.armed_lanes(),
@@ -603,6 +606,23 @@ impl Control {
             } => {
                 crate::io_control::send_control(s, channel, controller, value)?;
                 Ok(crate::io_control::midi_controls(s))
+            }
+            Action::MidiExpression {
+                bend,
+                pressure,
+                key_pressure,
+                bend_range,
+                reset,
+            } => {
+                crate::io_control::send_expression(
+                    s,
+                    bend,
+                    pressure,
+                    key_pressure,
+                    bend_range,
+                    reset,
+                )?;
+                Ok(crate::io_control::expression(s))
             }
             Action::ConfigureRecording {
                 device,

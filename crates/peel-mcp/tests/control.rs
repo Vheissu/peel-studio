@@ -426,3 +426,54 @@ fn mastering_is_discoverable_and_editable_through_scripts_host_actions() {
         -1.2
     );
 }
+
+#[test]
+fn midi_expression_is_transient_and_validates_the_complete_batch() {
+    let mut h = Host::new();
+    h.channel();
+    let channel = h.s.project().channels[0].id;
+    h.s.set_live_target(Some(channel));
+    let before = h.s.project().clone();
+    h.call(
+        "midi_expression",
+        json!({"bend_range":12,"bend":0.5,"pressure":0.7,"key_pressure":[{"key":60,"value":0.8}]}),
+    )
+    .unwrap();
+    let state = h.call("midi_expression", json!({})).unwrap();
+    assert_eq!(state["bend"], 0.5);
+    assert_eq!(state["semitones"], 6.0);
+    assert!((state["pressure"].as_f64().unwrap() - 0.7).abs() < 1e-5);
+    for invalid in [
+        json!({"bend":2,"bend_range":2}),
+        json!({"pressure":-1}),
+        json!({"bend_range":49}),
+        json!({"reset":true,"bend":0}),
+        json!({"key_pressure":[{"key":60,"value":0.1},{"key":60,"value":0.2}]}),
+        json!({"key_pressure":[{"key":128,"value":0.2}]}),
+    ] {
+        assert!(h.call("midi_expression", invalid).is_err());
+        assert_eq!(h.call("midi_expression", json!({})).unwrap(), state);
+    }
+    assert_eq!(h.s.project(), &before);
+    h.call("midi_expression", json!({"reset":true})).unwrap();
+    let state = h.call("midi_expression", json!({})).unwrap();
+    assert_eq!(state["bend"], 0.0);
+    assert_eq!(state["pressure"], 0.0);
+    assert_eq!(state["bend_range"], 12.0);
+    assert_eq!(state["key_pressure"], json!([]));
+    assert_eq!(h.s.project(), &before);
+}
+
+#[test]
+fn expression_requires_a_target_before_changing_live_state_or_range() {
+    let mut h = Host::new();
+    h.call("midi_expression", json!({"bend_range": 7})).unwrap();
+    assert!(
+        h.call("midi_expression", json!({"bend_range": 12, "bend": 0.5}))
+            .is_err()
+    );
+    let state = h.call("midi_expression", json!({})).unwrap();
+    assert_eq!(state["bend_range"], 7.0);
+    assert_eq!(state["bend"], 0.0);
+    assert!(h.call("midi_expression", json!({"reset": true})).is_err());
+}

@@ -172,6 +172,15 @@ pub enum Action {
         controller: u8,
         value: u8,
     },
+    /// Read or send transient pitch bend and aftertouch on the live instrument. Bend is -1..1; pressure is 0..1; bend_range is 0..48 semitones. Omitted values stay unchanged. Reset centers expression without stopping notes or changing saved parameters.
+    MidiExpression {
+        bend: Option<f32>,
+        pressure: Option<f32>,
+        key_pressure: Option<Vec<KeyPressureInput>>,
+        bend_range: Option<f32>,
+        #[serde(default)]
+        reset: bool,
+    },
     /// Configure audio recording input and monitoring. Input channels are zero-based; omit right for mono. This may open the microphone.
     ConfigureRecording {
         device: Option<String>,
@@ -199,6 +208,13 @@ pub enum Action {
         scene: Option<usize>,
         capture: Option<bool>,
     },
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct KeyPressureInput {
+    pub key: u8,
+    pub value: f32,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

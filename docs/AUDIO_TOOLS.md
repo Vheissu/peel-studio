@@ -47,9 +47,10 @@ Clean, Balanced, Warm, Punch and Loud presets provide starting points.
 Low and Air are shelves at 120 Hz and 8 kHz; Body is a broad bell at
 500 Hz. Compression uses a soft knee and an 80 Hz detector filter.
 The limiter defaults to a -1 dB ceiling with true-peak detection enabled.
-Its fixed lookahead is about 4 ms. Peel does not yet compensate latency
-between parallel plugin chains, so use this finishing effect on the master
-rather than a parallel bus when phase alignment matters.
+Its fixed lookahead is about 4 ms. Plugin delay compensation aligns
+parallel instrument, audio, bus and send paths, including sidechain keys
+at their receiving insert. Offline mixes and stems discard the compensated
+preroll so their requested start and length stay intact.
 
 The ceiling applies at the effect's output. Keep the master fader at 0 dB
 and place Mastering last in the chain to preserve it in the exported mix.
@@ -83,8 +84,18 @@ Use Learn to bind a controller to a device parameter, channel or mixer
 fader/pan control. Turn the hardware knob once, then move it to control
 the target. Logarithmic frequency and time parameters retain their
 normal response curve. CC64 keeps its sustain role; CC120 and CC123
-remain panic and all-notes-off controls. Pitch bend and aftertouch are not
-yet supported by the instrument event API.
+remain panic and all-notes-off controls. Pitch bend, channel aftertouch and
+polyphonic aftertouch reach the selected instrument, including held and
+sustained notes. The default bend range is two semitones; choose 0–48 in
+Audio and MIDI. The instrument editor also has pitch and pressure controls.
+
+Native pressure adds up to about 4 dB of gain and, on filtered instruments,
+up to three quarters of an octave of brightness. Per-key pressure affects
+only that key; channel pressure affects all voices. CLAP instruments receive
+the expression supported by their note dialect. Expression does not change
+saved instrument parameters or record automation into patterns. Input still
+uses one selected instrument and the channel filter; MPE voice assignment
+is not implemented.
 
 A channel-specific controller binding overrides an omni binding on that
 channel while preserving the omni binding for other channels.
@@ -120,6 +131,20 @@ fader, pan and mute. Hardware choices belong to this computer and do
 not travel in project files. Additional outputs require a real primary audio
 output; silent command-line hosts keep hardware output closed.
 
+## Delay compensation
+
+Peel uses the latency reported by each device after preparation. Bypass,
+insert changes and reported latency changes rebuild compensation on the
+control thread. Stop, seek and panic clear delayed audio; normal loop wraps
+keep continuous history so paths remain aligned even in short loops. The
+metronome and recorded take placement account for the graph delay. Direct
+input monitoring remains a low-latency feed after the master inserts.
+
+Compensation supports up to 262,144 samples per path and 64 MiB of delay
+storage. An unsupported graph reports an error and keeps the previous
+compensation. The Audio panel shows the active graph delay. Separate
+hardware outputs still have independent clocks as described above.
+
 ## Recording
 
 Open **Audio** in the status bar. Choose a microphone/interface input
@@ -154,6 +179,6 @@ peel.call("set_device", {
 
 `output_routes`, `configure_output_routes` and
 `configure_output_channels` expose hardware routing. `midi_controls`,
-`configure_midi_controls`, `midi_learn` and `midi_control` expose
+`configure_midi_controls`, `midi_learn`, `midi_control` and `midi_expression` expose
 controller setup and internal events. See [MCP](MCP.md) for arguments;
 scripts use the same action names without the `peel_` prefix.
