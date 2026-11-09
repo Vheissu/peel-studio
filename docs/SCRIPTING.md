@@ -1,6 +1,6 @@
 # Scripting
 
-Open **Scripts** in the status bar or press **F8**. Choose an action and
+Open **Scripts** from **View**, use the right rail, or press **F8**. Choose an action and
 press **Run**. Factory actions transpose notes, report project statistics,
 and add a chord with PyTheory. **Add file** installs a `.js`, `.lua` or
 `.py` file; **Refresh** reloads installed scripts after editing them in your
