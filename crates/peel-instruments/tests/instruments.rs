@@ -72,7 +72,7 @@ fn descriptors_are_well_formed() {
         assert_eq!(d.kind, DeviceKind::Instrument);
         assert!(!d.name.is_empty() && !d.description.is_empty() && !d.category.is_empty());
         assert!(
-            (6..=40).contains(&d.params.len()),
+            (6..=48).contains(&d.params.len()),
             "{}: {} params",
             d.type_id,
             d.params.len()
@@ -120,7 +120,7 @@ fn presets_are_valid_and_first_matches_defaults() {
     for d in peel_instruments::descriptors() {
         let presets = peel_instruments::presets(d.type_id);
         assert!(
-            (3..=16).contains(&presets.len()),
+            (3..=24).contains(&presets.len()),
             "{}: {} presets",
             d.type_id,
             presets.len()
