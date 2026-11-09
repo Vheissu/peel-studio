@@ -19,6 +19,7 @@ pub const FOLDER: &str = "\u{e24a}";
 pub const FOLDER_OPEN: &str = "\u{e256}";
 pub const MUSIC_NOTES: &str = "\u{e340}";
 pub const MUSIC_NOTE: &str = "\u{e33c}";
+pub const BELL: &str = "\u{e0ce}";
 pub const PLUS: &str = "\u{e3d4}";
 pub const MINUS: &str = "\u{e32a}";
 pub const X: &str = "\u{e4f6}";
@@ -90,6 +91,7 @@ const NAMES: &[(&str, &str)] = &[
     (FOLDER_OPEN, "Open folder"),
     (MUSIC_NOTES, "Music notes"),
     (MUSIC_NOTE, "Music note"),
+    (BELL, "Bell"),
     (PLUS, "Plus"),
     (MINUS, "Minus"),
     (X, "Close"),

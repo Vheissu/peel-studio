@@ -361,6 +361,9 @@ fn generic(
             Align::End,
         );
     }
+    if dev.type_id == "peel.fx.resonator" {
+        resonator_notes(ui, &mut top, dev, desc);
+    }
     ui.text(top, desc.name, t.heading, t.text, Align::Start);
     c.cut_top(8.0);
     if peel_devices::accepts_sidechain(&dev.type_id) {
@@ -368,4 +371,44 @@ fn generic(
         c.cut_top(8.0);
     }
     crate::inspector::device_panel(ui, c, dev, desc, s, ws, t.accent);
+}
+
+/// The pitches the Resonator is tuned to, e.g. `C3 G3 C4 G4`, from the
+/// effect's own tuning function so the readout always matches the sound.
+fn resonator_notes(
+    ui: &mut Ui,
+    top: &mut Rect,
+    dev: &DeviceInstance,
+    desc: &'static peel_dsp::DeviceDescriptor,
+) {
+    let t = ui.theme.clone();
+    let params: Vec<f32> = desc
+        .params
+        .iter()
+        .map(|p| dev.params.get(p.key).copied().unwrap_or(p.default))
+        .collect();
+    let text = peel_effects::resonator::notes(&params)
+        .iter()
+        .map(|&k| crate::util::note_name(k))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let w = ui.measure(&text, t.readout_small).x + 4.0;
+    let r = top.cut_right(w);
+    top.cut_right(8.0);
+    ui.text(r, &text, t.readout_small, t.text_dim, Align::End);
+    ui.describe_label(
+        W::new(("resonator-notes", dev.id)),
+        r,
+        &format!("Tuned to {text}"),
+    );
+    let label = "Tuned to";
+    let lw = ui.measure(label, t.caption).x + 2.0;
+    ui.text(
+        top.cut_right(lw),
+        label,
+        t.caption,
+        t.text_faint,
+        Align::End,
+    );
+    top.cut_right(8.0);
 }

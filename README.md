@@ -19,15 +19,13 @@ effects. There is no web view.
 - Pattern workflow: a Channel Rack step sequencer (with a velocity graph)
   and a Piano Roll edit the same notes; patterns are painted into the
   Playlist as linked clips, and Make unique splits one off.
-- Thirteen native instruments (five synthesized drums, a polyphonic synth,
-  a mono bass, a modelled tine electric piano, a modelled piano, a modelled
-  electric guitar with its own amp and cabinet, a bowed violin with
-  ensemble and pizzicato, a reed-modelled saxophone and a sampler) and
-  fifteen effects (EQ with an interactive curve, compressor, multiband
-  compressor, limiter, Bass Lift, delay, reverb, drive, filter,
-  chorus, Vintage Chorus, flanger, phaser, Glitch for tempo-synced
-  stutters, tape stops and gates, and utility), with over 200 factory
-  presets in the Browser. Installed CLAP plugins show up next to them.
+- Sixteen native instruments: five synthesized drums, Mallet modal percussion,
+  Poly and Cross synths, a mono bass, tine electric piano, acoustic piano,
+  electric guitar with amp and cabinet, bowed violin, Zither plucked strings,
+  saxophone and sampler. Nineteen effects cover EQ, dynamics, delay, reverb,
+  distortion, filtering and modulation, with Glitch, Transient, Crush,
+  Resonator and Mastering for further shaping. Over 200 factory presets
+  are available in the Browser, alongside installed CLAP plugins.
 - A demo song, "Afterglow", opens on first launch: 80 bars of progressive
   house with tempo ramps, a slower breakdown, two drops and a key change,
   a drum bus, sidechain pumping, a mastering chain,

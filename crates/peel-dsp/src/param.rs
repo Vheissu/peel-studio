@@ -19,6 +19,7 @@ pub enum Unit {
     /// Quarter notes (tempo-synced times).
     Beats,
     Octaves,
+    Bits,
 }
 
 /// Mapping between normalized control position (0..=1) and plain value.
@@ -276,6 +277,7 @@ impl ParamDescriptor {
             Unit::Ratio => format!("{v:.1}:1"),
             Unit::Beats => format_beats(v),
             Unit::Octaves => format!("{v:+.1} oct"),
+            Unit::Bits => format!("{v:.1} bit"),
         }
     }
 }

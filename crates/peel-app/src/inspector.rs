@@ -2,19 +2,20 @@
 //! full device panels generated from parameter descriptors.
 
 use peel_document::{DeviceInstance, Id};
-use peel_dsp::{DeviceDescriptor, ParamDescriptor};
+use peel_dsp::DeviceDescriptor;
 use peel_session::Session;
 use peel_ui::Id as W;
 use peel_ui::{Align, Color, MenuItem, Rect, Ui, icons, vec2};
 
+use crate::device_layout::{self, knob_grid};
 use crate::util::{col, db_to_fader, fader_to_db, format_db, note_name};
 use crate::workspace::{Focus, Workspace};
 
 /// Narrowest knob cell. Cells stretch to fill the row, so a 300 px
 /// inspector lays out three 90 px columns: wide enough for names such as
 /// "Hammer Noise" without truncation. Longer names still fit-and-tooltip.
-const CELL_W: f32 = 76.0;
-const CELL_H: f32 = 66.0;
+pub(crate) const CELL_W: f32 = 76.0;
+pub(crate) const CELL_H: f32 = 66.0;
 
 #[derive(Default)]
 struct WaveCache {
@@ -91,12 +92,6 @@ fn object_head(ui: &mut Ui, r: Rect, color: Color) -> Rect {
 }
 
 /// The label column of a property row (72 px).
-/// Knobs per row and the stretched cell width for a body `w` wide.
-fn knob_grid(w: f32) -> (usize, f32) {
-    let per_row = ((w - 6.0) / CELL_W).floor().max(1.0) as usize;
-    (per_row, (w - 6.0) / per_row as f32)
-}
-
 fn prop_label(ui: &mut Ui, row: &mut Rect, label: &str) {
     let t = ui.theme.clone();
     let lr = row.cut_left(72.0);
@@ -577,8 +572,7 @@ fn track(ui: &mut Ui, r: Rect, id: Id, s: &mut Session, ws: &mut Workspace) {
     ui.scene.pop_clip();
 }
 
-fn panel_height(desc: &DeviceDescriptor, w: f32) -> f32 {
-    let (per_row, _) = knob_grid(w);
+fn panel_height(desc: &'static DeviceDescriptor, w: f32) -> f32 {
     let mut h = 0.0;
     if !peel_devices::presets(desc.type_id).is_empty() {
         h += 38.0;
@@ -589,31 +583,7 @@ fn panel_height(desc: &DeviceDescriptor, w: f32) -> f32 {
     if desc.type_id == "peel.fx.eq" {
         h += 140.0;
     }
-    for (_, params) in groups(desc) {
-        h += 30.0;
-        let (wide, knobs): (Vec<&ParamDescriptor>, Vec<&ParamDescriptor>) =
-            params.iter().copied().partition(|p| is_wide_choice(p));
-        h += wide.len() as f32 * 34.0;
-        h += knobs.len().div_ceil(per_row) as f32 * CELL_H;
-        h += 6.0;
-    }
-    h + 8.0
-}
-
-fn groups(desc: &DeviceDescriptor) -> Vec<(&'static str, Vec<&'static ParamDescriptor>)> {
-    let mut out: Vec<(&'static str, Vec<&'static ParamDescriptor>)> = Vec::new();
-    for p in desc.params {
-        match out.iter_mut().find(|(g, _)| *g == p.group) {
-            Some((_, v)) => v.push(p),
-            None => out.push((p.group, vec![p])),
-        }
-    }
-    out
-}
-
-/// Enumerations with more than two choices get a full-width selector.
-fn is_wide_choice(p: &ParamDescriptor) -> bool {
-    p.is_choice() && (p.choices.len() > 2 || p.choices != ["Off", "On"])
+    h + device_layout::layout(desc, w).height + 8.0
 }
 
 pub(crate) fn device_panel(
@@ -630,34 +600,7 @@ pub(crate) fn device_panel(
     // Presets.
     let presets = peel_devices::presets(desc.type_id);
     if !presets.is_empty() {
-        let mut prow = body.cut_top(28.0);
-        prop_label(ui, &mut prow, "Preset");
-        let pr = prow;
-        let id = W::new(("preset", dev.id));
-        let label = dev.preset.clone().unwrap_or_else(|| "Default".into());
-        let resp = ui.dropdown(id, pr, &label, "Preset");
-        if resp.clicked {
-            ui.open_popup(id.with("menu"), pr);
-        }
-        let items: Vec<MenuItem> = presets
-            .iter()
-            .map(|p| MenuItem::new(p.name).checked(dev.preset.as_deref() == Some(p.name)))
-            .collect();
-        if let Some(i) = ui.menu(id.with("menu"), vec2(pr.x, pr.bottom() + 4.0), &items) {
-            let preset = presets[i];
-            let did = dev.id;
-            s.doc.edit(format!("Load preset {}", preset.name), |p| {
-                if let Some(d) = peel_session::find_device_mut(p, did) {
-                    for pd in desc.params {
-                        d.params.insert(pd.key.to_string(), pd.default);
-                    }
-                    for (k, v) in preset.params {
-                        d.params.insert((*k).to_string(), *v);
-                    }
-                    d.preset = Some(preset.name.to_string());
-                }
-            });
-        }
+        device_layout::preset_row(ui, body.cut_top(28.0), dev, desc, presets, s);
         body.cut_top(10.0);
     }
     if desc.type_id == "peel.sampler" {
@@ -685,30 +628,43 @@ pub(crate) fn device_panel(
     };
     ui.scene.push_clip(body);
     // Cells stretch to fill the row, so labels get the room there is.
-    let (per_row, cell_w) = knob_grid(body.w);
-    let mut y = body.y - off;
-    for (gi, (group, params)) in groups(desc).into_iter().enumerate() {
+    // Wide panels flow groups side by side (see `device_layout`).
+    let lay = device_layout::layout(desc, body.w);
+    for pl in &lay.placed {
+        let group = &lay.groups[pl.group];
+        let gx = body.x + pl.x;
+        let mut y = body.y - off + pl.y;
+        // One rule per line: the line's first heading draws it across the
+        // panel; the others sit at the same text position without one.
+        let rule_w = if pl.line_start {
+            body.w - 6.0 - pl.x
+        } else {
+            pl.w
+        };
+        let (hy, hh, first) = if pl.first || pl.line_start {
+            (y, 26.0, pl.first)
+        } else {
+            (y + 6.0, 20.0, true)
+        };
         ui.group_heading(
             Rect {
-                x: body.x,
-                y,
-                w: body.w - 6.0,
-                h: 26.0,
+                x: gx,
+                y: hy,
+                w: rule_w,
+                h: hh,
             },
-            group,
-            gi == 0,
+            group.name,
+            first,
         );
-        y += 30.0;
-        let (wide, knobs): (Vec<&ParamDescriptor>, Vec<&ParamDescriptor>) =
-            params.into_iter().partition(|p| is_wide_choice(p));
-        for p in wide {
+        y += device_layout::HEAD_H;
+        for &p in &group.wide {
             let row = Rect {
-                x: body.x,
+                x: gx,
                 y,
-                w: body.w - 6.0,
+                w: pl.w,
                 h: 28.0,
             };
-            y += 34.0;
+            y += device_layout::WIDE_H;
             let value = dev.params.get(p.key).copied().unwrap_or(p.default);
             let mut sel = value.round().max(0.0) as usize;
             let short: Vec<&str> = p.choices.to_vec();
@@ -750,12 +706,12 @@ pub(crate) fn device_panel(
                 }
             }
         }
-        for chunk in knobs.chunks(per_row) {
+        for chunk in group.knobs.chunks(pl.cols.max(1)) {
             for (i, p) in chunk.iter().enumerate() {
                 let cell = Rect {
-                    x: body.x + i as f32 * cell_w,
+                    x: gx + i as f32 * pl.cell_w,
                     y,
-                    w: cell_w,
+                    w: pl.cell_w,
                     h: CELL_H,
                 };
                 let value = dev.params.get(p.key).copied().unwrap_or(p.default);
@@ -840,7 +796,6 @@ pub(crate) fn device_panel(
             }
             y += CELL_H;
         }
-        y += 6.0;
     }
     ui.scene.pop_clip();
 }

@@ -20,7 +20,9 @@
 //! | `peel.fx.glitch`     | Glitch  | Creative   |
 //! | `peel.fx.multiband`  | Multiband | Dynamics |
 //! | `peel.fx.mastering`  | Mastering | Mastering |
-//! | `peel.fx.mastering`  | Mastering | Mastering |
+//! | `peel.fx.transient` | Transient | Dynamics |
+//! | `peel.fx.crush` | Crush | Distortion |
+//! | `peel.fx.resonator` | Resonator | Creative |
 //!
 //! Every effect processes the left and right buffers in place, ignores note
 //! events, splits blocks at parameter events so changes land on the exact
@@ -37,6 +39,7 @@ mod oversample;
 pub mod bass_lift;
 pub mod chorus;
 pub mod compressor;
+pub mod crush;
 pub mod delay;
 pub mod drive;
 pub mod eq;
@@ -47,19 +50,23 @@ pub mod limiter;
 pub mod mastering;
 pub mod multiband;
 pub mod phaser;
+pub mod resonator;
 pub mod reverb;
+pub mod transient;
 pub mod utility;
 pub mod vintage_chorus;
 
 /// Every effect descriptor, in browser order.
 pub fn descriptors() -> &'static [&'static DeviceDescriptor] {
-    static ALL: [&DeviceDescriptor; 16] = [
+    static ALL: [&DeviceDescriptor; 19] = [
         &eq::DESCRIPTOR,
         &compressor::DESCRIPTOR,
         &limiter::DESCRIPTOR,
+        &transient::DESCRIPTOR,
         &delay::DESCRIPTOR,
         &reverb::DESCRIPTOR,
         &drive::DESCRIPTOR,
+        &crush::DESCRIPTOR,
         &filter::DESCRIPTOR,
         &chorus::DESCRIPTOR,
         &utility::DESCRIPTOR,
@@ -68,6 +75,7 @@ pub fn descriptors() -> &'static [&'static DeviceDescriptor] {
         &flanger::DESCRIPTOR,
         &phaser::DESCRIPTOR,
         &glitch::DESCRIPTOR,
+        &resonator::DESCRIPTOR,
         &multiband::DESCRIPTOR,
         &mastering::DESCRIPTOR,
     ];
@@ -83,9 +91,11 @@ pub fn create(type_id: &str) -> Option<Box<dyn Device>> {
         "peel.fx.eq" => Box::new(eq::Eq::new()),
         "peel.fx.compressor" => Box::new(compressor::Compressor::new()),
         "peel.fx.limiter" => Box::new(limiter::Limiter::new()),
+        "peel.fx.transient" => Box::new(transient::Transient::new()),
         "peel.fx.delay" => Box::new(delay::Delay::new()),
         "peel.fx.reverb" => Box::new(reverb::Reverb::new()),
         "peel.fx.drive" => Box::new(drive::Drive::new()),
+        "peel.fx.crush" => Box::new(crush::Crush::new()),
         "peel.fx.filter" => Box::new(filter::Filter::new()),
         "peel.fx.chorus" => Box::new(chorus::Chorus::new()),
         "peel.fx.utility" => Box::new(utility::Utility::new()),
@@ -94,6 +104,7 @@ pub fn create(type_id: &str) -> Option<Box<dyn Device>> {
         "peel.fx.flanger" => Box::new(flanger::Flanger::new()),
         "peel.fx.phaser" => Box::new(phaser::Phaser::new()),
         "peel.fx.glitch" => Box::new(glitch::Glitch::new()),
+        "peel.fx.resonator" => Box::new(resonator::Resonator::new()),
         "peel.fx.multiband" => Box::new(multiband::Multiband::new()),
         "peel.fx.mastering" => Box::new(mastering::Mastering::new()),
         _ => return None,
@@ -107,9 +118,11 @@ pub fn presets(type_id: &str) -> &'static [Preset] {
         "peel.fx.eq" => &eq::PRESETS,
         "peel.fx.compressor" => &compressor::PRESETS,
         "peel.fx.limiter" => &limiter::PRESETS,
+        "peel.fx.transient" => &transient::PRESETS,
         "peel.fx.delay" => &delay::PRESETS,
         "peel.fx.reverb" => &reverb::PRESETS,
         "peel.fx.drive" => &drive::PRESETS,
+        "peel.fx.crush" => &crush::PRESETS,
         "peel.fx.filter" => &filter::PRESETS,
         "peel.fx.chorus" => &chorus::PRESETS,
         "peel.fx.utility" => &utility::PRESETS,
@@ -118,6 +131,7 @@ pub fn presets(type_id: &str) -> &'static [Preset] {
         "peel.fx.flanger" => &flanger::PRESETS,
         "peel.fx.phaser" => &phaser::PRESETS,
         "peel.fx.glitch" => &glitch::PRESETS,
+        "peel.fx.resonator" => &resonator::PRESETS,
         "peel.fx.multiband" => &multiband::PRESETS,
         "peel.fx.mastering" => &mastering::PRESETS,
         _ => &[],

@@ -3,6 +3,7 @@
 mod analysis_view;
 mod audio_io;
 mod browser;
+mod device_layout;
 mod dialogs;
 mod eq_editor;
 mod eq_resonance;

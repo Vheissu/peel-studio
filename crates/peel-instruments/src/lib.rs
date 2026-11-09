@@ -17,6 +17,9 @@
 //! | `peel.guitar.electric` | Guitar | Guitar | Plucked string through pickup, amp and cabinet |
 //! | `peel.sampler`     | Sampler | Sampler  | Pitched one-shot / looping sample player     |
 //! | `peel.strings.violin` | Violin | Strings | Bowed-string waveguide, body, ensemble, pizzicato |
+//! | `peel.perc.mallet` | Mallet | Percussion | Pitched modal bars, membranes, plates and bells |
+//! | `peel.strings.zither` | Zither | Strings | Paired acoustic strings with coupling and body |
+//! | `peel.synth.cross` | Cross | Synth | Cross FM, oscillator sync and ring modulation |
 //!
 //! Each instrument is a [`common::Synth`] wrapped in a shared adapter that
 //! implements `Device`: parameters are stored and clamped once, events split
@@ -29,10 +32,12 @@ mod minblep_table;
 
 mod bass;
 mod clap;
+mod cross;
 mod grand;
 mod guitar;
 mod hat;
 mod kick;
+mod mallet;
 mod poly;
 mod sampler;
 mod sax;
@@ -40,23 +45,27 @@ mod snare;
 mod tine;
 mod tom;
 mod violin;
+mod zither;
 
 use peel_dsp::{Device, DeviceDescriptor, Preset};
 
-static ALL: [&DeviceDescriptor; 13] = [
+static ALL: [&DeviceDescriptor; 16] = [
     &kick::DESC,
     &snare::DESC,
     &hat::DESC,
     &clap::DESC,
     &tom::DESC,
+    &mallet::DESC,
     &poly::DESC,
     &bass::DESC,
+    &cross::DESC,
     &tine::DESC,
     &grand::DESC,
     &guitar::DESC,
     &sampler::DESC,
     &sax::DESC,
     &violin::DESC,
+    &zither::DESC,
 ];
 
 /// Every instrument descriptor, in browser order.
@@ -72,6 +81,9 @@ pub fn create(type_id: &str) -> Option<Box<dyn Device>> {
         "peel.drum.hat" => Some(hat::create()),
         "peel.drum.clap" => Some(clap::create()),
         "peel.drum.tom" => Some(tom::create()),
+        "peel.perc.mallet" => Some(mallet::create()),
+        "peel.synth.cross" => Some(cross::create()),
+        "peel.strings.zither" => Some(zither::create()),
         "peel.synth.poly" => Some(poly::create()),
         "peel.synth.bass" => Some(bass::create()),
         "peel.keys.tine" => Some(tine::create()),
@@ -93,6 +105,9 @@ pub fn presets(type_id: &str) -> &'static [Preset] {
         "peel.drum.hat" => &hat::PRESETS,
         "peel.drum.clap" => &clap::PRESETS,
         "peel.drum.tom" => &tom::PRESETS,
+        "peel.perc.mallet" => &mallet::PRESETS,
+        "peel.synth.cross" => &cross::PRESETS,
+        "peel.strings.zither" => &zither::PRESETS,
         "peel.synth.poly" => &poly::PRESETS,
         "peel.synth.bass" => &bass::PRESETS,
         "peel.keys.tine" => &tine::PRESETS,

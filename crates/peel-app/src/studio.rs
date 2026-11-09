@@ -580,6 +580,44 @@ impl Studio {
         {
             crate::instrument_editor::open(&mut self.session, &mut self.ws, c);
         }
+        // `PEEL_DEVICE=<native type id>` puts that instrument on the
+        // selected channel (`PEEL_CHANNEL`, else the first) and opens its
+        // editor, or inserts that effect on the master and opens it.
+        // Real devices only.
+        if let Ok(type_id) = std::env::var("PEEL_DEVICE") {
+            match peel_devices::descriptor(&type_id) {
+                Some(desc) if desc.kind == peel_dsp::DeviceKind::Instrument => {
+                    let channel = self
+                        .ws
+                        .selected_channel
+                        .filter(|&c| self.session.project().channel(c).is_some())
+                        .or_else(|| self.session.project().channels.first().map(|c| c.id));
+                    if let Some(c) = channel {
+                        let dev = peel_session::template::device(&type_id, None);
+                        self.session.doc.edit(format!("Use {}", desc.name), |p| {
+                            if let Some(ch) = p.channels.iter_mut().find(|ch| ch.id == c) {
+                                ch.device = dev;
+                                ch.name = desc.name.to_string();
+                            }
+                        });
+                        self.ws.selected_channel = Some(c);
+                        self.ws.focus = Some(Focus::Channel(c));
+                        crate::instrument_editor::open(&mut self.session, &mut self.ws, c);
+                    }
+                }
+                Some(desc) => {
+                    let master = self.session.project().mixer.tracks[0].id;
+                    let dev = peel_session::template::device(&type_id, None);
+                    let id = dev.id;
+                    self.session.doc.edit(format!("Add {}", desc.name), |p| {
+                        p.mixer.tracks[0].inserts.insert(0, dev);
+                    });
+                    self.ws.fx.open(master, id);
+                    self.ws.focus = Some(Focus::Track(master));
+                }
+                None => log::error!("PEEL_DEVICE: unknown device type {type_id}"),
+            }
+        }
         if std::env::var_os("PEEL_MIXER_EXPAND").is_some() {
             self.ws.dock = DockTab::Mixer;
             self.ws.mixer_restore_h = Some(self.ws.dock_h);
