@@ -71,6 +71,8 @@ pub struct Session {
     next_slot: Slot,
     meters: HashMap<Id, u16>,
     next_meter: u16,
+    analysis_device: Option<Id>,
+    analysis_state: Option<(Slot, bool)>,
     plan: Option<RenderPlan>,
     index: PlanIndex,
     /// Document revision, mode and audio generation the engine was last
@@ -166,6 +168,8 @@ impl Session {
             next_slot: 0,
             meters: HashMap::new(),
             next_meter: 0,
+            analysis_device: None,
+            analysis_state: None,
             plan: None,
             index: PlanIndex::default(),
             synced: None,
@@ -231,6 +235,8 @@ impl Session {
             });
         }
         self.sync();
+        self.refresh_analysis_target();
+        self.refresh_output_route_sources();
     }
 
     fn sync(&mut self) {
@@ -401,6 +407,9 @@ impl Session {
     }
 
     fn install_device(&mut self, inst: &DeviceInstance, project: &Project) {
+        if self.analysis_device == Some(inst.id) {
+            self.engine.telemetry().analysis.invalidate();
+        }
         if let Some(old) = self.devices.remove(&inst.id) {
             let _ = self
                 .engine
@@ -824,6 +833,59 @@ impl Session {
 
     fn device_type(&self, device: Id) -> Option<String> {
         find_device(self.doc.project(), device).map(|d| d.type_id.clone())
+    }
+
+    // ---- selected-insert analysis ----
+
+    /// Selects one mixer insert for pre/post waveform and spectrum capture.
+    /// Re-selecting the same insert is cheap and preserves its capture window.
+    /// Instruments and unknown IDs are rejected. `None` disables the tap.
+    pub fn set_analysis_device(&mut self, device: Option<Id>) -> bool {
+        let valid = device.is_none_or(|id| {
+            self.project()
+                .mixer
+                .tracks
+                .iter()
+                .any(|t| t.inserts.iter().any(|d| d.id == id))
+        });
+        if !valid {
+            return false;
+        }
+        if self.analysis_device != device {
+            self.analysis_device = device;
+            self.analysis_state = None;
+            self.engine.telemetry().analysis.invalidate();
+        }
+        self.refresh_analysis_target();
+        self.refresh_output_route_sources();
+        true
+    }
+
+    fn refresh_analysis_target(&mut self) {
+        let state = self.analysis_device.and_then(|id| {
+            let inst = self
+                .project()
+                .mixer
+                .tracks
+                .iter()
+                .flat_map(|t| &t.inserts)
+                .find(|d| d.id == id)?;
+            self.devices.get(&id).map(|d| (d.slot, inst.bypass))
+        });
+        if self.analysis_state != state {
+            self.engine.telemetry().analysis.invalidate();
+            self.analysis_state = state;
+        }
+        self.engine
+            .telemetry()
+            .analysis
+            .set_slot(state.map(|s| s.0));
+    }
+
+    /// One bounded snapshot attempt; `None` means no selected insert audio or
+    /// a concurrent callback write. Analyze this frame on the control thread.
+    pub fn analysis_snapshot(&self) -> Option<peel_engine::analysis::AnalysisFrame> {
+        self.engine.telemetry().analysis.snapshot()
     }
 
     // ---- telemetry ----

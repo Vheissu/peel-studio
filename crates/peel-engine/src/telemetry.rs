@@ -10,6 +10,8 @@ pub const MAX_METERS: usize = 512;
 pub const MAX_SLOTS: usize = 1024;
 
 pub struct Telemetry {
+    /// One selected insert's pre/post audio, copied without blocking the callback.
+    pub analysis: crate::analysis::AnalysisTap,
     pub playing: AtomicBool,
     /// Current content position in quarter notes (f64 bits).
     beat: AtomicU64,
@@ -68,6 +70,7 @@ fn store_max(cell: &AtomicU32, value: f32) {
 impl Telemetry {
     pub fn new() -> Telemetry {
         Telemetry {
+            analysis: crate::analysis::AnalysisTap::new(),
             playing: AtomicBool::new(false),
             beat: AtomicU64::new(0f64.to_bits()),
             cpu_load: AtomicU32::new(0),

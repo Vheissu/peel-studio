@@ -93,6 +93,8 @@ fn the_realtime_path_never_allocates() {
     let (retire_tx, mut retire_rx) = rtrb::RingBuffer::<Retired>::new(256);
     let (mut cmd_tx, cmd_rx) = rtrb::RingBuffer::<EngineCommand>::new(1024);
     let mut engine = Engine::new(SR, &config, telemetry.clone(), retire_tx, Some(cmd_rx));
+    // Selected-insert pre/post capture must remain allocation-free as well.
+    telemetry.analysis.set_slot(Some(10));
 
     // Everything below that allocates runs outside the guard, like the
     // control thread would.

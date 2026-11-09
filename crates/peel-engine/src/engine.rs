@@ -422,6 +422,9 @@ impl Engine {
         match cmd {
             EngineCommand::SetPlan(plan) => self.set_plan(plan),
             EngineCommand::InstallDevice { slot, device } => {
+                if self.telemetry.analysis.is_selected(slot) {
+                    self.telemetry.analysis.invalidate();
+                }
                 let s = slot as usize;
                 if s >= self.slots.len() {
                     self.retirer.retire(Retired::Device(device));
@@ -433,6 +436,9 @@ impl Engine {
                 self.active.remove_slot(slot);
             }
             EngineCommand::RemoveDevice { slot } => {
+                if self.telemetry.analysis.is_selected(slot) {
+                    self.telemetry.analysis.invalidate();
+                }
                 let s = slot as usize;
                 if let Some(old) = self.slots.get_mut(s).and_then(Option::take) {
                     self.retirer.retire(Retired::Device(old));
@@ -458,6 +464,9 @@ impl Engine {
             },
             EngineCommand::SetBypass { slot, bypass } => {
                 if let Some(b) = self.bypass.get_mut(slot as usize) {
+                    if b.bypassed != bypass && self.telemetry.analysis.is_selected(slot) {
+                        self.telemetry.analysis.invalidate();
+                    }
                     b.bypassed = bypass;
                 }
             }
@@ -516,6 +525,7 @@ impl Engine {
                 }
             }
             EngineCommand::Pause => {
+                self.telemetry.analysis.invalidate();
                 self.release_sequence_notes(0);
                 if self.transport.playing {
                     self.cut_audio(self.engine_sample);
@@ -523,6 +533,7 @@ impl Engine {
                 self.transport.playing = false;
             }
             EngineCommand::Stop { return_to } => {
+                self.telemetry.analysis.invalidate();
                 self.release_sequence_notes(0);
                 if self.transport.playing {
                     self.cut_audio(self.engine_sample);
@@ -531,6 +542,7 @@ impl Engine {
                 self.transport.position = sane_beat(return_to);
             }
             EngineCommand::Seek { beat } => {
+                self.telemetry.analysis.invalidate();
                 self.release_sequence_notes(0);
                 if self.transport.playing {
                     self.cut_audio(self.engine_sample);
@@ -624,6 +636,7 @@ impl Engine {
     }
 
     fn panic(&mut self) {
+        self.telemetry.analysis.invalidate();
         self.active.clear();
         self.live.reset();
         for s in 0..self.slots.len() {
@@ -1200,11 +1213,26 @@ impl Engine {
                 stamps[s] = *stamp;
                 let target = if bypass[s].bypassed { 0.0 } else { 1.0 };
                 let events = stage.events(s);
+                let capture = if telemetry.analysis.is_selected(insert) {
+                    // Reading silence must not disable the graph's silent-device
+                    // optimization or mark a previously silent route as active.
+                    let was_dirty = mixer.dirty[ti];
+                    mixer.ensure_clean(ti, frames);
+                    mixer.dirty[ti] = was_dirty;
+                    let (l, r) = mixer.track(ti, frames);
+                    telemetry.analysis.begin(insert, l, r)
+                } else {
+                    None
+                };
                 if bypass[s].mix == 0.0 && target == 0.0 {
+                    let (l, r) = mixer.track(ti, frames);
+                    telemetry.analysis.finish(capture, l, r, *sample_rate);
                     continue;
                 }
                 if !mixer.dirty[ti] && events.is_empty() && dev.is_silent() {
                     bypass[s].mix = target;
+                    let (l, r) = mixer.track(ti, frames);
+                    telemetry.analysis.finish(capture, l, r, *sample_rate);
                     continue;
                 }
                 mixer.ensure_clean(ti, frames);
@@ -1261,6 +1289,8 @@ impl Engine {
                     }
                     bypass[s].mix = m;
                 }
+                let (l, r) = mixer.track(ti, frames);
+                telemetry.analysis.finish(capture, l, r, *sample_rate);
                 if let Some(db) = dev.reduction_db() {
                     telemetry.push_reduction(insert, db);
                 }

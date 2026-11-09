@@ -103,6 +103,7 @@
 //! An allocation on the audio thread then aborts the process in debug
 //! builds, with a stack trace under a debugger.
 
+pub mod analysis;
 mod audio;
 mod clock;
 pub mod command;
