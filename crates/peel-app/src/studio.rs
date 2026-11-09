@@ -435,6 +435,20 @@ impl Studio {
         if ui.input.take_named(NamedKey::Space) {
             self.session.toggle_play();
         }
+        if ui.input.take_named(NamedKey::Home) {
+            self.session.seek(0.0);
+        }
+        if ui.input.take_named(NamedKey::End) {
+            let to = self.session.play_end();
+            self.session.seek(to);
+        }
+        let bar = self.session.project().time_signature.bar_length().as_f64();
+        if ui.input.take_named(NamedKey::PageUp) {
+            self.session.nudge(-bar);
+        }
+        if ui.input.take_named(NamedKey::PageDown) {
+            self.session.nudge(bar);
+        }
         let mut switch = |key: NamedKey, tab: DockTab, ws: &mut Workspace| {
             if ui.input.take_named(key) {
                 ws.dock = tab;

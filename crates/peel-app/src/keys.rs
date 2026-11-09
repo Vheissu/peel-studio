@@ -5,6 +5,8 @@ use peel_ui::{Align, Rect, Ui, vec2};
 pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Space", "Play / stop"),
     ("L", "Pattern / Song"),
+    ("Home  /  End", "Go to start / end"),
+    ("PgUp  /  PgDn", "Back / forward one bar"),
     ("Z – M  /  Q – P", "Play the selected instrument"),
     ("−  /  =", "Octave down / up"),
     ("F6  F7  F9", "Channels, Piano roll, Mixer"),

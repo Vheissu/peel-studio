@@ -266,10 +266,20 @@ pub fn draw(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) {
                 );
                 ui.scene.pop_clip();
             });
-            // Follow playback.
-            if s.is_playing() && x > lanes_r.right() - 40.0 {
-                ws.playlist.scroll_beats = s.position() as f32 - 4.0;
-            }
+        }
+        // Follow playback: page on near the right edge, and come back
+        // when the transport wraps to a loop start that is out of view.
+        let pos = s.position();
+        let last = std::mem::replace(ui.state::<f64>(W::new("pl-follow-last")), pos);
+        let out = x < lanes_r.x || x > lanes_r.right();
+        let jumped = if s.is_playing() {
+            pos + 1e-6 < last
+        } else {
+            (pos - last).abs() > 1e-6
+        };
+        let edge = s.is_playing() && x > lanes_r.right() - 40.0 && x <= lanes_r.right() + 40.0;
+        if edge || (jumped && out) {
+            ws.playlist.scroll_beats = (pos as f32 - 4.0).max(0.0);
         }
     }
 }

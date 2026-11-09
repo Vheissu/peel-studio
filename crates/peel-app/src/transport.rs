@@ -21,8 +21,8 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
 
     let mut row = r.shrink2(12.0, 9.0);
     // Narrow windows trade labels and width for room.
-    let compact = r.w < 1560.0;
-    let tight = r.w < 1340.0;
+    let compact = r.w < 1700.0;
+    let tight = r.w < 1470.0;
     row.cut_left(win.titlebar_inset());
     logo(ui, row.cut_left(30.0));
     row.cut_left(10.0);
@@ -57,8 +57,42 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
     }
     row.cut_left(10.0);
 
-    // Play / stop / record.
+    // Start, rewind, play / stop / record, fast forward, end, loop.
     let playing = studio.session.is_playing();
+    let bar = studio
+        .session
+        .project()
+        .time_signature
+        .bar_length()
+        .as_f64();
+    let start = ui.icon_button_fill(
+        W::new("to-start"),
+        row.cut_left(30.0),
+        icons::SKIP_BACK,
+        false,
+        t.text,
+        13.0,
+    );
+    ui.tooltip(&start, "Go to start (Home)");
+    if start.clicked {
+        studio.session.seek(0.0);
+    }
+    row.cut_left(4.0);
+    if !tight {
+        let rew = ui.icon_button_fill(
+            W::new("rewind"),
+            row.cut_left(30.0),
+            icons::REWIND,
+            false,
+            t.text,
+            13.0,
+        );
+        ui.tooltip(&rew, "Back one bar (Page Up)");
+        if rew.clicked {
+            studio.session.nudge(-bar);
+        }
+        row.cut_left(4.0);
+    }
     let play = ui.icon_button_fill(
         W::new("play"),
         row.cut_left(38.0),
@@ -114,6 +148,57 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
     );
     if rec.clicked {
         studio.recorder.armed = !armed;
+    }
+    row.cut_left(4.0);
+    if !tight {
+        let ff = ui.icon_button_fill(
+            W::new("fast-forward"),
+            row.cut_left(30.0),
+            icons::FAST_FORWARD,
+            false,
+            t.text,
+            13.0,
+        );
+        ui.tooltip(&ff, "Forward one bar (Page Down)");
+        if ff.clicked {
+            studio.session.nudge(bar);
+        }
+        row.cut_left(4.0);
+    }
+    let end = ui.icon_button_fill(
+        W::new("to-end"),
+        row.cut_left(30.0),
+        icons::SKIP_FORWARD,
+        false,
+        t.text,
+        13.0,
+    );
+    ui.tooltip(&end, "Go to end (End)");
+    if end.clicked {
+        let to = studio.session.play_end();
+        studio.session.seek(to);
+    }
+    row.cut_left(4.0);
+    let song = studio.session.mode() == peel_session::PlayMode::Song;
+    let looping = !song || studio.session.looping();
+    let lp = ui.icon_button_fill(
+        W::new("loop"),
+        row.cut_left(30.0),
+        icons::REPEAT,
+        looping,
+        t.accent,
+        14.0,
+    );
+    ui.tooltip(
+        &lp,
+        match (song, looping) {
+            (false, _) => "Patterns always loop",
+            (true, true) => "Looping the song",
+            (true, false) => "Loop the song",
+        },
+    );
+    if lp.clicked && song {
+        studio.session.set_looping(!looping);
     }
     row.cut_left(12.0);
 
@@ -397,15 +482,19 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
     if tight {
         return;
     }
-    let meter_r = right
-        .cut_right(if compact { 90.0 } else { 130.0 })
-        .shrink2(0.0, 7.0);
+    // The meter gives way to the controls on the left when space is short.
+    let load_w = if compact { 18.0 } else { 54.0 };
+    let meter_w = (if compact { 90.0 } else { 130.0 } as f32).min(right.w - load_w - 20.0);
+    if meter_w < 40.0 {
+        return;
+    }
+    let meter_r = right.cut_right(meter_w).shrink2(0.0, 7.0);
     let master = studio.session.project().mixer.tracks[0].id;
     let peaks = studio.session.take_track_meter(master);
     horizontal_meter(ui, W::new("master-meter"), meter_r, peaks);
     right.cut_right(12.0);
     let load = studio.session.cpu_load();
-    let load_r = right.cut_right(if compact { 18.0 } else { 54.0 });
+    let load_r = right.cut_right(load_w);
     let lc = if load > 0.85 {
         t.record
     } else if load > 0.6 {

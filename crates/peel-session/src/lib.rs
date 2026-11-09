@@ -77,6 +77,8 @@ pub struct Session {
     playing: bool,
     play_start: f64,
     metronome: bool,
+    /// Song playback wraps at the loop range (or the arrangement end).
+    looping: bool,
     samples: SampleLoader,
     plugins: PluginRegistry,
     bounce: Option<bounce::Bounce>,
@@ -171,6 +173,7 @@ impl Session {
             playing: false,
             play_start: 0.0,
             metronome: false,
+            looping: true,
             samples: SampleLoader::new(),
             plugins,
             bounce: None,
@@ -490,6 +493,10 @@ impl Session {
                 samples: &samples,
             },
         );
+        if self.mode == PlayMode::Song && !self.looping {
+            // Without looping the song plays to its end and stops.
+            plan.loop_range = None;
+        }
         if performance.is_some() {
             // Launches play on and on; the plan is extended as it goes.
             plan.loop_range = None;
@@ -682,6 +689,43 @@ impl Session {
     /// Where the last seek or play started (Stop returns here).
     pub fn start_position(&self) -> f64 {
         self.play_start
+    }
+
+    /// Song playback loops (pattern playback always does).
+    pub fn looping(&self) -> bool {
+        self.looping
+    }
+
+    pub fn set_looping(&mut self, on: bool) {
+        if self.looping != on {
+            self.looping = on;
+            self.synced = None;
+            self.sync();
+        }
+    }
+
+    /// End of what plays: the pattern length, or the arrangement rounded up
+    /// to whole bars.
+    pub fn play_end(&self) -> f64 {
+        let p = self.doc.project();
+        match self.mode {
+            PlayMode::Pattern(pid) => p.pattern(pid).map_or(4.0, |pt| pt.length.as_f64()),
+            PlayMode::Song => {
+                let bar = p.time_signature.bar_length();
+                p.arrangement().end().ceil_to(bar).max(bar).as_f64()
+            }
+        }
+    }
+
+    /// Moves the playhead by `beats` (negative rewinds), kept inside what
+    /// plays. While playing, Stop still returns to where play began.
+    pub fn nudge(&mut self, beats: f64) {
+        let to = (self.position() + beats).clamp(0.0, self.play_end());
+        let start = self.play_start;
+        self.seek(to);
+        if self.playing {
+            self.play_start = start;
+        }
     }
 
     pub fn metronome(&self) -> bool {
@@ -1020,6 +1064,21 @@ pub fn find_device_mut(p: &mut Project, id: Id) -> Option<&mut DeviceInstance> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn song_looping_can_be_turned_off() {
+        let mut s = Session::new_silent(template::beat_and_melody());
+        s.set_mode(PlayMode::Song);
+        s.sync();
+        let end = s.play_end();
+        assert!(end > 0.0);
+        assert!(s.plan.as_ref().unwrap().loop_range.is_some());
+        s.set_looping(false);
+        assert!(s.plan.as_ref().unwrap().loop_range.is_none());
+        assert_eq!(s.plan.as_ref().unwrap().length_beats, end);
+        s.set_looping(true);
+        assert!(s.plan.as_ref().unwrap().loop_range.is_some());
+    }
 
     #[test]
     fn save_and_reopen_round_trip() {

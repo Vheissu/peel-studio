@@ -241,6 +241,13 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
     if s.is_playing() && matches!(s.mode(), PlayMode::Pattern(p) if p == pid) {
         let b = s.position().rem_euclid(pattern.length.as_f64());
         let x = v.x(b);
+        // Follow playback the same way the Playlist does.
+        let last = std::mem::replace(ui.state::<f64>(W::new("roll-follow-last")), b);
+        let wrapped = b + 1e-6 < last;
+        let out = x < canvas.x || x > canvas.right() - 40.0;
+        if (x > canvas.right() - 40.0 && x <= canvas.right() + 40.0) || (wrapped && out) {
+            ws.roll.scroll_beats = (b as f32 - 1.0).max(0.0);
+        }
         if x >= canvas.x && x <= canvas.right() {
             ui.with_layer(peel_ui::LayerId::ABOVE, |ui| {
                 ui.scene.push_clip(Rect {
