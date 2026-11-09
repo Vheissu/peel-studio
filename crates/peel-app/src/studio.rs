@@ -569,6 +569,10 @@ impl Studio {
         {
             crate::instrument_editor::open(&mut self.session, &mut self.ws, c);
         }
+        if std::env::var_os("PEEL_MIXER_EXPAND").is_some() {
+            self.ws.dock = DockTab::Mixer;
+            self.ws.mixer_restore_h = Some(self.ws.dock_h);
+        }
         if std::env::var_os("PEEL_AUDIO_SHEET").is_some() {
             self.ws.io_open = true;
         }
@@ -1216,9 +1220,14 @@ impl Studio {
         if ui.input.focus_lost {
             crate::instrument_editor::release_all(&mut self.session, &mut self.ws);
         }
-        // Two editors never stack: the one opened last wins.
+        // Two editors never stack: the one opened last wins (opening any
+        // from the UI closes the others; scripts open the effect editor
+        // without knowing about the rest).
         if self.ws.fx.is_open() && self.ws.inst.is_open() {
             crate::instrument_editor::close(&mut self.session, &mut self.ws);
+        }
+        if self.ws.fx.is_open() && self.ws.io_open {
+            self.ws.io_open = false;
         }
         self.session.set_live_target(self.ws.selected_channel);
         self.session.poll_midi();

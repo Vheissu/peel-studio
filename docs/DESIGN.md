@@ -124,7 +124,9 @@ in the dock header (Compact 64 px, Expanded 92, Full 124) decide which
 rows a strip has; the dock height decides how many insert and send rows
 fit, so the fader keeps at least about 96 px. When it cannot, rows go in a
 fixed order: the send list becomes a Sends menu, then the pan legend, then
-an insert row. Grow mixer gives the dock the whole window height.
+an insert row. Strip size and area are separate choices: Expand mixer makes
+the mixer take the whole area between the panes while the playlist steps
+aside, so a tall window shows long faders and full send lists.
 
 Every strip shows real engine state: a scrolling insert chain (all inserts,
 a dot that bypasses, a click that opens the editor, a right-click menu),
@@ -175,6 +177,45 @@ input and output peak and RMS in dBFS (labelled as such), the ceiling mark,
 and gain reduction as a number, a bar and a history. The tone and
 compressor curves are computed from the same filters and constants the
 effect uses.
+
+## Instrument editor
+
+A sheet like the effect editor, opened from a channel's context menu in
+the rack, the piano-keys button in the inspector, or its menu. Opening is
+not an edit. The header lists every channel as a chip so you can move from
+one instrument to the next without closing; the body is the instrument's
+full parameter panel (plugin instruments show the same panel: the host
+does not embed native plugin windows, and the sheet says so). Below it
+sits a piano of three or four octaves from the current octave's C. The
+computer keyboard letters are printed on the keys they play. Click plays,
+dragging across keys glides, release stops. The rail holds Velocity,
+Octave, a Keyboard switch for the computer keys, a Sustain switch, MIDI
+status (an activity light, port summary, channel filter) and the controller
+mapper: pick a parameter, Learn, move a control; each mapping lists its CC
+and the parameter's live value, with Unmap. Labels say what is supported:
+notes, the sustain pedal and CC knobs. Pitch bend and aftertouch are not
+used.
+
+Notes never hang. Mouse notes end on release, when the pointer leaves the
+window with the button up, when the editor closes, when the target changes
+and when the window loses focus; the same focus loss ends held computer
+keys, and Panic silences every channel.
+
+## Audio sheet
+
+One sheet, opened from the Audio button in the status bar, for the machine's
+audio routing. Left: input device (listed, never opened until chosen),
+channels (mono or stereo pair), a live level, monitoring with the engine's
+own availability and latency text, then the recording workflow: choose a
+lane (or make a new one), press Record, with the reason shown when a take
+cannot start; the offset adds to the measured round-trip latency. Right:
+the main output's channel pair and up to four extra outputs, each a master
+or track source on any output device and channel pair with level, mute and
+the stream's health, latency and drift. Extra outputs are drift-corrected
+cue feeds and the sheet says they are not sample-locked. Input choices,
+outputs, the MIDI channel and controller mappings are saved as machine
+preferences, never in a project; mappings that name another project's
+devices are kept and reported, not applied.
 
 ## Help
 
