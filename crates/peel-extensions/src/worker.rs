@@ -1,10 +1,9 @@
 //! The app and CLI dispatch this private mode before initializing UI or audio.
 use super::{Budget, Language, MAX_JSON, TIME_LIMIT, error};
 use serde::{Deserialize, Serialize};
-use std::io::Read;
+use std::io::Write;
 use std::process::Command;
 use std::sync::{Arc, atomic::AtomicBool};
-use std::time::Instant;
 
 #[derive(Serialize, Deserialize)]
 struct Request {
@@ -51,23 +50,19 @@ pub fn dispatch() -> bool {
         return false;
     }
     let result = (|| -> Result<Response, String> {
-        let mut bytes = Vec::new();
-        std::io::stdin()
-            .take((MAX_JSON * 3 + 1) as u64)
-            .read_to_end(&mut bytes)
-            .map_err(error)?;
-        if bytes.len() > MAX_JSON * 3 {
-            return Err("Script worker input is too large".into());
-        }
+        // The payload is one line; later lines on stdin are host-call replies.
+        let bytes = super::host::read_line(&mut std::io::stdin().lock(), MAX_JSON * 3)
+            .map_err(|_| "Script worker input is too large".to_string())?
+            .ok_or("Script worker received no input")?;
         let request: Request = serde_json::from_slice(&bytes).map_err(error)?;
         if request.source.len() > super::MAX_SOURCE || request.project.len() > MAX_JSON {
             return Err("Script worker input is too large".into());
         }
-        let budget = Budget {
-            cancelled: Arc::new(AtomicBool::new(false)),
-            deadline: Instant::now() + TIME_LIMIT,
-            logs: Default::default(),
-        };
+        let budget = Budget::new(
+            Arc::new(AtomicBool::new(false)),
+            TIME_LIMIT,
+            super::host::Client::Pipe,
+        );
         let project = match request.language {
             Language::JavaScript => super::javascript::execute(
                 &request.source,
@@ -84,7 +79,15 @@ pub fn dispatch() -> bool {
         let logs = budget.logs.lock().unwrap().clone();
         Ok(Response { project, logs })
     })();
-    if let Err(e) = serde_json::to_writer(std::io::stdout(), &result) {
+    let mut out = std::io::stdout().lock();
+    if let Err(e) = serde_json::to_writer(&mut out, &result)
+        .map_err(error)
+        .and_then(|_| {
+            out.write_all(b"\n")
+                .and_then(|_| out.flush())
+                .map_err(error)
+        })
+    {
         eprintln!("{e}");
     }
     true

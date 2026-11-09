@@ -1,0 +1,327 @@
+//! Live scripting calls execute on the session/UI thread, using the same
+//! controller as MCP plus desktop selection and view state.
+use crate::{
+    prefs::Prefs,
+    studio::Studio,
+    workspace::{BrowserTab, DockTab, Focus, Workspace},
+};
+use peel_document::Id;
+use peel_session::Session;
+use serde::Deserialize;
+use serde_json::{Value, json};
+
+pub fn pump(studio: &mut Studio) {
+    // Temporarily separate the job/controller so each call can update desktop
+    // state before the script receives its reply, including after Open/New.
+    let mut running = studio.scripts.job.take();
+    let mut control = std::mem::take(&mut studio.scripts.control);
+    control.tick();
+    if let Some(run) = &mut running {
+        run.job.pump(|name, args| {
+            let before = studio.session.project().id;
+            let recording = studio.session.is_recording();
+            let target = studio.session.live_target();
+            let result = execute(
+                &mut studio.session,
+                &mut studio.ws,
+                &mut studio.prefs,
+                &mut control,
+                name,
+                args,
+            );
+            if studio.session.project().id != before {
+                studio.reset_workspace();
+            }
+            if recording != studio.session.is_recording() {
+                studio.recorder.armed = studio.session.is_recording();
+            }
+            if target != studio.session.live_target() {
+                studio.ws.selected_channel = studio.session.live_target();
+            }
+            result
+        });
+    }
+    studio.scripts.job = running;
+    studio.scripts.control = control;
+}
+
+pub fn execute(
+    session: &mut Session,
+    ws: &mut Workspace,
+    prefs: &mut Prefs,
+    control: &mut peel_mcp::Control,
+    name: &str,
+    args: Value,
+) -> Result<Value, String> {
+    match name {
+        "ui.get" => Ok(view(session, ws, prefs)),
+        "ui.set" => update(session, ws, prefs, args),
+        "tools" => {
+            let mut tools = serde_json::to_value(peel_mcp::tools()).map_err(|e| e.to_string())?;
+            let tools = tools.as_array_mut().expect("tool catalog is an array");
+            tools.push(json!({"name":"ui.get","description":"Read workspace selection, active editor and visible panels","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}));
+            tools.push(json!({"name":"ui.set","description":"Set workspace selection, active editor and visible panels. Inspector and Scripts share a column.","inputSchema":{"type":"object","additionalProperties":false,"properties":{
+                "dock":{"enum":["rack","piano_roll","mixer","perform"]},
+                "browser_tab":{"enum":["instruments","effects","samples","patterns"]},
+                "pattern":{"type":"string"},"channel":{"type":"string"},
+                "notes":{"type":"array","items":{"type":"string"}},"clips":{"type":"array","items":{"type":"string"}},
+                "focus":{"type":"object","properties":{"kind":{"enum":["channel","track","clip","none"]},"id":{"type":"string"}}},
+                "panels":{"type":"object","additionalProperties":false,"properties":{"browser":{"type":"boolean"},"inspector":{"type":"boolean"},"scripts":{"type":"boolean"},"editor":{"type":"boolean"},"help":{"type":"boolean"}}}
+            }}}));
+            Ok(Value::Array(tools.clone()))
+        }
+        _ => {
+            let args = args
+                .as_object()
+                .cloned()
+                .ok_or("Host call arguments must be an object")?;
+            let name = if name.starts_with("peel_") {
+                name.to_string()
+            } else {
+                format!("peel_{name}")
+            };
+            let action = peel_mcp::decode(&name, args)?;
+            let result = control.execute(session, action);
+            session.tick();
+            result
+        }
+    }
+}
+
+fn view(session: &Session, ws: &Workspace, prefs: &Prefs) -> Value {
+    let focus = ws.focus.map(|f| match f {
+        Focus::Channel(id) => json!({"kind":"channel","id":id}),
+        Focus::Track(id) => json!({"kind":"track","id":id}),
+        Focus::Clip(id) => json!({"kind":"clip","id":id}),
+    });
+    json!({"dock":match ws.dock {DockTab::Rack=>"rack",DockTab::PianoRoll=>"piano_roll",DockTab::Mixer=>"mixer",DockTab::Perform=>"perform"},
+        "browser_tab":match ws.browser_tab {BrowserTab::Instruments=>"instruments",BrowserTab::Effects=>"effects",BrowserTab::Samples=>"samples",BrowserTab::Patterns=>"patterns"},
+        "pattern":session.selected_pattern(),"channel":ws.selected_channel,
+        "notes":ws.roll.selection,"clips":ws.playlist.selection,"focus":focus,
+        "panels":{"browser":prefs.show_browser,"inspector":prefs.show_inspector,"scripts":prefs.show_scripts,"editor":prefs.show_editor,"help":prefs.show_help}})
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct Panels {
+    browser: Option<bool>,
+    inspector: Option<bool>,
+    scripts: Option<bool>,
+    editor: Option<bool>,
+    help: Option<bool>,
+}
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum ViewFocus {
+    Channel { id: Id },
+    Track { id: Id },
+    Clip { id: Id },
+    None,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct Update {
+    dock: Option<String>,
+    browser_tab: Option<String>,
+    pattern: Option<Id>,
+    channel: Option<Id>,
+    notes: Option<Vec<Id>>,
+    clips: Option<Vec<Id>>,
+    panels: Panels,
+    focus: Option<ViewFocus>,
+}
+fn update(
+    session: &mut Session,
+    ws: &mut Workspace,
+    prefs: &mut Prefs,
+    args: Value,
+) -> Result<Value, String> {
+    let change: Update = serde_json::from_value(args).map_err(|e| e.to_string())?;
+    if change.panels.inspector == Some(true) && change.panels.scripts == Some(true) {
+        return Err("Inspector and Scripts share the right column; choose one".into());
+    }
+    let dock = change
+        .dock
+        .as_deref()
+        .map(|d| match d {
+            "rack" => Ok(DockTab::Rack),
+            "piano_roll" => Ok(DockTab::PianoRoll),
+            "mixer" => Ok(DockTab::Mixer),
+            "perform" => Ok(DockTab::Perform),
+            _ => Err("Unknown editor"),
+        })
+        .transpose()?;
+    let browser_tab = change
+        .browser_tab
+        .as_deref()
+        .map(|b| match b {
+            "instruments" => Ok(BrowserTab::Instruments),
+            "effects" => Ok(BrowserTab::Effects),
+            "samples" => Ok(BrowserTab::Samples),
+            "patterns" => Ok(BrowserTab::Patterns),
+            _ => Err("Unknown browser tab"),
+        })
+        .transpose()?;
+    let pattern_id = change.pattern.unwrap_or(session.selected_pattern());
+    let pattern = session.project().pattern(pattern_id);
+    if change.pattern.is_some() && pattern.is_none() {
+        return Err("Unknown pattern".into());
+    }
+    if change
+        .channel
+        .is_some_and(|id| session.project().channel(id).is_none())
+    {
+        return Err("Unknown channel".into());
+    }
+    if change.notes.as_ref().is_some_and(|ids| {
+        ids.iter()
+            .any(|id| !pattern.is_some_and(|p| p.notes.iter().any(|n| n.id == *id)))
+    }) {
+        return Err("Selected notes must belong to the current pattern".into());
+    }
+    if change.clips.as_ref().is_some_and(|ids| {
+        ids.iter().any(|id| {
+            !session
+                .project()
+                .arrangement()
+                .clips
+                .iter()
+                .any(|c| c.id == *id)
+        })
+    }) {
+        return Err("Selected clips must belong to the active arrangement".into());
+    }
+    let focus = change
+        .focus
+        .map(|f| match f {
+            ViewFocus::Channel { id } if session.project().channel(id).is_some() => {
+                Ok(Some(Focus::Channel(id)))
+            }
+            ViewFocus::Track { id } if session.project().mixer.track(id).is_some() => {
+                Ok(Some(Focus::Track(id)))
+            }
+            ViewFocus::Clip { id }
+                if session
+                    .project()
+                    .arrangement()
+                    .clips
+                    .iter()
+                    .any(|c| c.id == id) =>
+            {
+                Ok(Some(Focus::Clip(id)))
+            }
+            ViewFocus::None => Ok(None),
+            _ => Err("Unknown focus target"),
+        })
+        .transpose()?;
+    // Apply only after the complete request has been validated.
+    if let Some(dock) = dock {
+        ws.dock = dock;
+        prefs.show_editor = true;
+    }
+    if let Some(tab) = browser_tab {
+        ws.browser_tab = tab;
+        prefs.show_browser = true;
+    }
+    if let Some(pattern) = change.pattern {
+        session.select_pattern(pattern);
+        ws.roll.selection.clear();
+    }
+    if let Some(channel) = change.channel {
+        ws.selected_channel = Some(channel);
+        ws.focus = Some(Focus::Channel(channel));
+        session.set_live_target(Some(channel));
+    }
+    if let Some(notes) = change.notes {
+        ws.roll.selection = notes.into_iter().collect();
+    }
+    if let Some(clips) = change.clips {
+        ws.playlist.selection = clips.into_iter().collect();
+    }
+    if let Some(on) = change.panels.browser {
+        prefs.show_browser = on;
+    }
+    if let Some(on) = change.panels.inspector {
+        prefs.show_inspector = on;
+        if on {
+            prefs.show_scripts = false;
+        }
+    }
+    if let Some(on) = change.panels.scripts {
+        prefs.show_scripts = on;
+        if on {
+            prefs.show_inspector = false;
+        }
+    }
+    if let Some(on) = change.panels.editor {
+        prefs.show_editor = on;
+    }
+    if let Some(on) = change.panels.help {
+        prefs.show_help = on;
+    }
+    if let Some(focus) = focus {
+        ws.focus = focus;
+    }
+    prefs.save();
+    Ok(view(session, ws, prefs))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn view_calls_control_selection_and_reject_bad_requests_atomically() {
+        let mut session = Session::new_silent(peel_session::template::beat_and_melody());
+        let mut ws = Workspace::default();
+        let mut prefs = Prefs::default();
+        let mut control = peel_mcp::Control::default();
+        let pattern = session.project().patterns[0].id;
+        let channel = session.project().channels[0].id;
+        let note = session.project().patterns[0].notes[0].id;
+        let state=execute(&mut session,&mut ws,&mut prefs,&mut control,"ui.set",json!({"dock":"mixer","pattern":pattern,"channel":channel,"notes":[note],"panels":{"browser":false,"help":true}})).unwrap();
+        assert_eq!(state["dock"], "mixer");
+        assert_eq!(ws.selected_channel, Some(channel));
+        assert!(!prefs.show_browser);
+        assert!(prefs.show_help);
+        assert!(ws.roll.selection.contains(&note));
+        assert!(!session.doc.can_undo());
+        assert!(
+            execute(
+                &mut session,
+                &mut ws,
+                &mut prefs,
+                &mut control,
+                "ui.set",
+                json!({"dock":"rack","channel":Id::new()})
+            )
+            .is_err()
+        );
+        assert_eq!(ws.dock, DockTab::Mixer);
+        let state = execute(
+            &mut session,
+            &mut ws,
+            &mut prefs,
+            &mut control,
+            "status",
+            json!({}),
+        )
+        .unwrap();
+        assert!(state.is_object());
+        assert!(
+            execute(
+                &mut session,
+                &mut ws,
+                &mut prefs,
+                &mut control,
+                "tools",
+                json!({})
+            )
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len()
+                > 20
+        );
+    }
+}

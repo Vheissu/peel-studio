@@ -417,3 +417,321 @@ fn read_only_scripts_can_report_loaded_projects_with_legacy_values() {
         assert_eq!(report.logs, ["report"]);
     }
 }
+
+fn script(language: Language, source: &str) -> Script {
+    Script {
+        name: "Live".into(),
+        language,
+        source: source.into(),
+    }
+}
+
+/// Drive a job like a host frame loop, running calls on this thread.
+fn drive(
+    mut job: ScriptJob,
+    mut execute: impl FnMut(&str, serde_json::Value) -> Result<serde_json::Value, String>,
+) -> Result<ScriptOutput, String> {
+    let start = Instant::now();
+    loop {
+        job.pump(&mut execute);
+        if let Some(result) = job.poll() {
+            return result;
+        }
+        assert!(start.elapsed() < Duration::from_secs(20), "job hung");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+fn python_available() -> bool {
+    std::process::Command::new(std::env::var_os("PEEL_PYTHON").unwrap_or_else(|| "python3".into()))
+        .arg("--version")
+        .output()
+        .is_ok()
+}
+
+fn echo(name: &str, args: serde_json::Value) -> Result<serde_json::Value, String> {
+    match name {
+        "fail" => Err("action failed: nope".into()),
+        _ => Ok(serde_json::json!({"name": name, "args": args, "empty": [], "none": null})),
+    }
+}
+
+#[test]
+fn live_calls_return_results_synchronously_in_every_language() {
+    let mut cases = vec![
+        (
+            Language::JavaScript,
+            r#"
+            const a = peel.call("transport", {command: "play", beat: 2.5});
+            if (a.name !== "transport" || a.args.command !== "play" || a.args.beat !== 2.5) throw Error(JSON.stringify(a));
+            if (!Array.isArray(a.empty) || a.none !== null) throw Error("shape");
+            const b = peel.call("status");
+            if (JSON.stringify(b.args) !== "{}") throw Error("default args");
+            if (JSON.stringify(peel.call("status", null).args) !== "{}") throw Error("null args");
+            peel.log("js " + a.name + " " + b.name);
+            "#,
+        ),
+        (
+            Language::Lua,
+            r#"
+            local a = peel.call("transport", {command = "play", beat = 2.5, pattern = peel.null})
+            assert(a.name == "transport" and a.args.command == "play" and a.args.beat == 2.5)
+            assert(a.args.pattern == peel.null and a.none == peel.null)
+            assert(#a.empty == 0)
+            local b = peel.call("status")
+            assert(next(b.args) == nil)
+            assert(next(peel.call("status", {}).args) == nil)
+            assert(next(peel.call("status", peel.null).args) == nil)
+            assert(not pcall(peel.call, "status", peel.array()))
+            peel.log("lua " .. a.name .. " " .. b.name)
+            "#,
+        ),
+    ];
+    if python_available() {
+        cases.push((
+            Language::Python,
+            r#"
+a = peel.call("transport", {"command": "play", "beat": 2.5, "pattern": None})
+assert a["args"] == {"command": "play", "beat": 2.5, "pattern": None}, a
+assert a["empty"] == [] and a["none"] is None
+b = peel.call("status")
+assert b["args"] == {}
+try:
+    peel.call("status", [1])
+    raise AssertionError("list accepted")
+except TypeError:
+    pass
+peel.log("python " + a["name"] + " " + b["name"])
+"#,
+        ));
+    }
+    let project = template::beat_and_melody();
+    for (language, source) in cases {
+        let mut seen = Vec::new();
+        let output = drive(
+            ScriptJob::start(
+                script(language, source),
+                project.clone(),
+                Default::default(),
+            ),
+            |name, args| {
+                assert!(args.is_object());
+                seen.push(name.to_string());
+                echo(name, args)
+            },
+        )
+        .unwrap_or_else(|e| panic!("{language}: {e}"));
+        let prefix = match language {
+            Language::JavaScript => "js",
+            Language::Lua => "lua",
+            Language::Python => "python",
+        };
+        assert_eq!(output.logs, [format!("{prefix} transport status")]);
+        assert_eq!(seen[..2], ["transport", "status"]);
+    }
+}
+
+#[test]
+fn host_errors_are_catchable_and_uncaught_errors_fail_the_script() {
+    let mut cases = vec![
+        (
+            Language::JavaScript,
+            "try { peel.call('fail', {}); } catch (e) { peel.log('caught ' + e.message); }",
+            "peel.call('fail', {});",
+        ),
+        (
+            Language::Lua,
+            "local ok, e = pcall(peel.call, 'fail', {}); assert(not ok); peel.log('caught ' .. tostring(e))",
+            "peel.call('fail', {})",
+        ),
+    ];
+    if python_available() {
+        cases.push((
+            Language::Python,
+            "try:\n    peel.call('fail', {})\nexcept peel.HostError as e:\n    peel.log('caught ' + str(e))",
+            "peel.call('fail', {})",
+        ));
+    }
+    let project = template::beat_and_melody();
+    for (language, caught, uncaught) in cases {
+        let output = drive(
+            ScriptJob::start(
+                script(language, caught),
+                project.clone(),
+                Default::default(),
+            ),
+            echo,
+        )
+        .unwrap();
+        assert_eq!(output.logs.len(), 1, "{language}");
+        assert!(output.logs[0].starts_with("caught"), "{:?}", output.logs);
+        assert!(output.logs[0].contains("action failed: nope"));
+        let error = message(drive(
+            ScriptJob::start(
+                script(language, uncaught),
+                project.clone(),
+                Default::default(),
+            ),
+            echo,
+        ));
+        assert!(error.contains("action failed: nope"), "{language}: {error}");
+    }
+}
+
+#[test]
+fn cancelling_while_awaiting_the_host_skips_the_call() {
+    let mut languages = vec![
+        (
+            Language::JavaScript,
+            "peel.call('transport', {command:'play'})",
+        ),
+        (Language::Lua, "peel.call('transport', {command='play'})"),
+    ];
+    if python_available() {
+        languages.push((
+            Language::Python,
+            "peel.call('transport', {'command': 'play'})",
+        ));
+    }
+    for (language, source) in languages {
+        let mut job = ScriptJob::start(
+            script(language, source),
+            template::beat_and_melody(),
+            Default::default(),
+        );
+        // Let the request reach the host queue without pumping it.
+        std::thread::sleep(Duration::from_millis(if language == Language::Python {
+            400
+        } else {
+            100
+        }));
+        job.cancel();
+        let start = Instant::now();
+        let result = loop {
+            assert_eq!(job.pump(|_, _| panic!("cancelled call ran")), 0);
+            if let Some(result) = job.poll() {
+                break result;
+            }
+            assert!(start.elapsed() < Duration::from_secs(3), "{language}");
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert!(message(result).contains("cancelled"), "{language}");
+    }
+}
+
+#[test]
+fn time_waiting_for_the_host_does_not_use_the_script_budget() {
+    // Five 500 ms host calls exceed the two-second JavaScript budget.
+    let output = drive(
+        ScriptJob::start(
+            script(
+                Language::JavaScript,
+                "for (let i = 0; i < 5; i++) peel.call('status'); peel.log('done')",
+            ),
+            template::beat_and_melody(),
+            Default::default(),
+        ),
+        |_, _| {
+            std::thread::sleep(Duration::from_millis(500));
+            Ok(serde_json::json!({}))
+        },
+    )
+    .unwrap();
+    assert_eq!(output.logs, ["done"]);
+}
+
+/// A live edit through the host, standing in for an MCP action.
+fn rename(session: &mut Session, args: &serde_json::Value) -> serde_json::Value {
+    let title = args["title"].as_str().unwrap().to_string();
+    session.doc.edit("Live rename", |p| p.meta.title = title);
+    serde_json::json!({"revision": session.doc.revision().to_string()})
+}
+
+#[test]
+fn live_edits_keep_their_undo_and_snapshot_edits_reject_stale_state() {
+    for (language, report, edit) in [
+        (
+            Language::JavaScript,
+            "const r = peel.call('rename', {title: 'Live'}); peel.log(r.revision)",
+            "peel.call('rename', {title: 'Live'}); peel.project.swing = 0.5",
+        ),
+        (
+            Language::Lua,
+            "local r = peel.call('rename', {title = 'Live'}); peel.log(r.revision)",
+            "peel.call('rename', {title = 'Live'}); peel.project.swing = 0.5",
+        ),
+    ] {
+        // A snapshot-unchanged script succeeds after its own live edit.
+        let mut session = Session::new_silent(template::beat_and_melody());
+        let project = session.project().clone();
+        let output = drive(
+            ScriptJob::start(script(language, report), project, Default::default()),
+            |name, args| {
+                assert_eq!(name, "rename");
+                Ok(rename(&mut session, &args))
+            },
+        )
+        .unwrap();
+        assert_eq!(output.logs, [session.doc.revision().to_string()]);
+        assert!(!output.apply(&mut session).unwrap());
+        assert_eq!(session.project().meta.title, "Live");
+        assert_eq!(session.doc.undo_label(), Some("Live rename"));
+        session.doc.undo();
+        assert!(!session.doc.can_undo());
+
+        // A snapshot edit after a live mutation can't overwrite it.
+        let mut session = Session::new_silent(template::beat_and_melody());
+        let project = session.project().clone();
+        let output = drive(
+            ScriptJob::start(script(language, edit), project, Default::default()),
+            |_, args| Ok(rename(&mut session, &args)),
+        )
+        .unwrap();
+        assert!(output.apply(&mut session).unwrap_err().contains("changed"));
+        assert_eq!(session.project().meta.title, "Live");
+        assert_eq!(session.project().swing, 0.0);
+        assert_eq!(session.doc.history_labels().count(), 1);
+    }
+}
+
+#[test]
+fn snapshot_edits_without_live_calls_remain_one_undo_step() {
+    for (language, source) in [
+        (Language::JavaScript, "peel.project.meta.title = 'Atomic'"),
+        (Language::Lua, "peel.project.meta.title = 'Atomic'"),
+    ] {
+        let mut session = Session::new_silent(template::beat_and_melody());
+        let output = drive(
+            ScriptJob::start(
+                script(language, source),
+                session.project().clone(),
+                Default::default(),
+            ),
+            |_, _| panic!("no host calls expected"),
+        )
+        .unwrap();
+        assert!(output.apply(&mut session).unwrap());
+        assert_eq!(session.doc.undo_label(), Some("Script: Live"));
+        session.doc.undo();
+        assert!(!session.doc.can_undo());
+    }
+}
+
+#[test]
+fn direct_runs_without_a_host_report_calls_as_errors() {
+    let project = template::beat_and_melody();
+    assert!(
+        message(run_sync(
+            Language::JavaScript,
+            "peel.call('status')",
+            &project
+        ))
+        .contains("unavailable")
+    );
+    run_sync(
+        Language::Lua,
+        "assert(not pcall(peel.call, 'status')); assert(not pcall(peel.call, 'status', 3))",
+        &project,
+    )
+    .unwrap();
+}

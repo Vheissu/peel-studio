@@ -30,7 +30,7 @@ pub enum Pick {
 }
 
 pub struct Running {
-    job: ScriptJob,
+    pub(crate) job: ScriptJob,
     pub name: String,
     pub cancelling: bool,
 }
@@ -38,7 +38,7 @@ pub struct Running {
 #[derive(Clone, Debug)]
 pub struct Outcome {
     pub name: String,
-    /// `Ok` carries the summary ("Applied", "No changes").
+    /// `Ok` carries the summary ("Applied", "Finished").
     pub result: Result<String, String>,
     pub logs: Vec<String>,
 }
@@ -52,6 +52,7 @@ pub struct Scripts {
     pub broken: Vec<(String, String)>,
     pub selected: Option<Pick>,
     pub job: Option<Running>,
+    pub(crate) control: peel_mcp::Control,
     pub last: Option<Outcome>,
     /// Open the panel on the next frame (F8, `PEEL_SCRIPTS`).
     pub open_requested: bool,
@@ -95,6 +96,7 @@ impl Scripts {
             broken: Vec::new(),
             selected: None,
             job: None,
+            control: Default::default(),
             last: None,
             open_requested: false,
             scanned: false,
@@ -250,11 +252,11 @@ impl Scripts {
                 let logs = out.logs.clone();
                 // `apply` refuses cancelled runs and results computed
                 // against an older revision of the project.
-                let result = if recording {
+                let result = if recording && out.has_project_changes() {
                     Err("Not applied: recording started".to_string())
                 } else {
                     out.apply(session)
-                        .map(|changed| if changed { "Applied" } else { "No changes" }.to_string())
+                        .map(|changed| if changed { "Applied" } else { "Finished" }.to_string())
                 };
                 Outcome { name, result, logs }
             }
@@ -295,6 +297,7 @@ pub fn recording(studio: &Studio) -> bool {
 /// Polls the running job once per frame and keeps frames coming while it
 /// runs.
 pub fn frame(ui: &mut Ui, studio: &mut Studio) {
+    crate::script_host::pump(studio);
     let rec = recording(studio);
     if let Some(out) = studio.scripts.poll(&mut studio.session, rec) {
         let msg = match &out.result {

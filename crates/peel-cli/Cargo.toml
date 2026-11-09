@@ -18,5 +18,6 @@ peel-session.workspace = true
 peel-project.workspace = true
 peel-media.workspace = true
 peel-devices.workspace = true
-
 peel-extensions.workspace = true
+peel-mcp = { path = "../peel-mcp" }
+serde_json.workspace = true

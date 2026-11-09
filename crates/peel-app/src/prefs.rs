@@ -12,6 +12,11 @@ const MAX_RECENT: usize = 12;
 pub struct Prefs {
     pub recent: Vec<PathBuf>,
     pub show_welcome: bool,
+    pub show_browser: bool,
+    pub show_inspector: bool,
+    pub show_scripts: bool,
+    pub show_editor: bool,
+    pub show_help: bool,
     pub audio_device: Option<String>,
     pub buffer_frames: Option<u32>,
     pub octave: i32,
@@ -29,6 +34,11 @@ impl Default for Prefs {
         Prefs {
             recent: Vec::new(),
             show_welcome: true,
+            show_browser: true,
+            show_inspector: true,
+            show_scripts: false,
+            show_editor: true,
+            show_help: false,
             audio_device: None,
             buffer_frames: None,
             octave: 4,

@@ -56,6 +56,28 @@ pub(super) fn execute(
                 Ok(())
             })?,
         )?;
+        let host = budget.clone();
+        peel.set(
+            "call",
+            lua.create_function(move |lua, (name, args): (String, Option<mlua::Value>)| {
+                // nil, a missing argument and peel.null all mean "no arguments".
+                let args = match args {
+                    None | Some(mlua::Value::Nil) => serde_json::Value::Null,
+                    Some(value) if value == lua.null() => serde_json::Value::Null,
+                    Some(value @ mlua::Value::Table(_)) => {
+                        check_json(&value, &host, &mut 0, &mut 0, 0)?;
+                        lua.from_value(value)?
+                    }
+                    Some(_) => {
+                        return Err(mlua::Error::runtime("peel.call arguments must be a table"));
+                    }
+                };
+                let json = host.call(&name, args).map_err(mlua::Error::runtime)?;
+                let value: serde_json::Value =
+                    serde_json::from_str(&json).map_err(mlua::Error::external)?;
+                lua.to_value(&value)
+            })?,
+        )?;
         lua.globals().set("peel", peel.clone())?;
         lua.load(source)
             .set_name("script.lua")

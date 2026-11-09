@@ -178,6 +178,7 @@ fn render(args: &[String]) -> Result<(), String> {
 }
 
 /// Uses the same snapshot runner, validation and commit path as the desktop.
+/// `peel.call` runs MCP actions against a silent session on this thread.
 fn script(args: &[String]) -> Result<(), String> {
     if args.len() != 3 {
         return Err(USAGE.into());
@@ -189,25 +190,82 @@ fn script(args: &[String]) -> Result<(), String> {
         ..Default::default()
     };
     let action = peel_extensions::Script::from_path(std::path::Path::new(&args[1]))?;
-    let mut job =
-        peel_extensions::ScriptJob::start_isolated(action, project.clone(), context, None);
-    let output = loop {
-        if let Some(result) = job.poll() {
-            break result?;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    };
-    for line in &output.logs {
-        println!("{line}");
-    }
-    let mut session = peel_session::Session::new_silent(project);
+    // The session exists before the script starts so live calls act on it.
+    let mut session = peel_session::Session::new_silent(project.clone());
     if args[0] != "--demo" {
         session.path = Some(std::fs::canonicalize(&args[0]).map_err(|e| e.to_string())?);
     }
-    output.apply(&mut session)?;
-    let path = session.save(Some(PathBuf::from(&args[2])))?;
-    println!("Saved {}", path.display());
+    let mut control = peel_mcp::Control::default();
+    let mut job = peel_extensions::ScriptJob::start_isolated(action, project, context, None);
+    let result = loop {
+        control.tick();
+        job.pump(|name, arguments| live_call(&mut control, &mut session, name, arguments));
+        if let Some(result) = job.poll() {
+            break result;
+        }
+        session.tick();
+        session.poll_midi();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    };
+    let saved = result.and_then(|output| {
+        for line in &output.logs {
+            println!("{line}");
+        }
+        finish_exports(&mut control, &mut session);
+        output.apply(&mut session)?;
+        session.save(Some(PathBuf::from(&args[2])))
+    });
+    // Stops playback, previews, inputs and any export still running.
+    control.disconnect(&mut session);
+    println!("Saved {}", saved?.display());
     Ok(())
+}
+
+fn live_call(
+    control: &mut peel_mcp::Control,
+    session: &mut peel_session::Session,
+    name: &str,
+    arguments: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let serde_json::Value::Object(arguments) = arguments else {
+        return Err("Arguments must be an object".into());
+    };
+    let action = peel_mcp::decode(&format!("peel_{name}"), arguments)?;
+    let result = control.execute(session, action);
+    // Synchronize before the script observes an edit or playback change.
+    session.tick();
+    result
+}
+
+/// Exports a script started keep their files: wait rather than truncate them.
+fn finish_exports(control: &mut peel_mcp::Control, session: &mut peel_session::Session) {
+    let Ok(status) = live_call(control, session, "status", serde_json::json!({})) else {
+        return;
+    };
+    for job in status["export_jobs"].as_array().into_iter().flatten() {
+        let Some(job) = job.as_u64() else { continue };
+        loop {
+            control.tick();
+            let state = live_call(
+                control,
+                session,
+                "export_job",
+                serde_json::json!({"job": job}),
+            );
+            match state {
+                Ok(state) if state["done"] == false => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Ok(state) => {
+                    if let Some(error) = state["error"].as_str() {
+                        eprintln!("warning: export {job} failed: {error}");
+                    }
+                    break;
+                }
+                Err(_) => break,
+            }
+        }
+    }
 }
 
 #[cfg(test)]

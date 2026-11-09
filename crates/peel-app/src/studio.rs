@@ -101,7 +101,7 @@ impl Studio {
         }
     }
 
-    fn reset_workspace(&mut self) {
+    pub(crate) fn reset_workspace(&mut self) {
         let sample_dir = self.ws.sample_dir.clone();
         let octave = self.ws.octave;
         self.ws = Workspace::default();

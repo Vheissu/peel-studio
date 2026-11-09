@@ -1766,3 +1766,30 @@ fn python_action_shows_interpreter_controls_and_installs_py_files() {
     std::fs::remove_dir_all(dir).ok();
     std::fs::remove_dir_all(source_dir).ok();
 }
+
+#[test]
+fn scripts_control_the_live_session_and_workspace_on_the_ui_thread() {
+    let mut h = Harness::new();
+    h.studio.scripts.ensure_scanned();
+    let patterns = h.studio.session.project().patterns.len();
+    let index = h.studio.scripts.factory.len();
+    h.studio.scripts.factory.push(peel_extensions::Script {
+        name: "Live session".into(), language: peel_extensions::Language::JavaScript,
+        source: "const state = peel.call('status', {}); if (!state) throw Error('no status'); peel.call('transport', {command:'play'}); peel.call('ui.set', {dock:'mixer',panels:{browser:false,help:true}}); peel.call('add_pattern', {name:'Script Pattern',length:'4'}); peel.log('done');".into(),
+    });
+    h.studio.scripts.selected = Some(crate::scripts::Pick::Factory(index));
+    h.studio
+        .scripts
+        .run_selected(&h.studio.session, &h.studio.ws, false)
+        .unwrap();
+    wait_for_script(&mut h);
+    assert!(h.studio.scripts.last.as_ref().unwrap().result.is_ok());
+    assert!(h.studio.session.is_playing());
+    assert_eq!(h.studio.ws.dock, DockTab::Mixer);
+    assert!(!h.studio.prefs.show_browser);
+    assert!(h.studio.prefs.show_help);
+    assert_eq!(h.studio.session.project().patterns.len(), patterns + 1);
+    h.studio.session.doc.undo();
+    assert_eq!(h.studio.session.project().patterns.len(), patterns);
+    h.studio.session.stop();
+}

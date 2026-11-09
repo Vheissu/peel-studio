@@ -1,4 +1,6 @@
 //! One-shot editor actions. Runtimes own snapshots, never the live session.
+//! Live host calls go through `ScriptJob::pump` on the host's own thread.
+mod host;
 mod javascript;
 mod lua;
 mod process;
@@ -10,7 +12,7 @@ pub use worker::dispatch as dispatch_worker;
 use std::fmt;
 use std::io::Read;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
@@ -23,6 +25,10 @@ const MAX_JSON: usize = 16 * 1024 * 1024;
 const MEMORY_LIMIT: usize = 64 * 1024 * 1024;
 const TIME_LIMIT: Duration = Duration::from_secs(2);
 const MAX_LOG_BYTES: usize = 16 * 1024;
+/// Wall-clock cap, including time spent waiting for live host calls.
+const WALL_LIMIT: Duration = Duration::from_secs(60);
+/// Host calls handled per pump, so a busy script can't starve UI frames.
+const CALLS_PER_PUMP: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Language {
@@ -138,16 +144,24 @@ pub struct ScriptOutput {
     cancelled: Arc<AtomicBool>,
 }
 impl ScriptOutput {
+    /// Whether this run needs to commit its project snapshot.
+    pub fn has_project_changes(&self) -> bool {
+        self.project != self.before
+    }
+
     /// Only this control-side call can affect the live session.
     pub fn apply(self, session: &mut Session) -> Result<bool, String> {
         if self.cancelled.load(Ordering::Relaxed) {
             return Err("Script cancelled".into());
         }
-        if session.project().id != self.project_id || session.doc.revision() != self.revision {
-            return Err("The project changed while the script ran. Run it again.".into());
-        }
+        // An unchanged snapshot succeeds even after its own live calls
+        // replaced or edited the project; there is nothing to commit.
         if self.project == self.before {
             return Ok(false);
+        }
+        // Never overwrite newer state, including the script's own live edits.
+        if session.project().id != self.project_id || session.doc.revision() != self.revision {
+            return Err("The project changed while the script ran. Run it again.".into());
         }
         if session.project() != &self.before {
             return Err("The project changed while the script ran. Run it again.".into());
@@ -167,6 +181,7 @@ pub struct ScriptJob {
     finished: bool,
     worker: Option<std::thread::JoinHandle<()>>,
     isolated: bool,
+    host: mpsc::Receiver<host::Request>,
 }
 impl ScriptJob {
     pub fn start(script: Script, project: Project, context: ScriptContext) -> Self {
@@ -202,13 +217,22 @@ impl ScriptJob {
         let cancelled = Arc::new(AtomicBool::new(false));
         let worker_cancel = cancelled.clone();
         let (sender, receiver) = mpsc::sync_channel(1);
+        let (calls, host) = mpsc::sync_channel(1);
+        let client = host::Client::Channel(calls);
         // Only owned data crosses the thread boundary; neither VM is Send.
         let process_backed = isolated || script.language == Language::Python;
         let spawn = std::thread::Builder::new()
             .name("peel-script".into())
             .spawn(move || {
-                let result =
-                    run_with_python(script, project, context, worker_cancel, python, isolated);
+                let result = run_with_python(
+                    script,
+                    project,
+                    context,
+                    worker_cancel,
+                    python,
+                    isolated,
+                    client,
+                );
                 let _ = sender.send(result);
             });
         // A failed spawn drops sender; poll reports a worker failure.
@@ -219,10 +243,35 @@ impl ScriptJob {
             finished: false,
             worker,
             isolated: process_backed,
+            host,
         }
     }
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Relaxed);
+    }
+    /// Runs pending `peel.call(name, args)` requests on the caller's thread.
+    /// `args` is always a JSON object. Call once per frame alongside poll;
+    /// at most a few requests are handled per call. The callback owns all
+    /// session logic. Results are returned to the waiting script; an `Err`
+    /// becomes a catchable script error. Returns the number of calls run.
+    pub fn pump(
+        &mut self,
+        mut execute: impl FnMut(&str, serde_json::Value) -> Result<serde_json::Value, String>,
+    ) -> usize {
+        let mut handled = 0;
+        for _ in 0..CALLS_PER_PUMP {
+            let Ok(request) = self.host.try_recv() else {
+                break;
+            };
+            if self.cancelled.load(Ordering::Relaxed) || request.abandoned.load(Ordering::Relaxed) {
+                let _ = request.reply.send(Err("Script cancelled".into()));
+                continue;
+            }
+            let result = execute(&request.name, request.args);
+            handled += 1;
+            let _ = request.reply.send(result);
+        }
+        handled
     }
     pub fn poll(&mut self) -> Option<Result<ScriptOutput, String>> {
         if self.finished {
@@ -259,18 +308,49 @@ impl Drop for ScriptJob {
 #[derive(Clone)]
 struct Budget {
     cancelled: Arc<AtomicBool>,
-    deadline: Instant,
+    started: Instant,
+    limit: Duration,
+    /// Microseconds spent waiting for host calls; they extend `limit`.
+    waiting: Arc<AtomicU64>,
     logs: Arc<Mutex<Vec<String>>>,
+    host: host::Client,
 }
 impl Budget {
-    fn check(&self) -> Result<(), String> {
-        if self.cancelled.load(Ordering::Relaxed) {
-            return Err("Script cancelled".into());
+    fn new(cancelled: Arc<AtomicBool>, limit: Duration, host: host::Client) -> Self {
+        Self {
+            cancelled,
+            started: Instant::now(),
+            limit,
+            waiting: Default::default(),
+            logs: Default::default(),
+            host,
         }
-        if Instant::now() >= self.deadline {
+    }
+    fn check(&self) -> Result<(), String> {
+        self.check_waiting()?;
+        let waited = Duration::from_micros(self.waiting.load(Ordering::Relaxed));
+        if self.started.elapsed() >= self.limit + waited {
             return Err("Script exceeded its time limit".into());
         }
         Ok(())
+    }
+    /// Cancellation and the wall-clock cap still apply while a host call runs.
+    fn check_waiting(&self) -> Result<(), String> {
+        if self.cancelled.load(Ordering::Relaxed) {
+            return Err("Script cancelled".into());
+        }
+        if self.started.elapsed() >= WALL_LIMIT {
+            return Err("Script exceeded its time limit".into());
+        }
+        Ok(())
+    }
+    fn waited(&self, duration: Duration) {
+        let micros = u64::try_from(duration.as_micros()).unwrap_or(u64::MAX);
+        self.waiting.fetch_add(micros, Ordering::Relaxed);
+    }
+    /// A live host call, flattened for VM bindings: every error is a script error.
+    fn call(&self, name: &str, args: serde_json::Value) -> Result<String, String> {
+        host::call(self, name, args)?
     }
     fn log(&self, text: String) {
         let mut logs = self.logs.lock().unwrap();
@@ -294,7 +374,15 @@ fn run(
     context: ScriptContext,
     cancelled: Arc<AtomicBool>,
 ) -> Result<ScriptOutput, String> {
-    run_with_python(script, project, context, cancelled, None, false)
+    run_with_python(
+        script,
+        project,
+        context,
+        cancelled,
+        None,
+        false,
+        host::Client::None,
+    )
 }
 fn run_with_python(
     script: Script,
@@ -303,20 +391,17 @@ fn run_with_python(
     cancelled: Arc<AtomicBool>,
     python: Option<std::path::PathBuf>,
     isolated: bool,
+    client: host::Client,
 ) -> Result<ScriptOutput, String> {
     if script.source.len() > MAX_SOURCE {
         return Err("Scripts must be at most 1 MiB".into());
     }
-    let budget = Budget {
-        cancelled: cancelled.clone(),
-        deadline: Instant::now()
-            + if script.language == Language::Python {
-                Duration::from_secs(10)
-            } else {
-                TIME_LIMIT
-            },
-        logs: Default::default(),
+    let limit = if script.language == Language::Python {
+        Duration::from_secs(10)
+    } else {
+        TIME_LIMIT
     };
+    let budget = Budget::new(cancelled.clone(), limit, client);
     budget.check()?;
     let mut wire = serde_json::to_value(&project).map_err(error)?;
     // Both JS numbers and Lua's unsigned conversion can lose high u64 bits.

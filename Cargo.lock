@@ -2810,9 +2810,11 @@ dependencies = [
  "peel-devices",
  "peel-document",
  "peel-extensions",
+ "peel-mcp",
  "peel-media",
  "peel-project",
  "peel-session",
+ "serde_json",
 ]
 
 [[package]]

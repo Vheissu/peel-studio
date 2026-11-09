@@ -18,7 +18,10 @@ impl Drop for Scratch {
 }
 
 fn execute(script: &str, extension: &str) -> (std::process::Output, Scratch) {
-    let scratch = Scratch::new();
+    execute_in(Scratch::new(), script, extension)
+}
+
+fn execute_in(scratch: Scratch, script: &str, extension: &str) -> (std::process::Output, Scratch) {
     let source = scratch.0.join(format!("action.{extension}"));
     std::fs::write(&source, script).unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_peel"))
@@ -32,7 +35,7 @@ fn execute(script: &str, extension: &str) -> (std::process::Output, Scratch) {
         .unwrap();
     let start = Instant::now();
     while child.try_wait().unwrap().is_none() {
-        if start.elapsed() > Duration::from_secs(8) {
+        if start.elapsed() > Duration::from_secs(30) {
             let _ = child.kill();
             let _ = child.wait();
             panic!("CLI failed to enforce the script deadline");
@@ -73,6 +76,142 @@ fn native_library_stalls_are_killed_without_saving() {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
+        assert!(!scratch.0.join("result.peelproj").exists());
+    }
+}
+
+fn text(output: &std::process::Output) -> (String, String) {
+    (
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+/// Real MCP actions run against the CLI's session while the script waits.
+#[test]
+fn live_calls_drive_the_session_from_every_language() {
+    let cases = [
+        (
+            "js",
+            r#"
+            const help = peel.call("help", {});
+            if (!help.guide.includes("peel_status")) throw Error("help");
+            const before = peel.call("status");
+            peel.call("transport", {command: "play", looping: true});
+            if (!peel.call("status").playing) throw Error("not playing");
+            peel.call("transport", {command: "stop"});
+            const added = peel.call("add_pattern", {name: "Live JS", length: "4"});
+            const after = peel.call("status");
+            if (after.revision === before.revision) throw Error("revision");
+            const patterns = peel.call("read_project", {pointer: "/patterns"}).value;
+            if (!patterns.some(p => p.id === added.pattern)) throw Error(JSON.stringify(added));
+            if (!peel.call("devices", {}).devices.length) throw Error("devices");
+            peel.call("export_midi", {path: SCRATCH + "/live.mid"});
+            if (peel.call("browse_files", {directory: SCRATCH}).files[0].name !== "live.mid") throw Error("browse");
+            try { peel.call("no_such_action", {}); throw Error("unknown accepted"); }
+            catch (e) { if (!e.message.includes("unknown variant")) throw e; }
+            try { peel.call("transport", {command: "jump"}); throw Error("bad args accepted"); }
+            catch (e) { peel.log("caught " + (e.message.length > 0)); }
+            peel.log("live ok " + peel.call("status").undo.length);
+            "#,
+        ),
+        (
+            "lua",
+            r#"
+            local before = peel.call("status")
+            peel.call("transport", {command = "play"})
+            assert(peel.call("status").playing)
+            peel.call("transport", {command = "stop"})
+            local added = peel.call("add_pattern", {name = "Live Lua", length = "4"})
+            assert(peel.call("status").revision ~= before.revision)
+            assert(peel.call("status").path == peel.null)
+            peel.call("export_midi", {path = SCRATCH .. "/live.mid"})
+            local ok, e = pcall(peel.call, "no_such_action")
+            assert(not ok and tostring(e):find("unknown variant"))
+            peel.log("caught true")
+            peel.log("live ok " .. #peel.call("status").undo)
+            "#,
+        ),
+        (
+            "py",
+            r#"
+before = peel.call("status")
+peel.call("transport", {"command": "play"})
+assert peel.call("status")["playing"]
+peel.call("transport", {"command": "stop"})
+added = peel.call("add_pattern", {"name": "Live Python", "length": "4"})
+assert peel.call("status")["revision"] != before["revision"]
+peel.call("export_midi", {"path": SCRATCH + "/live.mid"})
+try:
+    peel.call("no_such_action")
+except peel.HostError as e:
+    assert "unknown variant" in str(e)
+    print("caught", True)
+print("live ok", len(peel.call("status")["undo"]))
+"#,
+        ),
+    ];
+    for (extension, body) in cases {
+        let scratch = Scratch::new();
+        let path = serde_json::to_string(&scratch.0.to_string_lossy()).unwrap();
+        let declare = match extension {
+            "js" => format!("const SCRATCH = {path};\n"),
+            "lua" => format!("local SCRATCH = {path}\n"),
+            _ => format!("SCRATCH = {path}\n"),
+        };
+        let (output, scratch) = execute_in(scratch, &(declare + body), extension);
+        let (stdout, stderr) = text(&output);
+        assert!(output.status.success(), "{extension}: {stderr}");
+        assert!(
+            stdout.contains("caught true") || stdout.contains("caught True"),
+            "{stdout}"
+        );
+        assert!(stdout.contains("live ok 1"), "{extension}: {stdout}");
+        assert!(scratch.0.join("live.mid").is_file());
+        // The snapshot was unchanged, so the saved file keeps the live edit.
+        let project = peel_project::load(&scratch.0.join("result.peelproj"))
+            .unwrap()
+            .project;
+        assert!(
+            project.patterns.iter().any(|p| p.name.starts_with("Live")),
+            "{extension}"
+        );
+    }
+}
+
+#[test]
+fn snapshot_edits_after_live_edits_and_uncaught_action_errors_fail() {
+    for (extension, source, expected) in [
+        (
+            "js",
+            "peel.call('add_pattern', {name: 'Live', length: '4'}); peel.project.meta.title = 'Stale';",
+            "changed",
+        ),
+        (
+            "lua",
+            "peel.call('add_pattern', {name = 'Live', length = '4'}); peel.project.meta.title = 'Stale'",
+            "changed",
+        ),
+        (
+            "py",
+            "peel.call('add_pattern', {'name': 'Live', 'length': '4'})\npeel.project['meta']['title'] = 'Stale'",
+            "changed",
+        ),
+        (
+            "js",
+            "peel.call('add_channel', {name: 'X', type_id: 'missing.device'})",
+            "Unknown device type",
+        ),
+        (
+            "lua",
+            "peel.call('history', {direction = 'sideways'})",
+            "sideways",
+        ),
+    ] {
+        let (output, scratch) = execute(source, extension);
+        let (_, stderr) = text(&output);
+        assert!(!output.status.success(), "{extension}: {source}");
+        assert!(stderr.contains(expected), "{extension}: {stderr}");
         assert!(!scratch.0.join("result.peelproj").exists());
     }
 }

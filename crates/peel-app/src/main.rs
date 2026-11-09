@@ -15,6 +15,7 @@ mod prefs;
 mod rack;
 mod recorder;
 mod rename;
+mod script_host;
 mod scripts;
 mod settings;
 mod studio;

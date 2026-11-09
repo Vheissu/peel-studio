@@ -1,5 +1,6 @@
 use super::{Budget, MAX_JSON, MEMORY_LIMIT, error};
-use rquickjs::{Context, Function, Object, Runtime};
+use rquickjs::function::Opt;
+use rquickjs::{Context, Ctx, Exception, Function, Object, Runtime, Value};
 
 pub(super) fn execute(
     source: &str,
@@ -28,6 +29,7 @@ pub(super) fn execute(
                 "log",
                 Function::new(ctx.clone(), move |text: String| output.log(text))?,
             )?;
+            install_call(&ctx, &peel, budget)?;
             ctx.globals().set("peel", peel.clone())?;
             // Keep a private reference; replacing the global cannot swap the host object.
             ctx.eval::<(), _>(source)?;
@@ -55,4 +57,36 @@ pub(super) fn execute(
                 }
             })
     })
+}
+
+/// `peel.call(name, args)` returns the host's JSON result or throws an Error.
+fn install_call<'js>(ctx: &Ctx<'js>, peel: &Object<'js>, budget: &Budget) -> rquickjs::Result<()> {
+    let host = budget.clone();
+    let call = Function::new(
+        ctx.clone(),
+        move |ctx: Ctx<'js>, name: String, args: Opt<Value<'js>>| -> rquickjs::Result<Value<'js>> {
+            let args = match args.0 {
+                None => serde_json::Value::Null,
+                Some(value) if value.is_undefined() || value.is_null() => serde_json::Value::Null,
+                Some(value) if value.is_object() && !value.is_function() && !value.is_array() => {
+                    let text = ctx.json_stringify(value)?.ok_or(rquickjs::Error::Unknown)?;
+                    match serde_json::from_str(&text.to_string()?) {
+                        Ok(args) => args,
+                        Err(e) => return Err(Exception::throw_message(&ctx, &e.to_string())),
+                    }
+                }
+                Some(_) => {
+                    return Err(Exception::throw_type(
+                        &ctx,
+                        "peel.call arguments must be an object",
+                    ));
+                }
+            };
+            match host.call(&name, args) {
+                Ok(json) => ctx.json_parse(json),
+                Err(e) => Err(Exception::throw_message(&ctx, &e)),
+            }
+        },
+    )?;
+    peel.set("call", call)
 }
