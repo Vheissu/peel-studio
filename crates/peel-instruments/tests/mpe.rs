@@ -694,3 +694,35 @@ fn shared_bend_extremes_stay_finite_and_bounded() {
         }
     }
 }
+
+#[test]
+fn clearing_a_curve_returns_the_held_voice_to_shared_controllers() {
+    for id in PITCHED {
+        let output = run(
+            id,
+            &[
+                (0, EventKind::PitchBend { semitones: 2.0 }),
+                note_on(0, KEY, 0.8, 99),
+                vx(0, 99, 7.0, 0.7, 0.8),
+                (12_000, EventKind::ClearVoiceExpression { voice: 99 }),
+                (26_000, EventKind::PitchBend { semitones: 3.0 }),
+            ],
+            44_000,
+            97,
+        );
+        let reference = run(id, &[note_on(0, KEY, 0.8, 99)], 44_000, 97);
+        let ratio = detect_pitch(&output[18_000..24_000], SR)
+            / detect_pitch(&reference[18_000..24_000], SR);
+        assert!(
+            (ratio / 2f32.powf(2.0 / 12.0) - 1.0).abs() < 0.03,
+            "{id}: clear ratio {ratio}"
+        );
+        let ratio = detect_pitch(&output[36_000..42_000], SR)
+            / detect_pitch(&reference[36_000..42_000], SR);
+        assert!(
+            (ratio / 2f32.powf(3.0 / 12.0) - 1.0).abs() < 0.03,
+            "{id}: shared controller ratio {ratio}"
+        );
+        assert!(all_finite(&output), "{id}");
+    }
+}

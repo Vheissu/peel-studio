@@ -130,6 +130,14 @@ fn audio_path_never_allocates() {
                 voice: 0,
             },
         });
+        events.push(DeviceEvent {
+            offset: 246,
+            kind: EventKind::ClearVoiceExpression { voice: 77 },
+        });
+        events.push(DeviceEvent {
+            offset: 247,
+            kind: EventKind::ClearVoiceExpression { voice: u32::MAX },
+        });
         events.sort_by_key(|e| e.offset);
         let tail = [DeviceEvent {
             offset: 10,

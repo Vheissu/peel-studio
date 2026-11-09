@@ -141,6 +141,7 @@ impl<S: Synth> Instrument<S> {
                 .synth
                 .expression()
                 .set_voice(voice, pitch, pressure, timbre),
+            EventKind::ClearVoiceExpression { voice } => self.synth.expression().clear_voice(voice),
             // Live controllers return to centre; a sequenced note keeps the
             // curve it is playing.
             EventKind::ResetExpression => self.synth.expression().reset_shared(),
@@ -712,6 +713,13 @@ impl Expression {
     fn remove(&mut self, i: usize) {
         self.n -= 1;
         self.scoped[i] = self.scoped[self.n];
+    }
+
+    /// A cleared curve gives this sounding voice back to the shared controllers.
+    pub(crate) fn clear_voice(&mut self, id: u32) {
+        if let Some(i) = self.find(id) {
+            self.remove(i);
+        }
     }
 
     /// Sets the per-note snapshot of voice `id`. Pitch is the full note
