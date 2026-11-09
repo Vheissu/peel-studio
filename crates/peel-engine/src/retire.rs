@@ -35,6 +35,11 @@ impl Retirer {
         }
     }
 
+    /// Whether ownership-critical transfers can be accepted without leaking.
+    pub fn can_accept(&self) -> bool {
+        self.pending_count < self.pending.len() || self.tx.slots() > 0
+    }
+
     /// Hands an object to the control thread. Never frees it here.
     pub fn retire(&mut self, item: Retired) {
         if self.pending_count > 0 {

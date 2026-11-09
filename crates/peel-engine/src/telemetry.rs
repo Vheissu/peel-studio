@@ -17,6 +17,7 @@ pub struct Telemetry {
     pub compensation_latency: AtomicU32,
     /// Device latency reports, sampled by the callback without allocating.
     pub slot_latencies: Box<[AtomicU32]>,
+    pub slot_generations: Box<[AtomicU64]>,
     pub latency_revision: AtomicU64,
     /// Current content position in quarter notes (f64 bits).
     beat: AtomicU64,
@@ -79,6 +80,7 @@ impl Telemetry {
             playing: AtomicBool::new(false),
             compensation_latency: AtomicU32::new(0),
             slot_latencies: zeros(MAX_SLOTS),
+            slot_generations: (0..MAX_SLOTS).map(|_| AtomicU64::new(0)).collect(),
             latency_revision: AtomicU64::new(0),
             beat: AtomicU64::new(0f64.to_bits()),
             cpu_load: AtomicU32::new(0),

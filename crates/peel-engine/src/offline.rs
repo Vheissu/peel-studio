@@ -42,9 +42,11 @@ impl OfflineEngine {
     /// Applies a command now.
     pub fn send(&mut self, cmd: EngineCommand) {
         if let EngineCommand::SetPlan(plan) = cmd {
-            if plan.tracks.is_empty() || plan.tracks.len() > crate::MAX_TRACKS
+            if plan.tracks.is_empty()
+                || plan.tracks.len() > crate::MAX_TRACKS
                 || plan.master as usize >= plan.tracks.len()
-                || plan.channels.len() > self.compensation.latencies.len() {
+                || plan.channels.len() > self.compensation.latencies.len()
+            {
                 // Preserve the raw engine's validation and retirement contract.
                 self.engine.handle_command(EngineCommand::SetPlan(plan));
             } else {
@@ -53,9 +55,15 @@ impl OfflineEngine {
             return;
         }
         let change = match &cmd {
-            EngineCommand::InstallDevice { slot, device } => {
-                Some((*slot as usize, device.latency(), false))
-            }
+            EngineCommand::InstallDevice { slot, device } => Some((
+                *slot as usize,
+                device.latency(),
+                self.compensation
+                    .bypassed
+                    .get(*slot as usize)
+                    .copied()
+                    .unwrap_or(false),
+            )),
             EngineCommand::RemoveDevice { slot } => Some((*slot as usize, 0, false)),
             EngineCommand::SetBypass { slot, bypass } => Some((
                 *slot as usize,
@@ -85,6 +93,8 @@ impl OfflineEngine {
                 self.compensation.error = Some("Unsupported device latency".into());
                 return;
             }
+            self.compensation.resource_revision =
+                self.compensation.resource_revision.wrapping_add(1);
             if let Some(dest) = self.compensation.latencies.get_mut(slot) {
                 *dest = latency;
                 self.compensation.bypassed[slot] = bypass;

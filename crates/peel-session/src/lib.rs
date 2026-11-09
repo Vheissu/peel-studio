@@ -122,6 +122,7 @@ pub struct Session {
     bounce: Option<bounce::Bounce>,
     perform: Option<perform::Performance>,
     notice: Option<Notice>,
+    compensation_notice: Option<String>,
     missing: Vec<String>,
     /// Audio device selection and live MIDI input (see `io.rs`).
     io: io::IoState,
@@ -218,6 +219,7 @@ impl Session {
             bounce: None,
             perform: None,
             notice: None,
+            compensation_notice: None,
             missing: Vec::new(),
             io,
             rec: record::RecordState::default(),
@@ -241,7 +243,20 @@ impl Session {
             // Plugins referenced by the project can now be created.
             self.synced = None;
         }
-        self.plugins.idle();
+        for id in self.plugins.idle() {
+            if let Some(slot) = self.devices.get(&id).map(|d| d.slot)
+                && let Err(error) = self.engine.request_device_restart(slot)
+            {
+                self.notify(error, true);
+            }
+        }
+        let error = self.engine.compensation_error().map(str::to_owned);
+        if error != self.compensation_notice {
+            if let Some(error) = &error {
+                self.notify(error.clone(), true);
+            }
+            self.compensation_notice = error;
+        }
         self.poll_bounce();
         self.poll_stretches();
         self.extend_performance();
@@ -447,14 +462,26 @@ impl Session {
             }
         }
         device.prepare(self.engine.sample_rate(), self.engine.max_block());
-        let slot = previous_slot.unwrap_or_else(|| self.free_slots.pop().unwrap_or_else(|| {
-            let s = self.next_slot;
-            self.next_slot += 1;
-            s
-        }));
-        if self.engine.send(EngineCommand::InstallDevice { slot, device }).is_err() {
-            if previous_slot.is_none() { self.free_slots.push(slot); }
-            let error = self.engine.compensation_error().unwrap_or("The audio command queue is full").to_string();
+        let slot = previous_slot.unwrap_or_else(|| {
+            self.free_slots.pop().unwrap_or_else(|| {
+                let s = self.next_slot;
+                self.next_slot += 1;
+                s
+            })
+        });
+        if self
+            .engine
+            .send(EngineCommand::InstallDevice { slot, device })
+            .is_err()
+        {
+            if previous_slot.is_none() {
+                self.free_slots.push(slot);
+            }
+            let error = self
+                .engine
+                .compensation_error()
+                .unwrap_or("The audio command queue is full")
+                .to_string();
             self.notify(error, true);
             return;
         }
@@ -822,12 +849,15 @@ impl Session {
             return;
         };
         if let Some(d) = self.devices.get(&ch.device.id) {
-            let accepted = self.engine.send(EngineCommand::LiveNote {
-                slot: d.slot,
-                key,
-                velocity,
-                on,
-            }).is_ok();
+            let accepted = self
+                .engine
+                .send(EngineCommand::LiveNote {
+                    slot: d.slot,
+                    key,
+                    velocity,
+                    on,
+                })
+                .is_ok();
             if accepted && on && self.live_target() == Some(channel) {
                 self.io.bridge.clear_key_pressure(key);
             }

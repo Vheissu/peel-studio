@@ -121,3 +121,62 @@ fn plugin_parameters_use_the_plugins_own_text() {
     let gain = desc.param_by_key("7").expect("gain param");
     assert_eq!(s.param_text(dev, gain, 1.5), "1.50x");
 }
+
+#[test]
+fn requested_clap_restart_preserves_the_instance_and_refreshes_compensation() {
+    use base64::Engine as _;
+    let (mut session, device) = session_with_gain(1.0);
+    let ready = Instant::now();
+    while session.compensation_latency_samples() == 0 {
+        session.tick();
+        assert!(ready.elapsed() < Duration::from_secs(10));
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let initial_latency = session.compensation_latency_samples();
+    session.set_param(device, "7", 3.5, 500);
+    session.doc.end_gesture();
+    session.play();
+    // The fixture's main-thread callback changes its live gain to 0.75 and
+    // latency to 64, then requests restart. Latency is deliberately absent
+    // from its serialized state: recreating it would incorrectly report zero.
+    let start = Instant::now();
+    loop {
+        session.tick();
+        if session.compensation_latency_samples() == initial_latency + 64 {
+            break;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "restart/compensation timed out: {:?}, slot reports {:?}",
+            session.compensation_error(),
+            session
+                .telemetry()
+                .slot_latencies
+                .iter()
+                .map(|s| s.load(std::sync::atomic::Ordering::Relaxed))
+                .filter(|&s| s > 0)
+                .collect::<Vec<_>>()
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    for _ in 0..8 {
+        session.tick();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(session.compensation_latency_samples(), initial_latency + 64);
+    assert!(session.compensation_error().is_none());
+    session.capture_plugin_states();
+    let instance = session.doc.project().mixer.tracks[0]
+        .inserts
+        .iter()
+        .find(|d| d.id == device)
+        .unwrap();
+    let state = base64::engine::general_purpose::STANDARD
+        .decode(instance.state.as_deref().unwrap())
+        .unwrap();
+    let gain = f32::from_le_bytes(state[4..8].try_into().unwrap());
+    assert_eq!(
+        gain, 0.75,
+        "restart must preserve the plugin's private parameter change"
+    );
+}

@@ -66,6 +66,11 @@ pub struct EngineHandle {
     /// Why the requested device was not used, if it was not.
     warning: Option<String>,
     compensation: crate::compensation::Control,
+    restarting: Vec<bool>,
+    restart_generation: Vec<u64>,
+    device_generation: u64,
+    restart_devices: Vec<Option<Box<dyn peel_dsp::Device>>>,
+    restart_errors: Vec<Option<String>>,
 }
 
 // The stream or thread variants are held only to keep audio alive until drop.
@@ -143,6 +148,13 @@ impl EngineHandle {
                     reserve: queue_reserve(&config),
                     live: opened.live,
                     warning: opened.warning,
+                    restarting: vec![false; config.device_slots.clamp(1, 16_384)],
+                    restart_generation: vec![0; config.device_slots.clamp(1, 16_384)],
+                    device_generation: 0,
+                    restart_errors: vec![None; config.device_slots.clamp(1, 16_384)],
+                    restart_devices: (0..config.device_slots.clamp(1, 16_384))
+                        .map(|_| None)
+                        .collect(),
                     compensation: crate::compensation::Control::new(
                         config.device_slots.clamp(1, 16_384),
                     ),
@@ -201,6 +213,13 @@ impl EngineHandle {
             reserve: queue_reserve(&config),
             live,
             warning: None,
+            restart_errors: vec![None; config.device_slots.clamp(1, 16_384)],
+            restarting: vec![false; config.device_slots.clamp(1, 16_384)],
+            restart_generation: vec![0; config.device_slots.clamp(1, 16_384)],
+            device_generation: 0,
+            restart_devices: (0..config.device_slots.clamp(1, 16_384))
+                .map(|_| None)
+                .collect(),
             compensation: crate::compensation::Control::new(config.device_slots.clamp(1, 16_384)),
         })
     }
@@ -215,9 +234,15 @@ impl EngineHandle {
             return Err(cmd);
         }
         let change = match &cmd {
-            EngineCommand::InstallDevice { slot, device } => {
-                Some((*slot as usize, device.latency(), false))
-            }
+            EngineCommand::InstallDevice { slot, device } => Some((
+                *slot as usize,
+                device.latency(),
+                self.compensation
+                    .bypassed
+                    .get(*slot as usize)
+                    .copied()
+                    .unwrap_or(false),
+            )),
             EngineCommand::RemoveDevice { slot } => Some((*slot as usize, 0, false)),
             EngineCommand::SetBypass { slot, bypass } => Some((
                 *slot as usize,
@@ -265,6 +290,7 @@ impl EngineHandle {
                 Ok(()) => {
                     self.compensation.plan = cached.plan;
                     self.compensation.audio_tracks = cached.audio_tracks;
+                    self.compensation.audio_identity = cached.audio_identity;
                     self.compensation.error = None;
                     Ok(())
                 }
@@ -274,14 +300,55 @@ impl EngineHandle {
                 _ => unreachable!(),
             }
         } else {
+            let generation = self.device_generation.wrapping_add(1);
+            let stamped = matches!(
+                cmd,
+                EngineCommand::InstallDevice { .. } | EngineCommand::RemoveDevice { .. }
+            );
+            let cmd = match cmd {
+                EngineCommand::InstallDevice { slot, device } => {
+                    EngineCommand::InstallCompensatedDevice {
+                        slot,
+                        device,
+                        generation,
+                    }
+                }
+                EngineCommand::RemoveDevice { slot } => {
+                    EngineCommand::RemoveCompensatedDevice { slot, generation }
+                }
+                other => other,
+            };
             self.commands
                 .push(cmd)
-                .map_err(|PushError::Full(cmd)| cmd)?;
-            if let Some((slot, latency, bypass)) = change {
-                if let Some(dest) = self.compensation.latencies.get_mut(slot) {
-                    *dest = latency;
-                    self.compensation.bypassed[slot] = bypass;
+                .map_err(|PushError::Full(cmd)| match cmd {
+                    EngineCommand::InstallCompensatedDevice { slot, device, .. } => {
+                        EngineCommand::InstallDevice { slot, device }
+                    }
+                    EngineCommand::RemoveCompensatedDevice { slot, .. } => {
+                        EngineCommand::RemoveDevice { slot }
+                    }
+                    other => other,
+                })?;
+            if stamped {
+                self.device_generation = generation;
+            }
+            if change.is_some() {
+                self.compensation.resource_revision =
+                    self.compensation.resource_revision.wrapping_add(1);
+            }
+            if let Some((slot, latency, bypass)) = change
+                && let Some(dest) = self.compensation.latencies.get_mut(slot)
+            {
+                *dest = latency;
+                self.compensation.bypassed[slot] = bypass;
+                if stamped {
                     self.compensation.pending[slot] = Some(latency);
+                    self.compensation.pending_generation[slot] = generation;
+                }
+                if stamped {
+                    self.restarting[slot] = false;
+                    self.restart_devices[slot] = None;
+                    self.restart_errors[slot] = None;
                 }
             }
             if let Some(compensation) = prepared {
@@ -295,16 +362,40 @@ impl EngineHandle {
         }
     }
 
+    /// Return the same instance to the main thread, prepare it there, and
+    /// reinstall it with freshly validated compensation. The affected slot
+    /// is silent while the bounded transfer is in flight.
+    pub fn request_device_restart(&mut self, slot: u32) -> Result<(), String> {
+        let s = slot as usize;
+        if s >= self.restarting.len() {
+            return Err("Invalid device slot".into());
+        }
+        if self.restarting[s] {
+            return Ok(());
+        }
+        let token = self.restart_generation[s].wrapping_add(1);
+        self.send(EngineCommand::SuspendDevice { slot, token })
+            .map_err(|_| "The audio command queue is full".to_string())?;
+        self.restart_generation[s] = token;
+        self.restarting[s] = true;
+        self.compensation.pending[s] = Some(self.compensation.latencies[s]);
+        Ok(())
+    }
+
     pub fn compensation_latency_samples(&self) -> u32 {
         self.telemetry.compensation_latency.load(Ordering::Relaxed)
     }
 
     pub fn compensation_error(&self) -> Option<&str> {
-        self.compensation.error.as_deref()
+        self.compensation.error.as_deref().or_else(|| {
+            self.restart_errors
+                .iter()
+                .find_map(|error| error.as_deref())
+        })
     }
 
     fn refresh_compensation(&mut self) {
-        let revision = self.telemetry.latency_revision.load(Ordering::Relaxed);
+        let revision = self.telemetry.latency_revision.load(Ordering::Acquire);
         if revision == self.compensation.revision {
             return;
         }
@@ -319,9 +410,11 @@ impl EngineHandle {
             .enumerate()
             .take(self.telemetry.slot_latencies.len())
         {
+            let generation = self.telemetry.slot_generations[slot].load(Ordering::Acquire);
             let reported = self.telemetry.slot_latencies[slot].load(Ordering::Relaxed);
-            if let Some(expected) = self.compensation.pending[slot] {
-                if reported != expected {
+            if self.compensation.pending[slot].is_some() {
+                if generation != self.compensation.pending_generation[slot] || self.restarting[slot]
+                {
                     continue;
                 }
                 self.compensation.pending[slot] = None;
@@ -348,15 +441,58 @@ impl EngineHandle {
     }
 
     /// Drops everything the engine has retired (old plans, devices and
-    /// samples). Call this regularly from the UI thread; it never blocks.
-    /// Returns how many objects were freed.
+    /// samples). Call this regularly from the control/UI thread. Requested
+    /// plugin restarts are prepared here and may take initialization time.
+    /// Returns how many retired objects were freed.
     pub fn collect_garbage(&mut self) -> usize {
-        self.refresh_compensation();
         let mut n = 0;
         while let Ok(item) = self.retired.pop() {
-            drop(item);
-            n += 1;
+            match item {
+                Retired::RestartDevice {
+                    slot,
+                    token,
+                    mut device,
+                } => {
+                    let s = slot as usize;
+                    if s < self.restart_devices.len()
+                        && self.restarting[s]
+                        && self.restart_generation[s] == token
+                    {
+                        device.prepare(self.sample_rate, self.max_block);
+                        self.restart_devices[s] = Some(device);
+                    }
+                }
+                other => {
+                    drop(other);
+                    n += 1;
+                }
+            }
         }
+        for s in 0..self.restart_devices.len() {
+            if self.restart_errors[s].is_some() {
+                continue;
+            }
+            let Some(device) = self.restart_devices[s].take() else {
+                continue;
+            };
+            if !self.restarting[s] {
+                continue;
+            }
+            if let Err(EngineCommand::InstallDevice { device, .. }) =
+                self.send(EngineCommand::InstallDevice {
+                    slot: s as u32,
+                    device,
+                })
+            {
+                // Queue pressure or unsupported reported latency keeps the
+                // instance owned on the control side, safely suspended.
+                self.restart_devices[s] = Some(device);
+                if self.commands.slots() > self.reserve + 1 {
+                    self.restart_errors[s] = self.compensation.error.clone();
+                }
+            }
+        }
+        self.refresh_compensation();
         n
     }
 
@@ -659,10 +795,10 @@ impl NullBackend {
                 let mut right = vec![0.0f32; block];
                 // No device clock to report; the block size still tells
                 // input how long an output callback is.
-                engine.note_output_timing(0, 0, block);
                 let period = Duration::from_secs_f64(block as f64 / sample_rate as f64);
                 let mut deadline = Instant::now() + period;
                 while !flag.load(Ordering::Relaxed) {
+                    engine.note_output_timing(0, 0, block);
                     engine.begin_callback_frames(block);
                     engine.render(&mut left, &mut right);
                     engine.end_callback(block);

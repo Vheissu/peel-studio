@@ -61,7 +61,8 @@ fn the_null_backend_runs_the_transport_and_returns_garbage() {
     let mut freed = 0;
     wait_for("the old plan to be retired", || {
         freed += h.collect_garbage();
-        freed >= 2 // the initial empty plan and the first real one
+        t.plan_revision.load(Ordering::Relaxed) == 5 && freed >= 4
+        // Both old plans and their prepared compensation states.
     });
     assert_eq!(t.plan_revision.load(Ordering::Relaxed), 5);
 

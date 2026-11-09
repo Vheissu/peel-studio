@@ -353,7 +353,9 @@ pub fn render_with(
         }
         let slot = i as Slot;
         engine.send(EngineCommand::InstallDevice { slot, device });
-        if let Some(error) = engine.compensation_error() { return Err(error.to_string()); }
+        if let Some(error) = engine.compensation_error() {
+            return Err(error.to_string());
+        }
         slots.insert(inst.id, slot);
     }
     let meters: HashMap<Id, u16> = project
@@ -584,5 +586,125 @@ mod output_tests {
         process_output(&mut left, &mut right, &options, &AtomicBool::new(false)).unwrap();
         assert_eq!(left, [2.0]);
         assert_eq!(right, [-3.0]);
+    }
+    #[test]
+    fn compensated_exports_keep_sample_zero_final_sample_and_exact_length() {
+        use peel_document::{Clip, DeviceInstance, Note, Time};
+        use peel_dsp::{
+            DeviceDescriptor, DeviceEvent, DeviceKind, EventKind, ParamId, ProcessContext,
+        };
+        struct Impulse {
+            ring: [f32; 37],
+            cursor: usize,
+        }
+        static DESCRIPTOR: DeviceDescriptor = DeviceDescriptor {
+            type_id: "test.latent-impulse",
+            name: "Impulse",
+            description: "",
+            category: "Test",
+            kind: DeviceKind::Instrument,
+            version: 1,
+            params: &[],
+        };
+        impl Device for Impulse {
+            fn descriptor(&self) -> &'static DeviceDescriptor {
+                &DESCRIPTOR
+            }
+            fn prepare(&mut self, _: f32, _: usize) {}
+            fn reset(&mut self) {
+                self.ring.fill(0.0);
+                self.cursor = 0;
+            }
+            fn set_param(&mut self, _: ParamId, _: f32) {}
+            fn param(&self, _: ParamId) -> f32 {
+                0.0
+            }
+            fn latency(&self) -> u32 {
+                37
+            }
+            fn process(
+                &mut self,
+                _: &ProcessContext,
+                events: &[DeviceEvent],
+                l: &mut [f32],
+                r: &mut [f32],
+            ) {
+                for i in 0..l.len() {
+                    let input = if events.iter().any(|e| {
+                        e.offset as usize == i && matches!(e.kind, EventKind::NoteOn { .. })
+                    }) {
+                        0.25
+                    } else {
+                        0.0
+                    };
+                    l[i] = self.ring[self.cursor];
+                    r[i] = l[i];
+                    self.ring[self.cursor] = input;
+                    self.cursor = (self.cursor + 1) % self.ring.len();
+                }
+            }
+        }
+        let mut project = Project::empty("PDC export");
+        project.set_bpm(120.0);
+        let inst = DeviceInstance::new(DESCRIPTOR.type_id, 1);
+        let instance = inst.id;
+        let channel = crate::template::add_channel(&mut project, "Impulse", 0, inst, 60);
+        let pattern = Arc::make_mut(&mut project.patterns[0]);
+        pattern.length = Time::beats(1);
+        pattern.notes = vec![
+            Note::new(channel, Time::ZERO, Time::new(1, 24_000), 60, 1.0),
+            Note::new(
+                channel,
+                Time::new(23_999, 24_000),
+                Time::new(1, 24_000),
+                60,
+                1.0,
+            ),
+        ];
+        let pattern = pattern.id;
+        let arrangement = project.arrangement_mut();
+        arrangement.clips.push(Clip {
+            id: Id::new(),
+            track: arrangement.tracks[0].id,
+            start: Time::ZERO,
+            length: Time::beats(1),
+            offset: Time::ZERO,
+            muted: false,
+            content: ClipContent::Pattern { pattern },
+        });
+        let path = std::env::temp_dir().join(format!("peel-pdc-{}.wav", Id::new()));
+        let settings = AudioExportSettings {
+            render: ExportSettings {
+                path: path.clone(),
+                sample_rate: 48_000,
+                bits: 32,
+                tail_seconds: 0.0,
+            },
+            dither: false,
+            ..Default::default()
+        };
+        let mut prebuilt = Prebuilt::new();
+        prebuilt.insert(
+            instance,
+            Box::new(Impulse {
+                ring: [0.0; 37],
+                cursor: 0,
+            }),
+        );
+        render_with(
+            &project,
+            &HashMap::new(),
+            prebuilt,
+            &settings,
+            &|_| {},
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        let decoded = peel_media::decode_file(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(decoded.channels[0].len(), 24_000);
+        assert_eq!(decoded.channels[0][0], 0.25);
+        assert_eq!(decoded.channels[0][23_999], 0.25);
+        assert!(decoded.channels[0][1..23_999].iter().all(|&s| s == 0.0));
     }
 }

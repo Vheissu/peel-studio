@@ -111,7 +111,10 @@ pub struct Engine {
     live: LiveState,
 
     slots: Vec<Option<Box<dyn Device>>>,
+    slot_generations: Vec<u64>,
     bypass: Vec<BypassState>,
+    suspended: Vec<bool>,
+    restart_requests: Vec<Option<u64>>,
     stage: Staging,
     /// Per-slot "rendered in block `stamp`" marks, used to find orphans and
     /// to render a slot at most once per block.
@@ -122,6 +125,8 @@ pub struct Engine {
     plan: Box<RenderPlan>,
     compensation: Box<crate::compensation::Compensation>,
     compensation_active: bool,
+    device_revision: u64,
+    compensated_device_revision: u64,
     transport: Transport,
     engine_sample: i64,
 
@@ -176,6 +181,9 @@ impl Engine {
             live: LiveState::new(telemetry.clone(), sample_rate),
             telemetry,
             slots: (0..device_slots).map(|_| None).collect(),
+            slot_generations: vec![0; device_slots],
+            suspended: vec![false; device_slots],
+            restart_requests: vec![None; device_slots],
             bypass: vec![
                 BypassState {
                     bypassed: false,
@@ -193,6 +201,8 @@ impl Engine {
                     .expect("empty compensation graph"),
             ),
             compensation_active: false,
+            device_revision: 0,
+            compensated_device_revision: 0,
             transport: Transport {
                 playing: false,
                 position: 0.0,
@@ -481,6 +491,22 @@ impl Engine {
                 let old = std::mem::replace(&mut self.outputs, routes);
                 self.retirer.retire(Retired::OutputRoutes(old));
             }
+            EngineCommand::InstallCompensatedDevice {
+                slot,
+                device,
+                generation,
+            } => {
+                if let Some(dest) = self.slot_generations.get_mut(slot as usize) {
+                    *dest = generation;
+                }
+                self.handle_command(EngineCommand::InstallDevice { slot, device });
+            }
+            EngineCommand::RemoveCompensatedDevice { slot, generation } => {
+                if let Some(dest) = self.slot_generations.get_mut(slot as usize) {
+                    *dest = generation;
+                }
+                self.handle_command(EngineCommand::RemoveDevice { slot });
+            }
             EngineCommand::InstallDevice { slot, device } => {
                 if self.telemetry.analysis.is_selected(slot) {
                     self.telemetry.analysis.invalidate();
@@ -490,17 +516,31 @@ impl Engine {
                     self.retirer.retire(Retired::Device(device));
                     return;
                 }
+                self.device_revision = self.device_revision.wrapping_add(1);
+                self.suspended[s] = false;
+                self.restart_requests[s] = None;
                 if let Some(old) = self.slots[s].replace(device) {
                     self.retirer.retire(Retired::Device(old));
                 }
                 self.active.remove_slot(slot);
+            }
+            EngineCommand::SuspendDevice { slot, token } => {
+                if let Some(request) = self.restart_requests.get_mut(slot as usize) {
+                    *request = Some(token);
+                    self.transfer_restarts();
+                }
             }
             EngineCommand::RemoveDevice { slot } => {
                 if self.telemetry.analysis.is_selected(slot) {
                     self.telemetry.analysis.invalidate();
                 }
                 let s = slot as usize;
+                if let Some(suspended) = self.suspended.get_mut(s) {
+                    *suspended = false;
+                    self.restart_requests[s] = None;
+                }
                 if let Some(old) = self.slots.get_mut(s).and_then(Option::take) {
+                    self.device_revision = self.device_revision.wrapping_add(1);
                     self.retirer.retire(Retired::Device(old));
                 }
                 self.active.remove_slot(slot);
@@ -772,12 +812,41 @@ impl Engine {
         true
     }
 
-    fn set_compensation(&mut self, compensation: Box<crate::compensation::Compensation>) {
+    fn transfer_restarts(&mut self) {
+        for s in 0..self.restart_requests.len() {
+            let Some(token) = self.restart_requests[s] else {
+                continue;
+            };
+            // Keep processing the existing instance until retirement capacity
+            // becomes available. An ownership transfer must never be leaked.
+            if !self.retirer.can_accept() {
+                break;
+            }
+            self.restart_requests[s] = None;
+            if let Some(mut device) = self.slots[s].take() {
+                device.reset();
+                self.suspended[s] = true;
+                self.active.remove_slot(s as u32);
+                self.live.forget_slot(s as u32);
+                self.retirer.retire(Retired::RestartDevice {
+                    slot: s as u32,
+                    token,
+                    device,
+                });
+            }
+        }
+    }
+
+    fn set_compensation(&mut self, mut compensation: Box<crate::compensation::Compensation>) {
+        if self.compensation_active && self.compensated_device_revision == self.device_revision {
+            compensation.inherit_history(&mut self.compensation);
+        }
         self.telemetry
             .compensation_latency
             .store(compensation.latency_samples(), Ordering::Relaxed);
         let old = std::mem::replace(&mut self.compensation, compensation);
         self.compensation_active = true;
+        self.compensated_device_revision = self.device_revision;
         self.retirer.retire(Retired::Compensation(old));
     }
 
@@ -903,7 +972,7 @@ impl Engine {
         let frames = left.len();
         self.retirer.flush();
         self.drain_commands();
-        self.compensation.begin_block();
+        self.transfer_restarts();
         // Plugins publish latency changes through their cached, realtime-safe
         // Device report. The control thread prepares replacement storage.
         for (slot, dev) in self
@@ -913,10 +982,16 @@ impl Engine {
             .take(self.telemetry.slot_latencies.len())
         {
             let latency = dev.as_ref().map_or(0, |d| d.latency());
-            if self.telemetry.slot_latencies[slot].swap(latency, Ordering::Relaxed) != latency {
+            let changed =
+                self.telemetry.slot_latencies[slot].swap(latency, Ordering::Relaxed) != latency;
+            let generation = self.slot_generations[slot];
+            let acknowledged = self.telemetry.slot_generations[slot]
+                .swap(generation, Ordering::Release)
+                != generation;
+            if changed || acknowledged {
                 self.telemetry
                     .latency_revision
-                    .fetch_add(1, Ordering::Relaxed);
+                    .fetch_add(1, Ordering::Release);
             }
         }
         self.drain_live(frames);
@@ -1212,6 +1287,7 @@ impl Engine {
             plan,
             slots,
             bypass,
+            suspended,
             stage,
             stamps,
             stamp,
@@ -1232,8 +1308,6 @@ impl Engine {
             beat_position: beat_start,
             playing,
         };
-        let (cuts, n_cuts) = compensation.cuts();
-        let cuts = &cuts[..n_cuts];
         let n_tracks = plan.tracks.len();
         mixer.dirty[..n_tracks].fill(false);
         mixer.key_ready[..n_tracks].fill(false);
@@ -1242,9 +1316,12 @@ impl Engine {
         audio.render(plan, mixer, retirer, block_start, frames, *sr64);
         if *compensation_active {
             for ti in 0..n_tracks {
+                if !mixer.dirty[ti] && !compensation.audio[ti].has_pending() {
+                    continue;
+                }
                 mixer.ensure_clean(ti, frames);
                 let (l, r) = mixer.track(ti, frames);
-                compensation.audio[ti].process(l, r, cuts);
+                compensation.audio[ti].process(l, r);
                 // Delayed material can remain audible after the source ends.
                 mixer.dirty[ti] = peak(l) > 0.0 || peak(r) > 0.0;
             }
@@ -1264,7 +1341,7 @@ impl Engine {
             let (tl, tr) = target_gains(ch.gain, ch.pan, ch.muted);
             let events = stage.events(slot);
             let silent = events.is_empty() && dev.is_silent();
-            if silent && !*compensation_active {
+            if silent && (!*compensation_active || !compensation.channels[ci].has_pending()) {
                 mixer.chan_ramp[ci].snap(tl, tr);
                 continue;
             }
@@ -1280,7 +1357,7 @@ impl Engine {
                     dev.process(&ctx, events, sl, sr);
                 }
                 if *compensation_active {
-                    compensation.channels[ci].process(sl, sr, cuts);
+                    compensation.channels[ci].process(sl, sr);
                 }
                 let (pl, pr, bad) = sanitize_peak(sl, sr);
                 if bad > 0 {
@@ -1299,7 +1376,7 @@ impl Engine {
                     } else {
                         mix_ramped::<false>(dl, dr, sl, sr, &mut ramp, tl, tr, step);
                     }
-                    wrote = true;
+                    wrote = level > 0.0;
                 }
             }
             mixer.chan_ramp[ci] = ramp;
@@ -1319,6 +1396,12 @@ impl Engine {
                     continue;
                 }
                 let Some(dev) = slots[s].as_mut() else {
+                    if suspended[s] {
+                        mixer.ensure_clean(ti, frames);
+                        let (l, r) = mixer.track(ti, frames);
+                        l.fill(0.0);
+                        r.fill(0.0);
+                    }
                     continue;
                 };
                 stamps[s] = *stamp;
@@ -1366,7 +1449,7 @@ impl Engine {
                         let key_r = &mut compensation.scratch_r[..frames];
                         key_l.copy_from_slice(kl);
                         key_r.copy_from_slice(kr);
-                        compensation.keys[ti][ii].process(key_l, key_r, cuts);
+                        compensation.keys[ti][ii].process(key_l, key_r);
                         dev.process_keyed(&ctx, events, l, r, key_l, key_r);
                     } else {
                         dev.process_keyed(&ctx, events, l, r, kl, kr);
@@ -1424,7 +1507,12 @@ impl Engine {
             if !mixer.dirty[ti] {
                 outputs.silence(crate::output::OutputSource::TrackMeter(route.meter), frames);
                 mixer.track_ramp[ti].snap(tl, tr);
-                if !*compensation_active {
+                if !*compensation_active
+                    || (!compensation.outputs[ti].has_pending()
+                        && !compensation.sends[ti]
+                            .iter()
+                            .any(|delay| delay.has_pending()))
+                {
                     continue;
                 }
                 mixer.ensure_clean(ti, frames);
@@ -1470,7 +1558,7 @@ impl Engine {
                     let r = &mut compensation.scratch_r[..frames];
                     l.copy_from_slice(sl);
                     r.copy_from_slice(sr);
-                    compensation.sends[ti][si].process(l, r, cuts);
+                    compensation.sends[ti][si].process(l, r);
                     (l, r)
                 } else {
                     (sl, sr)
@@ -1508,7 +1596,7 @@ impl Engine {
                 let r = &mut compensation.scratch_r[..frames];
                 l.copy_from_slice(sl);
                 r.copy_from_slice(sr);
-                compensation.outputs[ti].process(l, r, cuts);
+                compensation.outputs[ti].process(l, r);
                 (l, r)
             } else {
                 (sl, sr)
@@ -1542,13 +1630,12 @@ impl Engine {
         // ---- monitoring, after the master ----
         if self.monitoring {
             if self.compensation_active {
-                let (cuts, count) = self.compensation.cuts();
                 let l = &mut self.compensation.scratch_l[..frames];
                 let r = &mut self.compensation.scratch_r[..frames];
                 l.fill(0.0);
                 r.fill(0.0);
                 self.metronome.mix_into(l, r);
-                self.compensation.click.process(l, r, &cuts[..count]);
+                self.compensation.click.process(l, r);
                 for i in 0..frames {
                     out_l[i] += l[i];
                     out_r[i] += r[i];

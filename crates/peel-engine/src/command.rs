@@ -27,6 +27,21 @@ pub enum EngineCommand {
         slot: Slot,
         device: Box<dyn Device>,
     },
+    /// Transfer an instance back to the control thread for a requested restart.
+    SuspendDevice {
+        slot: Slot,
+        token: u64,
+    },
+    /// Handle-owned install acknowledgement, independent of latency value.
+    InstallCompensatedDevice {
+        slot: Slot,
+        device: Box<dyn Device>,
+        generation: u64,
+    },
+    RemoveCompensatedDevice {
+        slot: Slot,
+        generation: u64,
+    },
     /// Remove and retire the device in a slot.
     RemoveDevice {
         slot: Slot,
@@ -119,6 +134,11 @@ pub enum Retired {
     Plan(Box<RenderPlan>),
     Compensation(Box<crate::compensation::Compensation>),
     Device(Box<dyn Device>),
+    RestartDevice {
+        slot: Slot,
+        token: u64,
+        device: Box<dyn Device>,
+    },
     Sample(Arc<SampleBuffer>),
     Monitor(Box<MonitorReceiver>),
     OutputRoutes(Box<crate::output::OutputTaps>),

@@ -183,10 +183,11 @@ impl PluginRegistry {
     }
 
     /// Main-thread housekeeping every plugin asks for; call once a frame.
-    pub fn idle(&self) {
-        for h in self.handles.values() {
-            let _ = h.idle();
-        }
+    pub fn idle(&self) -> Vec<Id> {
+        self.handles
+            .iter()
+            .filter_map(|(&id, handle)| handle.idle().restart_requested.then_some(id))
+            .collect()
     }
 
     /// Current state of every live plugin instance, base64-encoded.

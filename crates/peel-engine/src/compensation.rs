@@ -16,6 +16,7 @@ pub(crate) struct Delay {
     samples: Vec<[f32; 2]>,
     cursor: usize,
     valid: usize,
+    pending: usize,
 }
 
 impl Delay {
@@ -31,6 +32,7 @@ impl Delay {
             samples: vec![[0.0; 2]; samples as usize],
             cursor: 0,
             valid: 0,
+            pending: 0,
         })
     }
 
@@ -38,18 +40,18 @@ impl Delay {
         // Old cells are not read until the ring has been completely rewritten.
         self.cursor = 0;
         self.valid = 0;
+        self.pending = 0;
     }
 
-    pub(crate) fn process(&mut self, left: &mut [f32], right: &mut [f32], cuts: &[usize]) {
+    pub(crate) fn has_pending(&self) -> bool {
+        self.pending > 0
+    }
+
+    pub(crate) fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
         if self.samples.is_empty() {
             return;
         }
-        let mut cut = 0;
         for i in 0..left.len() {
-            while cut < cuts.len() && cuts[cut] == i {
-                self.reset();
-                cut += 1;
-            }
             let input = [left[i], right[i]];
             let output = if self.valid == self.samples.len() {
                 self.samples[self.cursor]
@@ -57,6 +59,12 @@ impl Delay {
                 self.valid += 1;
                 [0.0; 2]
             };
+            if output[0] != 0.0 || output[1] != 0.0 {
+                self.pending -= 1;
+            }
+            if input[0] != 0.0 || input[1] != 0.0 {
+                self.pending += 1;
+            }
             self.samples[self.cursor] = input;
             self.cursor += 1;
             if self.cursor == self.samples.len() {
@@ -65,10 +73,35 @@ impl Delay {
             left[i] = output[0];
             right[i] = output[1];
         }
-        if cuts.get(cut) == Some(&left.len()) {
-            self.reset();
-        }
     }
+}
+
+#[derive(PartialEq)]
+struct TrackIdentity {
+    meter: u16,
+    inserts: Vec<u32>,
+    output: Option<u16>,
+    sends: Vec<u16>,
+    keys: Vec<(u32, u16)>,
+}
+
+fn audio_identity(plan: &RenderPlan) -> Vec<[u64; 9]> {
+    plan.audio
+        .iter()
+        .map(|r| {
+            [
+                u64::from(r.track),
+                std::sync::Arc::as_ptr(&r.sample) as usize as u64,
+                r.start_beat.to_bits(),
+                r.end_beat.to_bits(),
+                r.source_start_seconds.to_bits(),
+                u64::from(r.gain.to_bits()),
+                u64::from(r.reversed),
+                r.fade_in_beats.to_bits(),
+                r.fade_out_beats.to_bits(),
+            ]
+        })
+        .collect()
 }
 
 /// Allocated and validated on the control thread, moved into the callback.
@@ -81,9 +114,12 @@ pub struct Compensation {
     pub(crate) click: Delay,
     pub(crate) scratch_l: Vec<f32>,
     pub(crate) scratch_r: Vec<f32>,
-    cuts: [usize; 64],
-    n_cuts: usize,
     latency: u32,
+    master: u16,
+    channel_identity: Vec<(u32, u16)>,
+    track_identity: Vec<TrackIdentity>,
+    audio_identity: Vec<[u64; 9]>,
+    resource_revision: u64,
 }
 
 impl Compensation {
@@ -124,7 +160,9 @@ impl Compensation {
         let mut output = vec![0u32; n];
         for ch in &plan.channels {
             let track = ch.track as usize;
-            if track >= n { continue; }
+            if track >= n {
+                continue;
+            }
             input[track] = input[track].max(latency(ch.slot)?);
         }
         for (ti, track) in plan.tracks.iter().enumerate() {
@@ -156,7 +194,11 @@ impl Compensation {
         let mut channels = Vec::with_capacity(plan.channels.len());
         for ch in &plan.channels {
             channels.push(Delay::new(
-                input.get(ch.track as usize).copied().unwrap_or(0).saturating_sub(latency(ch.slot)?),
+                input
+                    .get(ch.track as usize)
+                    .copied()
+                    .unwrap_or(0)
+                    .saturating_sub(latency(ch.slot)?),
                 &mut budget,
             )?);
         }
@@ -208,9 +250,22 @@ impl Compensation {
             click,
             scratch_l: vec![0.0; max_block],
             scratch_r: vec![0.0; max_block],
-            cuts: [0; 64],
-            n_cuts: 0,
             latency,
+            master: plan.master,
+            channel_identity: plan.channels.iter().map(|c| (c.slot, c.track)).collect(),
+            track_identity: plan
+                .tracks
+                .iter()
+                .map(|t| TrackIdentity {
+                    meter: t.meter,
+                    inserts: t.inserts.clone(),
+                    output: t.output,
+                    sends: t.sends.iter().map(|s| s.dest).collect(),
+                    keys: t.keys.clone(),
+                })
+                .collect(),
+            audio_identity: audio_identity(plan),
+            resource_revision: 0,
         })
     }
 
@@ -218,12 +273,47 @@ impl Compensation {
         self.latency
     }
 
-    pub(crate) fn begin_block(&mut self) {
-        self.n_cuts = 0;
+    /// Move compatible ring ownership, never copy/free it on the callback.
+    /// Musical edits preserve their already-rendered audio; a changed route,
+    /// source or device generation starts with clean history.
+    pub(crate) fn inherit_history(&mut self, old: &mut Self) {
+        if self.master != old.master
+            || self.resource_revision != old.resource_revision
+            || self.channel_identity != old.channel_identity
+            || self.track_identity != old.track_identity
+            || self.audio_identity != old.audio_identity
+        {
+            return;
+        }
+        let move_delay = |new: &mut Delay, previous: &mut Delay| {
+            if new.samples.len() == previous.samples.len() {
+                std::mem::swap(new, previous);
+            }
+        };
+        for (new, previous) in self
+            .channels
+            .iter_mut()
+            .zip(&mut old.channels)
+            .chain(self.audio.iter_mut().zip(&mut old.audio))
+            .chain(self.outputs.iter_mut().zip(&mut old.outputs))
+            .chain(
+                self.sends
+                    .iter_mut()
+                    .flatten()
+                    .zip(old.sends.iter_mut().flatten()),
+            )
+            .chain(
+                self.keys
+                    .iter_mut()
+                    .flatten()
+                    .zip(old.keys.iter_mut().flatten()),
+            )
+        {
+            move_delay(new, previous);
+        }
+        move_delay(&mut self.click, &mut old.click);
     }
-    pub(crate) fn cuts(&self) -> ([usize; 64], usize) {
-        (self.cuts, self.n_cuts)
-    }
+
     pub(crate) fn reset(&mut self) {
         for delay in self
             .channels
@@ -243,9 +333,12 @@ impl Compensation {
 pub(crate) struct Control {
     pub plan: Option<RenderPlan>,
     pub audio_tracks: Vec<bool>,
+    pub audio_identity: Vec<[u64; 9]>,
+    pub resource_revision: u64,
     pub latencies: Vec<u32>,
     pub bypassed: Vec<bool>,
     pub pending: Vec<Option<u32>>,
+    pub pending_generation: Vec<u64>,
     pub error: Option<String>,
     pub revision: u64,
 }
@@ -255,15 +348,19 @@ impl Control {
         Self {
             plan: None,
             audio_tracks: Vec::new(),
+            audio_identity: Vec::new(),
+            resource_revision: 0,
             latencies: vec![0; slots],
             bypassed: vec![false; slots],
             pending: vec![None; slots],
+            pending_generation: vec![0; slots],
             error: None,
             revision: 0,
         }
     }
 
     pub fn remember_plan(&mut self, plan: &RenderPlan) {
+        self.audio_identity = audio_identity(plan);
         self.audio_tracks = (0..plan.tracks.len())
             .map(|ti| plan.audio.iter().any(|r| r.track as usize == ti))
             .collect();
@@ -306,11 +403,17 @@ impl Control {
             .plan
             .as_ref()
             .is_some_and(|cached| std::ptr::eq(cached, plan));
-        if cached {
-            Compensation::prepare_with_audio(plan, &latencies, max_block, &self.audio_tracks)
-                .map(Box::new)
+        let mut compensation = if cached {
+            let mut prepared =
+                Compensation::prepare_with_audio(plan, &latencies, max_block, &self.audio_tracks)?;
+            prepared.audio_identity = self.audio_identity.clone();
+            prepared
         } else {
-            Compensation::prepare(plan, &latencies, max_block).map(Box::new)
-        }
+            Compensation::prepare(plan, &latencies, max_block)?
+        };
+        compensation.resource_revision = self
+            .resource_revision
+            .wrapping_add(u64::from(change.is_some()));
+        Ok(Box::new(compensation))
     }
 }
