@@ -1530,8 +1530,8 @@ fn audio_clip(ui: &mut Ui, r: Rect, id: Id, s: &mut Session) {
         let cols = inner.w.max(1.0) as usize;
         let frames = peaks.frames();
         let (lit0, lit1) = (
-            (src_start / total) as f32,
-            ((src_start + src_secs) / total) as f32,
+            ((src_start / total) as f32).clamp(0.0, 1.0),
+            (((src_start + src_secs) / total) as f32).clamp(0.0, 1.0),
         );
         for (i, (lo, hi)) in peaks.query(0, frames, cols).enumerate() {
             let x = inner.x + i as f32;
@@ -1689,6 +1689,7 @@ fn audio_clip(ui: &mut Ui, r: Rect, id: Id, s: &mut Session) {
     if let Some(src) = follow {
         let mut v = src;
         let num = row.cut_left(110.0);
+        ui.scene.rect(num, t.radius_m, t.control);
         let resp = ui.drag_number(
             W::new(("clip-bpm", id)),
             num,

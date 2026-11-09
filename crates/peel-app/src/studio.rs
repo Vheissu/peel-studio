@@ -214,6 +214,17 @@ impl Studio {
                 .find(|c| c.track == lane)
             {
                 self.ws.focus = Some(Focus::Clip(c.id));
+                let id = c.id;
+                if std::env::var_os("PEEL_FOLLOW").is_some() {
+                    self.session.doc.edit("Follow", |p| {
+                        if let Some(c) = p.arrangement_mut().clips.iter_mut().find(|c| c.id == id)
+                            && let peel_document::ClipContent::Audio { source_bpm, .. } =
+                                &mut c.content
+                        {
+                            *source_bpm = Some(100.0);
+                        }
+                    });
+                }
             }
         }
         if let Some(path) = std::env::var_os("PEEL_SAMPLE")
