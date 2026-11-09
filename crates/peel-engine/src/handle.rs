@@ -279,7 +279,8 @@ impl EngineHandle {
             }
             None
         };
-        if let EngineCommand::SetPlan(plan) = cmd {
+        if let EngineCommand::SetPlan(mut plan) = cmd {
+            plan.prepare_expression_chase();
             let mut cached = crate::compensation::Control::new(0);
             cached.remember_plan(&plan);
             let compensation = prepared.expect("a plan prepares compensation");

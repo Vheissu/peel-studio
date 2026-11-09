@@ -967,9 +967,10 @@ impl Engine {
             next_sequence_voice,
             ..
         } = self;
-        for note in plan.expression_notes.iter().take(MAX_SWAP_SCAN) {
-            if note.start_beat >= beat || note.end_beat <= beat {
-                continue;
+        for (matched, note) in plan.sounding_expression(beat).enumerate() {
+            if matched >= crate::MAX_ACTIVE_NOTES {
+                telemetry.dropped_notes.fetch_add(1, Ordering::Relaxed);
+                break;
             }
             let Some(route) = plan.channels.get(note.channel as usize) else {
                 continue;

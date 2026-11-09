@@ -27,6 +27,8 @@ pub struct RenderPlan {
     pub sequence: Vec<SeqEvent>,
     /// Curved notes with prepared state for seeks and plan changes. Sorted by voice.
     pub expression_notes: Vec<ExpressionNote>,
+    /// Balanced interval index, prepared off the callback before installation.
+    pub expression_chase: Vec<ExpressionChaseNode>,
     /// Compiled source ids, sorted by voice, for matching notes across edits.
     pub note_identities: Vec<SourceNote>,
     /// The reverse index, prepared on the control thread and sorted by identity.
@@ -53,6 +55,68 @@ pub struct RenderPlan {
 }
 
 impl RenderPlan {
+    /// Rebuilds the interval index for note-expression chase. Control thread only.
+    pub fn prepare_expression_chase(&mut self) {
+        let mut order: Vec<u32> = (0..self.expression_notes.len()).map(|i| i as u32).collect();
+        order.sort_unstable_by(|&a, &b| {
+            let a = &self.expression_notes[a as usize];
+            let b = &self.expression_notes[b as usize];
+            a.start_beat
+                .total_cmp(&b.start_beat)
+                .then(a.voice.cmp(&b.voice))
+        });
+        let mut nodes = std::mem::take(&mut self.expression_chase);
+        nodes.clear();
+        nodes.reserve(order.len());
+        fn build(
+            order: &[u32],
+            notes: &[ExpressionNote],
+            out: &mut Vec<ExpressionChaseNode>,
+        ) -> Option<u32> {
+            if order.is_empty() {
+                return None;
+            }
+            let middle = order.len() / 2;
+            let index = out.len() as u32;
+            let note = order[middle];
+            out.push(ExpressionChaseNode {
+                note,
+                left: None,
+                right: None,
+                max_end: notes[note as usize].end_beat,
+            });
+            let left = build(&order[..middle], notes, out);
+            let right = build(&order[middle + 1..], notes, out);
+            let mut max_end = notes[note as usize].end_beat;
+            for child in [left, right].into_iter().flatten() {
+                max_end = max_end.max(out[child as usize].max_end);
+            }
+            out[index as usize] = ExpressionChaseNode {
+                note,
+                left,
+                right,
+                max_end,
+            };
+            Some(index)
+        }
+        build(&order, &self.expression_notes, &mut nodes);
+        self.expression_chase = nodes;
+    }
+
+    /// Sounding expression notes at a transport jump, without allocation.
+    pub fn sounding_expression(&self, beat: f64) -> impl Iterator<Item = &ExpressionNote> {
+        ExpressionCandidates {
+            notes: &self.expression_notes,
+            nodes: &self.expression_chase,
+            beat,
+            stack: [0; 64],
+            count: usize::from(!self.expression_chase.is_empty()),
+            // A valid balanced index needs at most twice its depth per result.
+            // This also contains malformed raw indexes without risking a loop.
+            remaining: crate::MAX_ACTIVE_NOTES * 128,
+        }
+    }
+
     /// A silent plan with only a master track.
     pub fn empty() -> RenderPlan {
         RenderPlan {
@@ -60,6 +124,7 @@ impl RenderPlan {
             tempo: TempoMap::constant(120.0),
             sequence: Vec::new(),
             expression_notes: Vec::new(),
+            expression_chase: Vec::new(),
             note_identities: Vec::new(),
             note_identity_index: Vec::new(),
             length_beats: 4.0,
@@ -159,6 +224,58 @@ pub enum SeqKind {
         pressure: f32,
         timbre: f32,
     },
+}
+
+/// A node in the control-prepared note interval index.
+#[derive(Clone, Debug)]
+pub struct ExpressionChaseNode {
+    note: u32,
+    left: Option<u32>,
+    right: Option<u32>,
+    max_end: f64,
+}
+
+struct ExpressionCandidates<'a> {
+    notes: &'a [ExpressionNote],
+    nodes: &'a [ExpressionChaseNode],
+    beat: f64,
+    stack: [u32; 64],
+    count: usize,
+    remaining: usize,
+}
+
+impl<'a> Iterator for ExpressionCandidates<'a> {
+    type Item = &'a ExpressionNote;
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.count > 0 && self.remaining > 0 {
+            self.remaining -= 1;
+            self.count -= 1;
+            let Some(node) = self.nodes.get(self.stack[self.count] as usize) else {
+                continue;
+            };
+            if node.max_end <= self.beat {
+                continue;
+            }
+            let Some(note) = self.notes.get(node.note as usize) else {
+                continue;
+            };
+            let right = if note.start_beat < self.beat {
+                node.right
+            } else {
+                None
+            };
+            for child in [right, node.left].into_iter().flatten() {
+                if self.count < self.stack.len() {
+                    self.stack[self.count] = child;
+                    self.count += 1;
+                }
+            }
+            if note.start_beat < self.beat && note.end_beat > self.beat {
+                return Some(note);
+            }
+        }
+        None
+    }
 }
 
 /// Exact source-note identity independent of a plan's event ordering.

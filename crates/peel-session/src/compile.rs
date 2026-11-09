@@ -234,11 +234,12 @@ pub fn compile(p: &Project, ctx: &CompileContext) -> (RenderPlan, PlanIndex) {
         .map(|n: &SourceNote| (n.identity, n.voice))
         .collect();
     note_identity_index.sort_unstable_by_key(|(identity, _)| *identity);
-    let plan = RenderPlan {
+    let mut plan = RenderPlan {
         revision: p.revision,
         tempo,
         sequence: seq,
         expression_notes,
+        expression_chase: Vec::new(),
         note_identities,
         note_identity_index,
         length_beats: length,
@@ -253,6 +254,7 @@ pub fn compile(p: &Project, ctx: &CompileContext) -> (RenderPlan, PlanIndex) {
         .round()
         .max(1.0) as u32,
     };
+    plan.prepare_expression_chase();
     (plan, index)
 }
 

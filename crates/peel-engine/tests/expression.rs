@@ -212,6 +212,7 @@ fn curved_plan() -> RenderPlan {
         .iter()
         .map(|n| (n.identity, n.voice))
         .collect();
+    p.prepare_expression_chase();
 
     p
 }
@@ -439,6 +440,85 @@ fn a_loop_start_inside_a_note_chases_expression_every_wrap() {
         assert_value(out[iteration * BEAT], 0.15);
         assert_value(out[iteration * BEAT + BEAT / 2], 0.29);
     }
+}
+
+#[test]
+fn seeking_late_in_a_large_song_chases_notes_beyond_the_old_scan_limit() {
+    let count = (1usize << 18) + 8;
+    let mut p = RenderPlan::empty();
+    p.loop_range = None;
+    p.length_beats = count as f64 * 2.0;
+    p.channels = vec![ChannelRoute {
+        slot: 0,
+        track: 0,
+        gain: 1.0,
+        pan: 0.0,
+        muted: false,
+    }];
+    p.sequence.reserve(count * 3);
+    p.expression_notes.reserve(count);
+    for index in 0..count {
+        let start = index as f64 * 2.0;
+        let end = if index == 0 {
+            p.length_beats
+        } else {
+            start + 1.0
+        };
+        let voice = index as u32 + 1;
+        p.sequence.extend([
+            SeqEvent {
+                beat: start,
+                channel: 0,
+                order: 1,
+                kind: SeqKind::NoteOn {
+                    key: 60,
+                    velocity: 1.0,
+                    voice,
+                },
+            },
+            snapshot(start, voice, 12.0, 0.8, 1.0),
+            SeqEvent {
+                beat: end,
+                channel: 0,
+                order: 0,
+                kind: SeqKind::NoteOff {
+                    key: 60,
+                    velocity: 0.0,
+                    voice,
+                },
+            },
+        ]);
+        p.expression_notes.push(ExpressionNote {
+            start_beat: start,
+            end_beat: end,
+            channel: 0,
+            key: 60,
+            velocity: 1.0,
+            voice,
+            points: vec![ExpressionState {
+                beat: start,
+                pitch: 12.0,
+                pressure: 0.8,
+                timbre: 1.0,
+            }],
+        });
+    }
+    p.sequence
+        .sort_by(|a, b| a.beat.total_cmp(&b.beat).then(a.order.cmp(&b.order)));
+    p.prepare_expression_chase();
+    let target = (count - 1) as f64 * 2.0 + 0.5;
+    let mut voices: Vec<_> = p
+        .sounding_expression(target)
+        .map(|note| note.voice)
+        .collect();
+    voices.sort_unstable();
+    assert_eq!(voices, vec![1, count as u32]);
+    assert_eq!(p.sounding_expression(p.length_beats + 1.0).count(), 0);
+    let mut e = engine(p);
+    e.send(Cmd::Seek { beat: target });
+    e.send(Cmd::Play);
+    let (out, _) = render_blocks(&mut e, 32, 32);
+    assert_value(out[0], 0.58); // the long first note AND the late note both sound
 }
 
 #[test]

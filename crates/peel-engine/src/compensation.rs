@@ -371,6 +371,7 @@ impl Control {
             tempo: plan.tempo.clone(),
             sequence: Vec::new(),
             expression_notes: Vec::new(),
+            expression_chase: Vec::new(),
             note_identities: Vec::new(),
             note_identity_index: Vec::new(),
             length_beats: plan.length_beats,

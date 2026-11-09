@@ -140,8 +140,8 @@ pub use live::{
 pub use offline::OfflineEngine;
 pub use plan::{
     AUTOMATION_UNSET, AudioRegion, AutomationLane, AutomationTarget, ChannelIndex, ChannelRoute,
-    ExpressionNote, ExpressionState, NoteIdentity, RenderPlan, SeqEvent, SeqKind, Slot, SourceNote,
-    TrackIndex, TrackRoute, TrackSend,
+    ExpressionChaseNode, ExpressionNote, ExpressionState, NoteIdentity, RenderPlan, SeqEvent,
+    SeqKind, Slot, SourceNote, TrackIndex, TrackRoute, TrackSend,
 };
 pub use telemetry::Telemetry;
 

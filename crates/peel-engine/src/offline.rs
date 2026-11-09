@@ -108,10 +108,11 @@ impl OfflineEngine {
     }
 
     /// Validates compensation before changing the active graph.
-    pub fn try_set_plan(&mut self, plan: Box<crate::RenderPlan>) -> Result<(), String> {
+    pub fn try_set_plan(&mut self, mut plan: Box<crate::RenderPlan>) -> Result<(), String> {
         let prepared = self.compensation.prepare(&plan, self.max_block(), None);
         match prepared {
             Ok(compensation) => {
+                plan.prepare_expression_chase();
                 self.compensation.remember_plan(&plan);
                 self.compensation.error = None;
                 self.engine
