@@ -837,6 +837,12 @@ fn mpe_sets_up_members_limits_pitch_and_rejects_excess_polyphony() {
     let (p, pat) = expressive_pattern(15);
     let out = export_pattern(&p, pat, &ExportOptions::default()).unwrap();
     assert_eq!(out.report.mpe_notes, 15);
+    let imported = import_smf(&out.bytes, &ImportOptions::default()).unwrap();
+    assert!(
+        imported.report.unsupported.is_empty(),
+        "{:?}",
+        imported.report.unsupported
+    );
     assert_eq!(out.report.pitch_values_clamped, 1);
     assert!(
         out.report

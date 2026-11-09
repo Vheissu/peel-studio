@@ -693,7 +693,6 @@ fn setup_mpe(out: &mut Vec<Ev>) {
         Body::Pitch(0, 8192),
         Body::Pressure(0, 0),
         Body::Controller(0, 74, 64),
-        Body::Controller(0, 64, 0),
     ] {
         out.push(Ev {
             tick: 0,
