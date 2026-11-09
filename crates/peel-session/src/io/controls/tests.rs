@@ -283,3 +283,25 @@ fn channel_filter_and_disabling_input_release_notes_and_pedal() {
         "filter changes and disable clear the pedal"
     );
 }
+
+#[test]
+fn a_software_note_on_with_zero_velocity_is_a_note_off() {
+    let (mut s, _) = session();
+    let channel = s.project().channels[0].id;
+    s.set_live_target(Some(channel));
+    s.handle_midi_event(MidiEvent::NoteOn {
+        channel: 0,
+        key: 60,
+        velocity: 100,
+    });
+    s.handle_midi_event(MidiEvent::NoteOn {
+        channel: 0,
+        key: 60,
+        velocity: 0,
+    });
+    assert_eq!(s.midi_activity(), 1);
+    let notes = s.take_recorded_midi();
+    assert_eq!(notes.len(), 2);
+    assert!(notes[0].on);
+    assert!(!notes[1].on);
+}
