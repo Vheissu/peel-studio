@@ -40,7 +40,9 @@
 //! Limits: Hat and Clap have no pitch to bend. Bass, Sax (mono) and Poly in
 //! Mono/Legato play the expression of the note on top of their key stack.
 //! Zither re-strikes the key's own string, so same-key notes share it.
-//! Extreme bends stay finite: oscillators and resonators clamp below
+//! The instrument-wide bend and per-note snapshots both reach ±120 st.
+//! Violin and Zither loops under about seven samples (near A8) hold little
+//! of their excitation at the new pitch. Extreme bends stay finite: oscillators and resonators clamp below
 //! Nyquist, waveguides clamp their loop lengths and silence strings out of
 //! range, and the sampler caps its playback rate.
 //!

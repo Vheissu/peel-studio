@@ -455,10 +455,10 @@ pub(crate) fn st_ratio(st: f32) -> f32 {
     (st * (std::f32::consts::LN_2 / 12.0)).exp()
 }
 
-/// Largest legacy (instrument-wide) pitch displacement, in semitones.
-pub(crate) const BEND_MAX: f32 = 48.0;
-/// Largest per-note pitch displacement, in semitones (MPE manager + member).
-pub(crate) const NOTE_BEND_MAX: f32 = 120.0;
+/// Largest pitch displacement, in semitones: the instrument-wide bend (an
+/// MPE zone's manager channel reaches ±96) and a note's full snapshot
+/// (manager plus member) alike.
+pub(crate) const BEND_MAX: f32 = 120.0;
 /// Gain added at full pressure: `1 + 0.6 * p` (about +4 dB).
 pub(crate) const PRESSURE_GAIN: f32 = 0.6;
 /// Filter cutoff opened at full pressure, in octaves.
@@ -742,7 +742,7 @@ impl Expression {
         let e = &mut self.scoped[i];
         e.stamp = self.clock;
         e.pitch_t = if pitch.is_finite() {
-            pitch.clamp(-NOTE_BEND_MAX, NOTE_BEND_MAX)
+            pitch.clamp(-BEND_MAX, BEND_MAX)
         } else {
             0.0
         };

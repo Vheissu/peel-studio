@@ -630,3 +630,67 @@ fn mono_voices_follow_the_note_on_top() {
         );
     }
 }
+
+/// The instrument-wide bend reaches an MPE zone's ±96 st manager range.
+#[test]
+fn shared_bend_reaches_96_semitones_where_the_pitch_fits() {
+    // A0 up eight octaves is A8 (7040 Hz). Excluded: Sax (its reed stops
+    // near 5.8 kHz), the Sampler (its rate cap is 32x), and the Violin and
+    // Zither waveguides (a loop under seven samples holds little of the
+    // excitation at the new pitch). All of them stay finite (next test).
+    let skip = [
+        "peel.wind.sax",
+        "peel.sampler",
+        "peel.strings.violin",
+        "peel.strings.zither",
+    ];
+    for id in PITCHED.into_iter().filter(|id| !skip.contains(id)) {
+        let ev = [
+            note_on(0, 21, 0.9, 1),
+            (0, EventKind::PitchBend { semitones: 96.0 }),
+        ];
+        let up = run(id, &ev, 16_000, 256);
+        // Narrow-band energy: A8 itself against the semitones either side.
+        let w = &up[6_000..14_192];
+        let semi = 2f32.powf(1.0 / 12.0);
+        let (at, below, above) = (
+            band(w, 7_040.0),
+            band(w, 7_040.0 / semi),
+            band(w, 7_040.0 * semi),
+        );
+        assert!(
+            at > 20.0 * below && at > 20.0 * above,
+            "{id}: {at} vs {below} {above}"
+        );
+        // The same note from a snapshot sounds the same.
+        let snap = run(
+            id,
+            &[vx(0, 1, 96.0, 0.0, 0.5), note_on(0, 21, 0.9, 1)],
+            16_000,
+            256,
+        );
+        let ws = &snap[6_000..14_192];
+        assert!(
+            band(ws, 7_040.0) > 20.0 * band(ws, 7_040.0 / semi),
+            "{id}: snapshot"
+        );
+    }
+}
+
+#[test]
+fn shared_bend_extremes_stay_finite_and_bounded() {
+    for id in REQUIRED {
+        for st in [120.0f32, -120.0, 96.0, -96.0, 500.0] {
+            let ev = [
+                note_on(0, 108, 1.0, 1),
+                note_on(0, 21, 1.0, 2),
+                (300, EventKind::PitchBend { semitones: st }),
+                (9_000, EventKind::PitchBend { semitones: -st }),
+            ];
+            let mut dev = dev(id);
+            let (l, r) = render(dev.as_mut(), &ev, 24_000, 97);
+            assert!(all_finite(&l) && all_finite(&r), "{id} {st}");
+            assert!(peak(&l) < 4.5 && peak(&r) < 4.5, "{id} {st}");
+        }
+    }
+}
