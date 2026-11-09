@@ -34,6 +34,9 @@ peel.call("ui.set", {"dock": "rack", "panels": {"browser": True}})
 | `clips` | IDs of clips in the active arrangement; an empty array clears the selection |
 | `focus` | Object with `kind` (`channel`, `track`, `clip`) and `id`, or `{"kind":"none"}` |
 | `panels` | Optional booleans: `browser`, `inspector`, `scripts`, `editor`, `help`, `meter`, `status_details` |
+| `mixer_size` | `compact`, `expanded` or `full` strip density |
+| `mixer_expanded` | Grow the mixer into the available dock area, or restore its earlier height |
+| `effect` | `{"kind":"open","device":"INSERT_ID"}` opens an insert editor; `{"kind":"close"}` closes it |
 | `sizes` | Optional dimensions in logical pixels: `browser` (180–420), `inspector` (240–480), `editor` height (180–1200, limited by the current window) |
 
 Inspector and Scripts share the right column. Showing one hides the other;
@@ -47,3 +50,8 @@ The command-line host has session controls but no desktop workspace.
 
 For transport, device discovery, recording, import/export and project actions,
 use the live calls described in [SCRIPTING.md](SCRIPTING.md) and [MCP.md](MCP.md).
+
+`ui.get` also reports `mixer_size`, `mixer_expanded` and `effect` (the open
+editor's `track` and `device`, or null). These editor choices do not edit
+the music document or add undo steps. An unknown effect rejects the
+complete request before any other view setting changes.

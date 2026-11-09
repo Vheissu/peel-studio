@@ -3,7 +3,7 @@
 use crate::{
     prefs::Prefs,
     studio::Studio,
-    workspace::{BrowserTab, DockTab, Focus, Workspace},
+    workspace::{BrowserTab, DockTab, Focus, MixerSize, Workspace},
 };
 use peel_document::Id;
 use peel_session::Session;
@@ -68,6 +68,9 @@ pub fn execute(
                 "notes":{"type":"array","items":{"type":"string"}},"clips":{"type":"array","items":{"type":"string"}},
                 "focus":{"type":"object","properties":{"kind":{"enum":["channel","track","clip","none"]},"id":{"type":"string"}}},
                 "panels":{"type":"object","additionalProperties":false,"properties":{"browser":{"type":"boolean"},"inspector":{"type":"boolean"},"scripts":{"type":"boolean"},"editor":{"type":"boolean"},"help":{"type":"boolean"},"meter":{"type":"boolean"},"status_details":{"type":"boolean"}}},
+                "mixer_size":{"enum":["compact","expanded","full"]},
+                "mixer_expanded":{"type":"boolean"},
+                "effect":{"oneOf":[{"type":"object","required":["kind","device"],"additionalProperties":false,"properties":{"kind":{"const":"open"},"device":{"type":"string"}}},{"type":"object","required":["kind"],"additionalProperties":false,"properties":{"kind":{"const":"close"}}}]},
                 "sizes":{"type":"object","additionalProperties":false,"properties":{"browser":{"type":"number","minimum":180,"maximum":420},"inspector":{"type":"number","minimum":240,"maximum":480},"editor":{"type":"number","minimum":180,"maximum":1200}}}
             }}}));
             Ok(Value::Array(tools.clone()))
@@ -101,7 +104,10 @@ fn view(session: &Session, ws: &Workspace, prefs: &Prefs) -> Value {
         "pattern":session.selected_pattern(),"channel":ws.selected_channel,
         "notes":ws.roll.selection,"clips":ws.playlist.selection,"focus":focus,
         "panels":{"browser":prefs.show_browser,"inspector":prefs.show_inspector,"scripts":prefs.show_scripts,"editor":prefs.show_editor,"help":prefs.show_help,"meter":prefs.show_meter,"status_details":prefs.show_status_details},
-        "sizes":{"browser":ws.browser_w,"inspector":ws.inspector_w,"editor":ws.dock_h}})
+        "sizes":{"browser":ws.browser_w,"inspector":ws.inspector_w,"editor":ws.dock_h},
+        "mixer_size":match ws.mixer_size {MixerSize::Compact=>"compact",MixerSize::Expanded=>"expanded",MixerSize::Full=>"full"},
+        "mixer_expanded":ws.mixer_restore_h.is_some(),
+        "effect":ws.fx.target.map(|t|json!({"track":t.track,"device":t.device}))})
 }
 
 #[derive(Default, Deserialize)]
@@ -131,6 +137,13 @@ enum ViewFocus {
     None,
 }
 
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum EffectView {
+    Open { device: Id },
+    Close,
+}
+
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct Update {
@@ -143,6 +156,9 @@ struct Update {
     panels: Panels,
     sizes: Sizes,
     focus: Option<ViewFocus>,
+    mixer_size: Option<String>,
+    mixer_expanded: Option<bool>,
+    effect: Option<EffectView>,
 }
 fn update(
     session: &mut Session,
@@ -237,6 +253,30 @@ fn update(
             _ => Err("Unknown focus target"),
         })
         .transpose()?;
+    let mixer_size = change
+        .mixer_size
+        .as_deref()
+        .map(|size| match size {
+            "compact" => Ok(MixerSize::Compact),
+            "expanded" => Ok(MixerSize::Expanded),
+            "full" => Ok(MixerSize::Full),
+            _ => Err("Unknown mixer size"),
+        })
+        .transpose()?;
+    let effect = change
+        .effect
+        .map(|effect| match effect {
+            EffectView::Close => Ok(None),
+            EffectView::Open { device } => session
+                .project()
+                .mixer
+                .tracks
+                .iter()
+                .find(|t| t.inserts.iter().any(|d| d.id == device))
+                .map(|t| Some((t.id, device)))
+                .ok_or("Unknown insert effect"),
+        })
+        .transpose()?;
     // Apply only after the complete request has been validated.
     if let Some(dock) = dock {
         ws.dock = dock;
@@ -299,6 +339,28 @@ fn update(
     }
     if let Some(h) = change.sizes.editor {
         ws.dock_h = h;
+    }
+    if let Some(size) = mixer_size {
+        ws.mixer_size = size;
+    }
+    if let Some(expanded) = change.mixer_expanded {
+        if expanded && ws.mixer_restore_h.is_none() {
+            ws.mixer_restore_h = Some(ws.dock_h);
+            ws.dock_h = 4000.0;
+            ws.dock = DockTab::Mixer;
+            prefs.show_editor = true;
+        } else if !expanded && let Some(height) = ws.mixer_restore_h.take() {
+            ws.dock_h = height;
+        }
+    }
+    if let Some(effect) = effect {
+        if let Some((track, device)) = effect {
+            ws.fx.open(track, device);
+            ws.focus = Some(Focus::Track(track));
+        } else {
+            ws.fx.close();
+            session.set_analysis_device(None);
+        }
     }
     prefs.capture_layout(ws);
     prefs.save();
@@ -405,5 +467,51 @@ mod tests {
             .len()
                 > 20
         );
+    }
+    #[test]
+    fn scripts_open_effects_and_choose_mixer_layout_atomically() {
+        let mut session = Session::new_silent(peel_session::template::beat_and_melody());
+        let mut ws = Workspace::default();
+        let mut prefs = Prefs::default();
+        let mut control = peel_mcp::Control::default();
+        let track = session.project().mixer.tracks[0].id;
+        let effect = peel_document::DeviceInstance::new("peel.fx.eq", 1);
+        let device = effect.id;
+        session.doc.edit("Add EQ", |p| {
+            p.mixer.track_mut(track).unwrap().inserts.push(effect)
+        });
+        let history = session.doc.history_labels().count();
+        let old_height = ws.dock_h;
+        let state = execute(&mut session,&mut ws,&mut prefs,&mut control,"ui.set",json!({"mixer_size":"full","mixer_expanded":true,"effect":{"kind":"open","device":device}})).unwrap();
+        assert_eq!(state["effect"]["device"], json!(device));
+        assert_eq!(state["mixer_size"], "full");
+        assert_eq!(state["mixer_expanded"], true);
+        assert_eq!(ws.dock, DockTab::Mixer);
+        assert_eq!(ws.focus, Some(Focus::Track(track)));
+        assert!(
+            execute(
+                &mut session,
+                &mut ws,
+                &mut prefs,
+                &mut control,
+                "ui.set",
+                json!({"mixer_size":"compact","effect":{"kind":"open","device":Id::new()}})
+            )
+            .is_err()
+        );
+        assert_eq!(ws.mixer_size, MixerSize::Full);
+        assert_eq!(ws.fx.target.unwrap().device, device);
+        execute(
+            &mut session,
+            &mut ws,
+            &mut prefs,
+            &mut control,
+            "ui.set",
+            json!({"mixer_expanded":false,"effect":{"kind":"close"}}),
+        )
+        .unwrap();
+        assert_eq!(ws.dock_h, old_height);
+        assert!(ws.fx.target.is_none());
+        assert_eq!(session.doc.history_labels().count(), history);
     }
 }
