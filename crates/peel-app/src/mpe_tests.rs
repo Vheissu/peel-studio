@@ -630,3 +630,45 @@ fn mpe_controls_reach_the_session_and_preferences() {
     assert_eq!(h.session().mpe_config().mode, MpeMode::Off);
     assert!(h.shown(W::new("inst-midi-channel")));
 }
+
+/// RPN 6 on the manager channel: `count` member channels (0 turns the zone off).
+fn rpn_zone(h: &mut H, count: u8) {
+    use peel_session::MidiEvent::ControlChange;
+    for (controller, value) in [(101, 0), (100, 6), (6, count)] {
+        h.studio.session.handle_midi_event(ControlChange {
+            channel: 0,
+            controller,
+            value,
+        });
+    }
+    h.studio.session.poll_midi();
+    h.frame();
+}
+
+#[test]
+fn choosing_off_after_a_controller_turned_the_zone_off_stops_listening() {
+    let mut h = H::new();
+    open_instrument(&mut h);
+    pick(&mut h, "inst-mpe-mode", 1);
+    // Without an explicit Off the controller can bring its zone back.
+    rpn_zone(&mut h, 0);
+    assert_eq!(h.session().mpe_config().mode, MpeMode::Off);
+    rpn_zone(&mut h, 7);
+    assert_eq!(h.session().mpe_config().mode, MpeMode::Lower);
+    // The controller turns the zone off; the user then picks Off, which
+    // matches the live mode but must still reach the session.
+    rpn_zone(&mut h, 0);
+    assert_eq!(h.session().mpe_config().mode, MpeMode::Off);
+    pick(&mut h, "inst-mpe-mode", 0);
+    rpn_zone(&mut h, 7);
+    assert_eq!(h.session().mpe_config().mode, MpeMode::Off, "zone came back after Off");
+    assert_eq!(h.studio.prefs.mpe.mode, MpeMode::Off);
+
+    // A saved Off preference does the same at project reset.
+    pick(&mut h, "inst-mpe-mode", 1);
+    h.studio.prefs.mpe.mode = MpeMode::Off;
+    rpn_zone(&mut h, 0);
+    h.studio.apply_io_prefs();
+    rpn_zone(&mut h, 7);
+    assert_eq!(h.session().mpe_config().mode, MpeMode::Off);
+}

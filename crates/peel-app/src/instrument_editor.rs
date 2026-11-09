@@ -941,7 +941,9 @@ fn midi_status(
 
 /// Writes one MPE change to the session and, once accepted, to the
 /// machine's preferences. The session may also change from RPN messages, so
-/// edits start from what is live.
+/// edits start from what is live. Always sent, even when it matches the live
+/// setup: choosing Off after a controller's RPN 6 turned the zone off must
+/// still stop the session listening for that zone.
 fn set_mpe(s: &mut Session, prefs: &mut Prefs, f: impl FnOnce(&mut MpeConfig)) {
     let mut c = s.mpe_config();
     f(&mut c);

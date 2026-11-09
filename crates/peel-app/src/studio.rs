@@ -168,7 +168,9 @@ impl Studio {
         } else {
             peel_session::MpeConfig::default()
         };
-        if self.session.mpe_config() != mpe
+        // Off is always sent: a controller's RPN 6 can leave the live mode
+        // Off while the session still listens for that zone.
+        if (mpe.mode == peel_session::MpeMode::Off || self.session.mpe_config() != mpe)
             && let Err(e) = self.session.configure_mpe(mpe)
         {
             self.session.notify(e, true);
