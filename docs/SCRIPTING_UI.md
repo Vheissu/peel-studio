@@ -36,6 +36,9 @@ peel.call("ui.set", {"dock": "rack", "panels": {"browser": True}})
 | `panels` | Optional booleans: `browser`, `inspector`, `scripts`, `editor`, `help`, `meter`, `status_details` |
 | `mixer_size` | `compact`, `expanded` or `full` strip density |
 | `mixer_expanded` | Grow the mixer into the available dock area, or restore its earlier height |
+| `instrument` | `{"kind":"open","channel":"CHANNEL_ID"}` opens an instrument editor; `{"kind":"close"}` closes it |
+| `keyboard` | Enable or disable computer-keyboard note input |
+| `audio_io` | Show or hide Audio routing; opening the panel does not open hardware |
 | `effect` | `{"kind":"open","device":"INSERT_ID"}` opens an insert editor; `{"kind":"close"}` closes it |
 | `sizes` | Optional dimensions in logical pixels: `browser` (180–420), `inspector` (240–480), `editor` height (180–1200, limited by the current window) |
 
@@ -55,3 +58,9 @@ use the live calls described in [SCRIPTING.md](SCRIPTING.md) and [MCP.md](MCP.md
 editor's `track` and `device`, or null). These editor choices do not edit
 the music document or add undo steps. An unknown effect rejects the
 complete request before any other view setting changes.
+
+`ui.get` reports `instrument` (the channel ID or null), `audio_io` and
+`keyboard` too.
+Opening an instrument sets the live keyboard target immediately. Effect,
+instrument and Audio routing editors share the workspace; one request can
+open at most one. All targets are checked before any view state changes.

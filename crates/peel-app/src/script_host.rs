@@ -70,6 +70,8 @@ pub fn execute(
                 "panels":{"type":"object","additionalProperties":false,"properties":{"browser":{"type":"boolean"},"inspector":{"type":"boolean"},"scripts":{"type":"boolean"},"editor":{"type":"boolean"},"help":{"type":"boolean"},"meter":{"type":"boolean"},"status_details":{"type":"boolean"}}},
                 "mixer_size":{"enum":["compact","expanded","full"]},
                 "mixer_expanded":{"type":"boolean"},
+                "instrument":{"oneOf":[{"type":"object","required":["kind","channel"],"additionalProperties":false,"properties":{"kind":{"const":"open"},"channel":{"type":"string"}}},{"type":"object","required":["kind"],"additionalProperties":false,"properties":{"kind":{"const":"close"}}}]},
+                "audio_io":{"type":"boolean"},"keyboard":{"type":"boolean"},
                 "effect":{"oneOf":[{"type":"object","required":["kind","device"],"additionalProperties":false,"properties":{"kind":{"const":"open"},"device":{"type":"string"}}},{"type":"object","required":["kind"],"additionalProperties":false,"properties":{"kind":{"const":"close"}}}]},
                 "sizes":{"type":"object","additionalProperties":false,"properties":{"browser":{"type":"number","minimum":180,"maximum":420},"inspector":{"type":"number","minimum":240,"maximum":480},"editor":{"type":"number","minimum":180,"maximum":1200}}}
             }}}));
@@ -107,7 +109,8 @@ fn view(session: &Session, ws: &Workspace, prefs: &Prefs) -> Value {
         "sizes":{"browser":ws.browser_w,"inspector":ws.inspector_w,"editor":ws.dock_h},
         "mixer_size":match ws.mixer_size {MixerSize::Compact=>"compact",MixerSize::Expanded=>"expanded",MixerSize::Full=>"full"},
         "mixer_expanded":ws.mixer_restore_h.is_some(),
-        "effect":ws.fx.target.map(|t|json!({"track":t.track,"device":t.device}))})
+        "effect":ws.fx.target.map(|t|json!({"track":t.track,"device":t.device})),
+        "instrument":ws.inst.target,"audio_io":ws.io_open,"keyboard":ws.keys_enabled})
 }
 
 #[derive(Default, Deserialize)]
@@ -144,6 +147,13 @@ enum EffectView {
     Close,
 }
 
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum InstrumentView {
+    Open { channel: Id },
+    Close,
+}
+
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct Update {
@@ -159,6 +169,9 @@ struct Update {
     mixer_size: Option<String>,
     mixer_expanded: Option<bool>,
     effect: Option<EffectView>,
+    instrument: Option<InstrumentView>,
+    audio_io: Option<bool>,
+    keyboard: Option<bool>,
 }
 fn update(
     session: &mut Session,
@@ -277,6 +290,22 @@ fn update(
                 .ok_or("Unknown insert effect"),
         })
         .transpose()?;
+    let instrument = change
+        .instrument
+        .map(|view| match view {
+            InstrumentView::Close => Ok(None),
+            InstrumentView::Open { channel } if session.project().channel(channel).is_some() => {
+                Ok(Some(channel))
+            }
+            _ => Err("Unknown instrument channel"),
+        })
+        .transpose()?;
+    let opening = usize::from(effect.as_ref().is_some_and(Option::is_some))
+        + usize::from(instrument.as_ref().is_some_and(Option::is_some))
+        + usize::from(change.audio_io == Some(true));
+    if opening > 1 {
+        return Err("Open one editor at a time".into());
+    }
     // Apply only after the complete request has been validated.
     if let Some(dock) = dock {
         ws.dock = dock;
@@ -344,9 +373,8 @@ fn update(
         ws.mixer_size = size;
     }
     if let Some(expanded) = change.mixer_expanded {
-        if expanded && ws.mixer_restore_h.is_none() {
-            ws.mixer_restore_h = Some(ws.dock_h);
-            ws.dock_h = 4000.0;
+        if expanded {
+            ws.mixer_restore_h.get_or_insert(ws.dock_h);
             ws.dock = DockTab::Mixer;
             prefs.show_editor = true;
         } else if !expanded && let Some(height) = ws.mixer_restore_h.take() {
@@ -355,12 +383,34 @@ fn update(
     }
     if let Some(effect) = effect {
         if let Some((track, device)) = effect {
+            crate::instrument_editor::close(session, ws);
+            ws.io_open = false;
             ws.fx.open(track, device);
             ws.focus = Some(Focus::Track(track));
         } else {
             ws.fx.close();
             session.set_analysis_device(None);
         }
+    }
+    if let Some(instrument) = instrument {
+        if let Some(channel) = instrument {
+            crate::instrument_editor::open(session, ws, channel);
+            session.set_live_target(Some(channel));
+            session.set_analysis_device(None);
+        } else {
+            crate::instrument_editor::close(session, ws);
+        }
+    }
+    if let Some(open) = change.audio_io {
+        if open {
+            crate::instrument_editor::close(session, ws);
+            ws.fx.close();
+            session.set_analysis_device(None);
+        }
+        ws.io_open = open;
+    }
+    if let Some(enabled) = change.keyboard {
+        ws.keys_enabled = enabled;
     }
     prefs.capture_layout(ws);
     prefs.save();
@@ -471,7 +521,7 @@ mod tests {
     #[test]
     fn scripts_open_effects_and_choose_mixer_layout_atomically() {
         let mut session = Session::new_silent(peel_session::template::beat_and_melody());
-        let mut ws = Workspace::default();
+        let mut ws = Workspace::new(session.project());
         let mut prefs = Prefs::default();
         let mut control = peel_mcp::Control::default();
         let track = session.project().mixer.tracks[0].id;
@@ -512,6 +562,44 @@ mod tests {
         .unwrap();
         assert_eq!(ws.dock_h, old_height);
         assert!(ws.fx.target.is_none());
+        let channel = session.project().channels[0].id;
+        execute(
+            &mut session,
+            &mut ws,
+            &mut prefs,
+            &mut control,
+            "ui.set",
+            json!({"instrument":{"kind":"open","channel":channel}}),
+        )
+        .unwrap();
+        assert_eq!(ws.inst.target, Some(channel));
+        assert_eq!(session.live_target(), Some(channel));
+        assert!(
+            execute(
+                &mut session,
+                &mut ws,
+                &mut prefs,
+                &mut control,
+                "ui.set",
+                json!({"instrument":{"kind":"open","channel":Id::new()},"audio_io":true})
+            )
+            .is_err()
+        );
+        assert_eq!(ws.inst.target, Some(channel));
+        assert!(!ws.io_open);
+        execute(
+            &mut session,
+            &mut ws,
+            &mut prefs,
+            &mut control,
+            "ui.set",
+            json!({"audio_io":true}),
+        )
+        .unwrap();
+        assert!(ws.inst.target.is_none());
+        assert!(ws.fx.target.is_none());
+        assert!(ws.io_open);
+        assert!(!session.input_is_open());
         assert_eq!(session.doc.history_labels().count(), history);
     }
 }

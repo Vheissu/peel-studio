@@ -169,3 +169,6 @@ GPL-3.0-or-later. MP3 encoding statically links LAME through
 
 Peel Studio is an independent project. It is not affiliated with
 Image-Line, and it does not use FL Studio code, artwork, presets or samples.
+
+Mixing, EQ, mastering, instruments, MIDI and recording are covered in the
+[audio tools guide](docs/AUDIO_TOOLS.md).

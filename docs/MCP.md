@@ -207,7 +207,10 @@ preview and direct input monitoring.
 Other target kinds are `track_gain` / `track_pan` with `track`, and
 `channel_gain` / `channel_pan` with `channel`. Device ranges are plain values
 from `peel_devices`; logarithmic controls retain their parameter curve.
-CC64, CC120 and CC123 retain their sustain and panic roles.
+A mapping for an exact MIDI channel overrides the same CC's omni mapping
+only on that channel. Removing the override restores the omni binding.
+Duplicate exact controller/channel bindings are rejected. CC64, CC120 and
+CC123 retain their sustain and panic roles.
 
 `peel_midi_learn` with a target waits for the next accepted controller; omit
 `target` to cancel. `peel_midi_controls` reads mappings, filter, Learn status and
