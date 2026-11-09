@@ -92,8 +92,10 @@ the instrument editor, alongside its pitch and pressure controls.
 Native pressure adds up to about 4 dB of gain and, on filtered instruments,
 up to three quarters of an octave of brightness. Per-key pressure affects
 only that key; channel pressure affects all voices. CLAP instruments receive
-the expression supported by their note dialect. Expression does not change
-saved instrument parameters or record automation into patterns. Input still
+the expression supported by their note dialect. MIDI-only plugins need
+RPN 0 pitch sensitivity support, or a plugin bend range that matches Peel.
+Expression does not change saved instrument parameters or record automation
+into patterns. Input still
 uses one selected instrument and the channel filter; MPE voice assignment
 is not implemented.
 
