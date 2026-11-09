@@ -28,6 +28,9 @@ pub struct Studio {
     autosaved_revision: u64,
     /// The dock tab last frame; switching editors reveals a hidden dock.
     last_dock: DockTab,
+    /// The channel the computer keyboard played last frame; changing it
+    /// releases held keys.
+    last_channel: Option<Id>,
 }
 
 /// Seconds between autosaves of a changed project.
@@ -79,9 +82,11 @@ impl Studio {
             last_autosave: std::time::Instant::now(),
             autosaved_revision: revision,
             last_dock,
+            last_channel: None,
         };
         studio.scripts.python = studio.prefs.python.clone();
         studio.open_view();
+        studio.apply_io_prefs();
         studio.apply_debug_env();
         studio
     }
@@ -128,7 +133,70 @@ impl Studio {
             .map(|c| c.id);
         self.ws.focus = self.ws.selected_channel.map(Focus::Channel);
         self.open_view();
+        self.apply_io_prefs();
         self.autosaved_revision = self.session.doc.revision();
+    }
+
+    /// Applies the machine's saved MIDI channel filter, controller
+    /// mappings and secondary outputs to the session. Mappings and routes
+    /// that name things this project does not have are skipped and counted.
+    pub(crate) fn apply_io_prefs(&mut self) {
+        let prefs = self.prefs.clone();
+        if self.session.midi_channel_filter() != prefs.midi_channel
+            && let Err(e) = self.session.set_midi_channel_filter(prefs.midi_channel)
+        {
+            self.session.notify(e, true);
+        }
+        if !prefs.midi_mappings.is_empty() || !self.session.midi_control_mappings().is_empty() {
+            let _ = self.session.set_midi_control_mappings(Vec::new());
+            let skipped = prefs
+                .midi_mappings
+                .iter()
+                .filter(|m| self.session.add_midi_control_mapping((*m).clone()).is_err())
+                .count();
+            if skipped > 0 {
+                self.session.notify(
+                    format!(
+                        "{skipped} MIDI mapping{} belong to another project",
+                        if skipped == 1 { "" } else { "s" }
+                    ),
+                    false,
+                );
+            }
+        }
+        let usable: Vec<_> = prefs
+            .output_routes
+            .iter()
+            .filter(|r| {
+                r.track
+                    .is_none_or(|t| self.session.project().mixer.track(t).is_some())
+            })
+            .cloned()
+            .collect();
+        if usable != self.session.output_routes() {
+            if let Err(e) = self.session.configure_output_routes(usable) {
+                self.session.notify(format!("Outputs: {e}"), true);
+            }
+        }
+        if let Some(c) = prefs.primary_output
+            && self.session.primary_output_channels() != c
+            && let Err(e) = self.session.set_primary_output_channels(c)
+        {
+            self.session.notify(format!("Main output: {e}"), true);
+        }
+    }
+
+    /// Ends every computer-keyboard note still held (focus loss, a new
+    /// target or a text field taking the keys would otherwise leave them
+    /// sounding, because their key-up never arrives).
+    pub(crate) fn release_held(&mut self) {
+        let held: Vec<_> = self.ws.held.drain().collect();
+        for (_, (ch, key)) in held {
+            self.session.live_note(ch, key, 0.0, false);
+            let beat = self.session.position();
+            self.recorder
+                .note(&mut self.session, ch, key, 0.0, false, beat);
+        }
     }
 
     fn welcome(&mut self, ui: &mut Ui) {
@@ -489,6 +557,18 @@ impl Studio {
                 _ => {}
             }
         }
+        // `PEEL_INSTRUMENT=<channel name>` opens that instrument's editor.
+        if let Ok(name) = std::env::var("PEEL_INSTRUMENT")
+            && let Some(c) = self
+                .session
+                .project()
+                .channels
+                .iter()
+                .find(|c| c.name == name)
+                .map(|c| c.id)
+        {
+            crate::instrument_editor::open(&mut self.session, &mut self.ws, c);
+        }
         if std::env::var_os("PEEL_EXPORT").is_some() {
             self.ws.export_panel = true;
         }
@@ -589,6 +669,12 @@ impl Studio {
         if self.ws.fx.is_open() && !ui.any_popup() && ui.input.take_named(NamedKey::Escape) {
             self.ws.fx.close();
         }
+        if self.ws.inst.is_open() && !ui.any_popup() && ui.input.take_named(NamedKey::Escape) {
+            crate::instrument_editor::close(&mut self.session, &mut self.ws);
+        }
+        if self.ws.io_open && !ui.any_popup() && ui.input.take_named(NamedKey::Escape) {
+            self.ws.io_open = false;
+        }
         if ui.input.take_named(NamedKey::Escape) {
             self.session.stop_preview();
         }
@@ -653,6 +739,10 @@ impl Studio {
             (KeyCode::Digit0, 27),
             (KeyCode::KeyP, 28),
         ];
+        if !self.ws.keys_enabled {
+            self.release_held();
+            return;
+        }
         let Some(channel) = self.ws.selected_channel else {
             return;
         };
@@ -1095,6 +1185,20 @@ impl Studio {
             self.ws.browser_tab = crate::workspace::BrowserTab::Effects;
             self.debug_plugin = None;
         }
+        if self.last_channel != self.ws.selected_channel
+            || ui.input.focus_lost
+            || (ui.text_focus() && !self.ws.held.is_empty())
+        {
+            self.release_held();
+            self.last_channel = self.ws.selected_channel;
+        }
+        if ui.input.focus_lost {
+            crate::instrument_editor::release_all(&mut self.session, &mut self.ws);
+        }
+        // Two editors never stack: the one opened last wins.
+        if self.ws.fx.is_open() && self.ws.inst.is_open() {
+            crate::instrument_editor::close(&mut self.session, &mut self.ws);
+        }
         self.session.set_live_target(self.ws.selected_channel);
         self.session.poll_midi();
         self.recorder.frame(&mut self.session);
@@ -1151,7 +1255,16 @@ impl Studio {
             }
             r
         });
-        let dock_r = if self.prefs.show_editor {
+        // An expanded mixer takes the whole area between the panes: the
+        // playlist steps aside so strips can use the window's height.
+        let mixer_expanded = self.prefs.show_editor
+            && self.ws.dock == DockTab::Mixer
+            && self.ws.mixer_restore_h.is_some();
+        let dock_r = if mixer_expanded {
+            let r = area;
+            area = Rect { h: 0.0, ..area };
+            r
+        } else if self.prefs.show_editor {
             let max_dock = (area.h - 160.0).max(180.0);
             self.ws.dock_h = self.ws.dock_h.clamp(180.0, max_dock);
             let r = area.cut_bottom(self.ws.dock_h);
@@ -1171,7 +1284,9 @@ impl Studio {
         {
             crate::layout::toggle_browser(self);
         }
-        playlist::draw(ui, playlist_r, &mut self.session, &mut self.ws);
+        if !mixer_expanded {
+            playlist::draw(ui, playlist_r, &mut self.session, &mut self.ws);
+        }
         dock(ui, dock_r, self);
         if let Some(r) = right_r {
             if self.prefs.show_scripts {
@@ -1192,6 +1307,18 @@ impl Studio {
             },
             &mut self.session,
             &mut self.ws,
+        );
+        let sheet_area = Rect {
+            y: top.bottom(),
+            h: status.y - top.bottom(),
+            ..screen
+        };
+        crate::instrument_editor::draw(
+            ui,
+            sheet_area,
+            &mut self.session,
+            &mut self.ws,
+            &mut self.prefs,
         );
         crate::layout::persist(ui, self);
 

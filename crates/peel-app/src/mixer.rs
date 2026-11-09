@@ -169,23 +169,19 @@ pub fn toolbar(ui: &mut Ui, tools: Rect, s: &mut Session, ws: &mut Workspace) {
         maxed,
         None,
     );
-    ui.name(&fill, if maxed { "Restore dock height" } else { "Grow mixer" });
+    ui.name(&fill, if maxed { "Restore mixer" } else { "Expand mixer" });
     ui.tooltip(
         &fill,
         if maxed {
-            "Restore the dock height"
+            "Restore the mixer to the dock"
         } else {
-            "Give the mixer all the height there is"
+            "Expand the mixer over the whole workspace"
         },
     );
     if fill.clicked {
-        match ws.mixer_restore_h.take() {
-            Some(h) => ws.dock_h = h,
-            None => {
-                ws.mixer_restore_h = Some(ws.dock_h);
-                ws.dock_h = 4000.0; // clamped to the window by the layout
-            }
-        }
+        // The playlist steps aside while the mixer is expanded; the dock
+        // height is left as the user set it.
+        ws.mixer_restore_h = if maxed { None } else { Some(ws.dock_h) };
     }
     let _ = t;
 }

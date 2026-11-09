@@ -39,6 +39,15 @@ pub struct Prefs {
     pub input_device: Option<String>,
     /// Device channels recorded: one (mono) or two (stereo), zero-based.
     pub input_channels: Vec<u16>,
+    /// Controller (CC) mappings; applied to each project that opens, and
+    /// the ones that do not fit it are reported and dropped.
+    pub midi_mappings: Vec<peel_session::MidiMapping>,
+    /// Only listen to this MIDI channel (0..15); `None` listens to all.
+    pub midi_channel: Option<u8>,
+    /// Secondary hardware outputs (machine level, never in a project).
+    pub output_routes: Vec<peel_session::OutputRoute>,
+    /// Channels the main output uses on its device.
+    pub primary_output: Option<peel_session::OutputChannels>,
 }
 
 impl Default for Prefs {
@@ -65,6 +74,10 @@ impl Default for Prefs {
             python: None,
             input_device: None,
             input_channels: Vec::new(),
+            midi_mappings: Vec::new(),
+            midi_channel: None,
+            output_routes: Vec::new(),
+            primary_output: None,
         }
     }
 }

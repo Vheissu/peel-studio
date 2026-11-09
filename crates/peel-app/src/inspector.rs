@@ -132,6 +132,19 @@ fn channel(ui: &mut Ui, r: Rect, id: Id, s: &mut Session, ws: &mut Workspace) {
     );
     ui.name(&more, "Channel actions");
     ui.tooltip(&more, "Channel actions");
+    hr.cut_right(4.0);
+    let play = ui.icon_button(
+        W::new(("insp-open-instrument", id)),
+        hr.cut_right(28.0).with_h(28.0),
+        icons::PIANO_KEYS,
+        ws.inst.target == Some(id),
+        None,
+    );
+    ui.name(&play, "Open instrument");
+    ui.tooltip(&play, "Open the instrument: play it and edit every control");
+    if play.clicked {
+        crate::instrument_editor::open(s, ws, id);
+    }
     if more.clicked {
         ui.open_popup(more_id.with("menu"), more_r);
     }
@@ -141,6 +154,7 @@ fn channel(ui: &mut Ui, r: Rect, id: Id, s: &mut Session, ws: &mut Workspace) {
     let items = [
         MenuItem::new("Rename"),
         MenuItem::new("Edit in piano roll").shortcut("F7"),
+        MenuItem::new("Open instrument"),
         MenuItem::Separator,
         MenuItem::new("Delete channel"),
     ];
@@ -157,7 +171,8 @@ fn channel(ui: &mut Ui, r: Rect, id: Id, s: &mut Session, ws: &mut Workspace) {
             ws.selected_channel = Some(id);
             ws.dock = crate::workspace::DockTab::PianoRoll;
         }
-        Some(3) => {
+        Some(2) => crate::instrument_editor::open(s, ws, id),
+        Some(4) => {
             crate::rack::delete_channel(s, ws, id);
             return;
         }

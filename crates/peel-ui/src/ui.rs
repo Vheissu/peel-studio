@@ -213,6 +213,10 @@ impl Ui {
         if self.hover != self.hover_since.0 {
             self.hover_since = (self.hover, time);
         }
+        // A window that lost focus never sends the button release.
+        if self.input.focus_lost {
+            self.active = None;
+        }
         if let Some(a) = self.active {
             let alive = self.prev_hits.iter().any(|h| h.id == a);
             if !alive && !self.input.down.iter().any(|d| *d) {

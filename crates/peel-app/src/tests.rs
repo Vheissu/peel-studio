@@ -2667,3 +2667,162 @@ fn editors_fit_with_every_pane_hidden() {
     let r = h.rect(W::new(("eq-node", eq, 2usize)));
     assert!(r.x > 0.0 && r.right() < 1200.0 && r.bottom() < 720.0);
 }
+
+// ---- instrument editor ----
+
+fn open_instrument(h: &mut Harness) -> peel_document::Id {
+    let ch = h.session().project().channels.iter().find(|c| c.name == "Piano").unwrap().id;
+    crate::instrument_editor::open(&mut h.studio.session, &mut h.studio.ws, ch);
+    h.frames(3);
+    ch
+}
+
+fn piano_keys(h: &Harness) -> Vec<crate::instrument_editor::PianoKey> {
+    let r = h.rect(W::new("inst-piano"));
+    let base = ((h.studio.ws.octave + 1) * 12) as u8;
+    crate::instrument_editor::piano_layout(r, base, if r.w >= 900.0 { 4 } else { 3 })
+}
+
+#[test]
+fn the_inspector_opens_the_instrument_without_changing_the_project() {
+    let mut h = Harness::new();
+    let ch = h.session().project().channels.iter().find(|c| c.name == "Piano").unwrap().id;
+    let revision = h.session().doc.revision();
+    h.click(W::new(("insp-open-instrument", ch)));
+    assert_eq!(h.studio.ws.inst.target, Some(ch));
+    assert_eq!(h.studio.ws.selected_channel, Some(ch));
+    assert_eq!(h.session().doc.revision(), revision, "opening is not an edit");
+    h.ui.input.keys.push(escape());
+    h.ui.input.had_event = true;
+    h.frames(2);
+    assert!(h.studio.ws.inst.target.is_none());
+}
+
+#[test]
+fn mouse_notes_glide_across_keys_and_always_release() {
+    let mut h = Harness::new();
+    open_instrument(&mut h);
+    let keys = piano_keys(&h);
+    let white: Vec<_> = keys.iter().filter(|k| !k.black).collect();
+    let low = vec2(white[0].rect.center().x, white[0].rect.bottom() - 10.0);
+    let high = vec2(white[3].rect.center().x, white[3].rect.bottom() - 10.0);
+    h.move_to(low);
+    h.move_to(low);
+    h.press(0);
+    assert_eq!(h.studio.ws.inst.mouse_key, Some(white[0].key));
+    h.move_to(high);
+    assert_eq!(h.studio.ws.inst.mouse_key, Some(white[3].key), "glissando follows the pointer");
+    h.release(0);
+    h.frame();
+    assert_eq!(h.studio.ws.inst.mouse_key, None);
+}
+
+#[test]
+fn losing_focus_or_closing_releases_mouse_notes_and_sustain() {
+    let mut h = Harness::new();
+    open_instrument(&mut h);
+    let keys = piano_keys(&h);
+    let k = keys.iter().find(|k| !k.black).unwrap();
+    h.click(W::new("inst-sustain"));
+    assert!(h.studio.ws.inst.sustain);
+    let p = vec2(k.rect.center().x, k.rect.bottom() - 10.0);
+    h.move_to(p);
+    h.move_to(p);
+    h.press(0);
+    assert!(h.studio.ws.inst.mouse_key.is_some());
+    // The window loses focus with the button down: no release event comes.
+    h.ui.input.down[0] = false;
+    h.ui.input.focus_lost = true;
+    h.frames(2);
+    assert_eq!(h.studio.ws.inst.mouse_key, None);
+    assert!(!h.studio.ws.inst.sustain, "sustain is let go too");
+    // Closing releases as well.
+    h.click(W::new("inst-sustain"));
+    assert!(h.studio.ws.inst.sustain);
+    crate::instrument_editor::close(&mut h.studio.session, &mut h.studio.ws);
+    assert!(!h.studio.ws.inst.sustain);
+}
+
+#[test]
+fn computer_keys_play_only_while_enabled_and_release_on_focus_loss() {
+    let mut h = Harness::new();
+    let ch = open_instrument(&mut h);
+    let press = |h: &mut Harness| {
+        h.ui.input.keys.push(peel_ui::input::KeyPress {
+            key: peel_ui::Key::Character("z".into()),
+            code: Some(peel_ui::KeyCode::KeyZ),
+            repeat: false,
+            modifiers: Default::default(),
+            consumed: false,
+        });
+        h.frame();
+    };
+    press(&mut h);
+    assert_eq!(h.studio.ws.held.len(), 1, "Z plays a note on the selected channel");
+    assert_eq!(h.studio.ws.held.values().next().map(|(c, _)| *c), Some(ch));
+    h.ui.input.focus_lost = true;
+    h.frames(2);
+    assert!(h.studio.ws.held.is_empty(), "focus loss ends held keys");
+    h.click(W::new("inst-keys"));
+    assert!(!h.studio.ws.keys_enabled);
+    press(&mut h);
+    assert!(h.studio.ws.held.is_empty(), "the toggle silences the computer keyboard");
+}
+
+#[test]
+fn switching_instruments_releases_the_old_target() {
+    let mut h = Harness::new();
+    let ch = open_instrument(&mut h);
+    let other = h.session().project().channels.iter().find(|c| c.id != ch).unwrap().id;
+    h.studio.ws.inst.mouse_key = Some(60);
+    h.click(W::new(("inst-chip", other)));
+    assert_eq!(h.studio.ws.inst.target, Some(other));
+    assert_eq!(h.studio.ws.inst.mouse_key, None);
+    assert_eq!(h.studio.ws.selected_channel, Some(other));
+}
+
+#[test]
+fn the_mapper_offers_only_this_instruments_parameters_and_learn_waits() {
+    let mut h = Harness::new();
+    let ch = open_instrument(&mut h);
+    let dev = h.session().project().channel(ch).unwrap().device.id;
+    h.studio.ws.inst.pick = Some("tone".into());
+    h.frames(2);
+    // Whatever the key, Learn with a real parameter starts waiting.
+    let keys: Vec<_> = peel_devices::descriptor(&h.session().project().channel(ch).unwrap().device.type_id)
+        .unwrap()
+        .params
+        .iter()
+        .filter(|p| p.automatable)
+        .map(|p| p.key)
+        .collect();
+    h.studio.ws.inst.pick = Some(keys[0].to_string());
+    h.frames(2);
+    h.click(W::new("inst-learn"));
+    h.frames(2);
+    assert!(matches!(
+        h.session().midi_learn_status(),
+        peel_session::MidiLearnStatus::Waiting { target: peel_session::MidiControlTarget::DeviceParam { device, .. } } if *device == dev
+    ));
+    h.click(W::new("inst-learn-cancel"));
+    assert!(matches!(h.session().midi_learn_status(), peel_session::MidiLearnStatus::Idle));
+}
+
+#[test]
+fn an_expanded_mixer_takes_the_whole_workspace_and_restores() {
+    let mut h = Harness::new();
+    h.open_mixer();
+    let id = h.session().project().mixer.tracks[1].id;
+    let before = h.rect(W::new(("fader", id))).h;
+    h.click(W::new("mixer-fill"));
+    h.frames(3);
+    let after = h.rect(W::new(("fader", id))).h;
+    assert!(after > before + 150.0, "{before} -> {after}");
+    h.studio.ws.mixer_size = MixerSize::Full;
+    h.frames(3);
+    assert!(h.ui.widget_rect(W::new(("send-add", id))).is_some(), "the full send list fits");
+    h.click(W::new("mixer-fill"));
+    h.frames(3);
+    assert_eq!(h.rect(W::new(("fader", id))).h, before.min(h.rect(W::new(("fader", id))).h));
+    assert!(h.studio.ws.mixer_restore_h.is_none());
+}

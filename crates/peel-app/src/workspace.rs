@@ -120,6 +120,12 @@ pub struct Workspace {
     pub mixer_size: MixerSize,
     /// Dock height before the mixer was given the whole window.
     pub mixer_restore_h: Option<f32>,
+    /// The computer keyboard plays the selected channel (Z to M, Q to P).
+    pub keys_enabled: bool,
+    /// The instrument editor and its view state.
+    pub inst: crate::instrument_editor::InstState,
+    /// The audio input, recording and output routing sheet is open.
+    pub io_open: bool,
     /// The large effect editor (insert, EQ, mastering) and its view state.
     pub fx: crate::fx_editor::FxState,
     pub rack_scroll: f32,
@@ -182,6 +188,9 @@ impl Default for Workspace {
                 fit: 8,
             },
             mixer_scroll: 0.0,
+            keys_enabled: true,
+            inst: Default::default(),
+            io_open: false,
             mixer_size: MixerSize::default(),
             mixer_restore_h: None,
             fx: Default::default(),

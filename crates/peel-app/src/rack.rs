@@ -493,6 +493,7 @@ fn channel_button(
     }
     let mut items = vec![
         MenuItem::new("Piano roll").shortcut("F7"),
+        MenuItem::new("Instrument"),
         MenuItem::new("Rename channel"),
         MenuItem::new("Clone channel"),
         MenuItem::new("Clear notes in pattern"),
@@ -514,9 +515,10 @@ fn channel_button(
         let cid = ch.id;
         match i {
             0 => ws.dock = DockTab::PianoRoll,
-            1 => crate::rename::open(ui, W::new(("rename-channel-popup", cid)), r, &ch.name),
-            2 => clone_channel(s, cid),
-            3 => {
+            1 => crate::instrument_editor::open(s, ws, cid),
+            2 => crate::rename::open(ui, W::new(("rename-channel-popup", cid)), r, &ch.name),
+            3 => clone_channel(s, cid),
+            4 => {
                 let pid = current_pattern(s);
                 s.doc.edit("Clear notes", |p| {
                     if let Some(pt) = p.pattern_mut(pid) {

@@ -73,6 +73,9 @@ pub struct Input {
     pub hovering_files: bool,
     /// True if any event arrived since the last frame.
     pub had_event: bool,
+    /// The window lost keyboard focus since the last frame: key-up events
+    /// for held keys will never arrive, so held notes must be released.
+    pub focus_lost: bool,
     last_click_time: f64,
     last_click_pos: Vec2,
     scale: f32,
@@ -196,6 +199,7 @@ impl Input {
                 self.dropped_files.push(path.clone());
             }
             WindowEvent::Focused(false) => {
+                self.focus_lost = true;
                 self.down = [false; 3];
                 self.modifiers = Modifiers::default();
             }
@@ -208,6 +212,7 @@ impl Input {
         self.pointer_delta = Vec2::ZERO;
         self.pressed = [false; 3];
         self.released = [false; 3];
+        self.focus_lost = false;
         self.double_clicked = false;
         self.scroll = Vec2::ZERO;
         self.zoom = 0.0;
