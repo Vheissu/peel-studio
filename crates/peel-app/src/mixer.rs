@@ -201,8 +201,13 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
         return;
     };
     let strips_h = (body.h - 8.0).max(80.0);
-    let normal = plan(ws.mixer_size, strips_h, false);
-    let master_plan = plan(ws.mixer_size, strips_h, true);
+    let mut normal = plan(ws.mixer_size, strips_h, false);
+    let mut master_plan = plan(ws.mixer_size, strips_h, true);
+    // Spare height goes to the fader, not to empty insert rows: show only
+    // as many rows as the fullest chain (plus the add row) needs.
+    let rows_needed = tracks.iter().map(|t| t.inserts.len()).max().unwrap_or(0) + 1;
+    normal.insert_rows = normal.insert_rows.min(rows_needed.max(2));
+    master_plan.insert_rows = master_plan.insert_rows.min(rows_needed.max(2));
 
     let master_r = body.cut_right(master_plan.width + 10.0);
     body.cut_right(10.0);

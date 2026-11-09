@@ -117,6 +117,65 @@ and the piano roll's channel to its color, both keeping the name in their
 tooltip and accessible label. LEDs are flat
 dots without a halo.
 
+## Mixer
+
+Strips scroll sideways with the master pinned on the right. Three sizes
+in the dock header (Compact 64 px, Expanded 92, Full 124) decide which
+rows a strip has; the dock height decides how many insert and send rows
+fit, so the fader keeps at least about 96 px. When it cannot, rows go in a
+fixed order: the send list becomes a Sends menu, then the pan legend, then
+an insert row. Grow mixer gives the dock the whole window height.
+
+Every strip shows real engine state: a scrolling insert chain (all inserts,
+a dot that bypasses, a click that opens the editor, a right-click menu),
+output and send routing, pan with its legend, a fader with a dB scale and
+a number you can drag or type, a stereo meter with 1.2 s peak hold, a
+peak readout that latches coral at 0 dBFS and clears on click, mute and
+solo. Master carries a Mastering button that adds the effect once and
+opens it. Telemetry is read once per frame and shared with the top-bar
+meter.
+
+## Effect editor
+
+An insert click opens a sheet over the workspace (up to 1120 x 700, on the
+overlay layer, between the top and status bars) so it fits any pane
+combination at 1200 x 720. The header names the track, lists its whole
+chain as chips, and holds Bypass, Remove and Close. Esc, Close or a click
+on the dimmed area closes it. EQ and Mastering have their own editors;
+every other effect shows its full parameter panel at editor size. The
+inspector keeps its compact panels.
+
+## EQ
+
+The plot is log frequency, 20 Hz to 20 kHz, with two scales that never
+share a label: gain in `accent` on the right (the transfer function and
+nodes), dBFS in `text_faint` on the left (spectra). The curve is the
+effect's own `eq_response_db`; each enabled band fills its contribution in
+its colour at 10 %. Spectra come from the analysis tap: Pre in `text_faint`,
+Post in `play`, peak hold as a thin line, plus a 128-point output peak
+history under the plot with peak and RMS figures (dBFS, never LUFS). With
+no new frame for a quarter second the spectra fall and candidates clear.
+Nodes: drag for frequency and gain, scroll for Q, double-click to switch a
+band, Shift for fine, arrow keys for gain. The rail repeats every value as
+a numeric field, with presets, A/B compare and Reset above the plot.
+
+The Resonance tab lists up to three sustained narrow peaks as candidates
+to check by ear. Preview draws the curve a cut would make; audio does not
+change. Apply writes a bounded bell cut (at most 6 dB) to the selected
+bell, or the first free one; if both are in use the button reads Replace
+Band N and needs a second click. Held results stay with the EQ until
+cleared.
+
+## Mastering
+
+Simple and Advanced are two views of the same parameters; switching never
+changes a value. A chain strip (Input, Tone, Compress, Width, Limit)
+summarizes each stage, and a click opens it in Advanced. Meters are real:
+input and output peak and RMS in dBFS (labelled as such), the ceiling mark,
+and gain reduction as a number, a bar and a history. The tone and
+compressor curves are computed from the same filters and constants the
+effect uses.
+
 ## Help
 
 Usage hints are optional and off by default. With hints on they show as
