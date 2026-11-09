@@ -12,8 +12,8 @@ processing, persistence and tests all exist.
 | Document | Model, ids, validation, checkpoint undo with gesture coalescing | Done |
 | Device contract | `Device` trait, parameter descriptors, presets, sample handoff | Done |
 | Engine | Callback, transport, sequencer, mixer graph, audio regions, telemetry, offline render, allocation checks | Done |
-| Native instruments | Kick, snare, hat, clap, tom, Poly, Bass, Tine, Grand, Guitar, Violin, Sax, Sampler, 87 presets | Done |
-| Native effects | EQ, compressor, limiter, Bass Lift, delay, reverb, drive, filter, chorus, Vintage Chorus, flanger, phaser, Glitch, utility | Done |
+| Native instruments | Kick, snare, hat, clap, tom, Poly, Bass, Tine, Grand, Guitar, Violin, Sax, Sampler, 129 presets | Done |
+| Native effects | EQ, compressor, multiband, limiter, Bass Lift, delay, reverb, drive, filter, chorus, Vintage Chorus, flanger, phaser, Glitch, utility | Done |
 | Media | Decode WAV/AIFF/FLAC/MP3/OGG, resample, WAV/MP3/FLAC/AIFF export with quality controls, peaks | Done |
 | Project files | `.peelproj` manifest, content-addressed shards, atomic save, history recovery, bundles, autosave, lock | Done |
 | MIDI files | SMF import (types 0/1/2) and export with reports | Done |

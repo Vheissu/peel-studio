@@ -1,9 +1,10 @@
-//! "Afterglow": the project Peel Studio opens with. An 80-bar song in
-//! D minor that uses every part of the app: layered drums through a bus,
-//! basses, electric piano, grand piano, strings, violin, sax, guitars and
-//! synth leads; sidechain ducking, reverb and delay returns; tempo ramps,
-//! a slower breakdown and two drops; and automation of volume, pan, filters,
-//! pitch and effect sends.
+//! "Afterglow": the project Peel Studio opens with. An 80-bar progressive
+//! house song in A minor (Am, F, C, G): a Rhodes intro, a sax verse, a
+//! piano-house build, a supersaw drop with a pluck counter-line, a slower
+//! piano and strings breakdown, a second drop that lifts a whole tone
+//! halfway through, and an outro. It uses tempo ramps, sidechain ducking,
+//! reverb and delay returns, glitch effects and automation of volume, pan,
+//! filters, pitch and effect sends.
 
 use std::sync::Arc;
 
@@ -17,8 +18,11 @@ use super::{add_channel, device, pattern, set_gains, steps};
 /// One bar of 4/4, in quarter notes.
 const BAR: i64 = 4;
 
-/// D minor: Dm, Bb, F, C (i, VI, III, VII), one bar each.
-const ROOTS: [u8; 4] = [38, 34, 41, 36];
+/// Bass roots for Am, F, C, G (A1, F1, C2, G1).
+const ROOTS: [u8; 4] = [33, 29, 36, 31];
+
+/// The final drop and the outro move up a whole tone.
+const LIFT: i8 = 2;
 
 /// A note from sixteenth-note positions.
 fn n16(ch: Id, start: i64, len: i64, key: u8, vel: f32) -> Note {
@@ -27,15 +31,19 @@ fn n16(ch: Id, start: i64, len: i64, key: u8, vel: f32) -> Note {
 
 /// A melody as `(start, length, key)` in sixteenths, with a gentle
 /// velocity shape so it does not sound mechanical.
-fn melody(ch: Id, line: &[(i64, i64, u8)], vel: f32) -> Vec<Note> {
+fn melody(ch: Id, line: &[(i64, i64, u8)], vel: f32, tr: i8) -> Vec<Note> {
     line.iter()
         .enumerate()
         .map(|(i, &(s, l, k))| {
             let accent = if s % 4 == 0 { 0.08 } else { 0.0 };
             let wobble = [0.0, -0.05, 0.03, -0.02][i % 4];
-            n16(ch, s, l, k, (vel + accent + wobble).clamp(0.1, 1.0))
+            n16(ch, s, l, up(k, tr), (vel + accent + wobble).clamp(0.1, 1.0))
         })
         .collect()
+}
+
+fn up(key: u8, tr: i8) -> u8 {
+    (key as i16 + tr as i16).clamp(0, 127) as u8
 }
 
 /// A chord per bar, each hit on the given sixteenths, strummed slightly
@@ -45,7 +53,7 @@ fn chord_hits(
     chords: &[&[u8]],
     hits: &[(i64, i64, f32)],
     strum: bool,
-    transpose: i8,
+    tr: i8,
 ) -> Vec<Note> {
     let mut v = Vec::new();
     for (bar, keys) in chords.iter().enumerate() {
@@ -57,8 +65,7 @@ fn chord_hits(
                     Time::ZERO
                 };
                 let start = Time::new(bar as i64 * 16 + step, 4) + roll;
-                let key = (k as i16 + transpose as i16).clamp(0, 127) as u8;
-                v.push(Note::new(ch, start, Time::new(len, 4), key, vel));
+                v.push(Note::new(ch, start, Time::new(len, 4), up(k, tr), vel));
             }
         }
     }
@@ -193,6 +200,145 @@ impl Lanes {
     }
 }
 
+// Voicings, one chord per bar: Am, F, C, G.
+const EP: [&[u8]; 4] = [
+    &[57, 60, 64, 67],
+    &[57, 60, 64, 65],
+    &[55, 60, 64, 67],
+    &[55, 59, 62, 67],
+];
+const PAD: [&[u8]; 4] = [
+    &[57, 64, 69, 72],
+    &[57, 65, 69, 72],
+    &[55, 64, 67, 72],
+    &[55, 62, 67, 71],
+];
+const SAW: [&[u8]; 4] = [
+    &[64, 69, 72, 76],
+    &[65, 69, 72, 77],
+    &[64, 67, 72, 76],
+    &[62, 67, 71, 74],
+];
+const TRIADS: [&[u8]; 4] = [&[64, 69, 72], &[65, 69, 72], &[64, 67, 72], &[62, 67, 71]];
+/// Pluck arpeggio tones per chord, low to high.
+const ARP: [[u8; 4]; 4] = [
+    [69, 72, 76, 81],
+    [69, 72, 77, 81],
+    [67, 72, 76, 79],
+    [67, 71, 74, 79],
+];
+
+/// The hook: an eight-bar syncopated riff over the progression twice.
+fn hook_line() -> Vec<(i64, i64, u8)> {
+    let first: [&[(i64, i64, u8)]; 4] = [
+        &[
+            (0, 2, 69),
+            (3, 2, 72),
+            (6, 2, 76),
+            (8, 1, 74),
+            (10, 2, 72),
+            (12, 2, 76),
+            (14, 2, 79),
+        ],
+        &[
+            (0, 3, 81),
+            (3, 3, 79),
+            (6, 2, 76),
+            (8, 2, 72),
+            (10, 2, 74),
+            (12, 4, 76),
+        ],
+        &[
+            (0, 2, 76),
+            (3, 2, 76),
+            (6, 2, 79),
+            (8, 1, 76),
+            (10, 2, 74),
+            (12, 2, 72),
+            (14, 2, 74),
+        ],
+        &[
+            (0, 3, 71),
+            (3, 3, 74),
+            (6, 4, 79),
+            (10, 2, 74),
+            (12, 2, 71),
+            (14, 2, 74),
+        ],
+    ];
+    let mut line = Vec::new();
+    for half in 0..2i64 {
+        for (bar, notes) in first.iter().enumerate() {
+            let last = half == 1 && bar == 3;
+            if last {
+                // The second time round the riff climbs instead of falling.
+                for &(s, l, k) in &[(0, 3, 71), (3, 3, 74), (6, 2, 79), (8, 2, 81), (10, 6, 83)] {
+                    line.push((half * 64 + 48 + s, l, k));
+                }
+            } else {
+                for &(s, l, k) in notes.iter() {
+                    line.push((half * 64 + bar as i64 * 16 + s, l, k));
+                }
+            }
+        }
+    }
+    line
+}
+
+/// The sax topline for the verse, answered again in the second drop.
+const SAX: [(i64, i64, u8); 32] = [
+    (4, 2, 72),
+    (6, 2, 74),
+    (8, 6, 76),
+    (14, 2, 74),
+    (16, 4, 72),
+    (20, 2, 69),
+    (22, 2, 67),
+    (24, 8, 69),
+    (34, 2, 67),
+    (36, 2, 69),
+    (38, 2, 72),
+    (40, 4, 76),
+    (44, 4, 72),
+    (48, 2, 71),
+    (50, 2, 67),
+    (52, 12, 74),
+    (68, 2, 72),
+    (70, 2, 74),
+    (72, 4, 76),
+    (76, 2, 79),
+    (78, 2, 77),
+    (80, 6, 76),
+    (86, 2, 74),
+    (88, 8, 72),
+    (98, 2, 72),
+    (100, 2, 74),
+    (102, 2, 72),
+    (104, 4, 69),
+    (108, 4, 67),
+    (112, 4, 71),
+    (116, 2, 67),
+    (118, 10, 69),
+];
+
+/// A long-note violin counter-melody for the breakdown and the outro.
+const VIOLIN: [(i64, i64, u8); 14] = [
+    (0, 12, 76),
+    (12, 4, 74),
+    (16, 8, 72),
+    (24, 8, 69),
+    (32, 12, 76),
+    (44, 4, 79),
+    (48, 16, 74),
+    (64, 12, 81),
+    (76, 4, 79),
+    (80, 8, 77),
+    (88, 8, 76),
+    (96, 8, 76),
+    (104, 8, 79),
+    (112, 16, 83),
+];
+
 /// The showcase song.
 pub fn showcase() -> Project {
     let mut p = Project::empty("Afterglow");
@@ -224,7 +370,11 @@ pub fn showcase() -> Project {
         &mut p,
         "Kick",
         0,
-        device("peel.drum.kick", Some("Punch")),
+        tweaked(
+            "peel.drum.kick",
+            Some("Big Room"),
+            &[("pitch.freq", 55.0), ("body.decay", 0.3)],
+        ),
         60,
     );
     let clap = add_channel(
@@ -259,7 +409,14 @@ pub fn showcase() -> Project {
         &mut p,
         "Shaker",
         3,
-        device("peel.drum.hat", Some("Tight")),
+        device("peel.drum.hat", Some("Shaker")),
+        60,
+    );
+    let perc = add_channel(
+        &mut p,
+        "Perc",
+        3,
+        device("peel.drum.tom", Some("Tribal")),
         60,
     );
     let tom = add_channel(&mut p, "Tom", 0, device("peel.drum.tom", Some("Floor")), 60);
@@ -267,32 +424,24 @@ pub fn showcase() -> Project {
         &mut p,
         "Crash",
         2,
-        tweaked(
-            "peel.drum.hat",
-            Some("Sizzle"),
-            &[
-                ("amp.decay", 1.4),
-                ("tone.tune", -3.0),
-                ("tone.metal", 0.45),
-            ],
-        ),
+        device("peel.drum.hat", Some("Crash")),
         60,
     );
     // Low end.
-    let sub = add_channel(&mut p, "Sub", 6, device("peel.synth.bass", Some("Sub")), 38);
+    let sub = add_channel(&mut p, "Sub", 6, device("peel.synth.bass", Some("Sub")), 33);
     let bass = add_channel(
         &mut p,
         "Bass",
         6,
-        device("peel.synth.bass", Some("Synthwave")),
-        38,
+        device("peel.synth.bass", Some("Rolling")),
+        33,
     );
     let groove_bass = add_channel(
         &mut p,
         "Groove Bass",
         7,
-        device("peel.synth.bass", Some("Fingered")),
-        38,
+        device("peel.synth.bass", Some("Deep House")),
+        33,
     );
     // Keys and orchestra.
     let keys = add_channel(
@@ -306,7 +455,7 @@ pub fn showcase() -> Project {
         &mut p,
         "Piano",
         4,
-        device("peel.keys.grand", Some("Soft")),
+        device("peel.keys.grand", Some("Pop")),
         60,
     );
     let strings = add_channel(
@@ -321,37 +470,40 @@ pub fn showcase() -> Project {
         "Violin",
         5,
         device("peel.strings.violin", Some("Legato Lead")),
-        74,
+        76,
     );
     let pizz = add_channel(
         &mut p,
         "Pizzicato",
         5,
         device("peel.strings.violin", Some("Pizzicato")),
-        74,
+        72,
     );
-    let sax = add_channel(&mut p, "Sax", 8, device("peel.wind.sax", Some("Alto")), 69);
+    let sax = add_channel(
+        &mut p,
+        "Sax",
+        8,
+        tweaked(
+            "peel.wind.sax",
+            Some("House Sax"),
+            &[("vibrato.depth", 12.0)],
+        ),
+        72,
+    );
     // Guitars.
     let funk_gtr = add_channel(
         &mut p,
         "Funk Guitar",
         9,
-        device("peel.guitar.electric", Some("Funk")),
-        62,
-    );
-    let rhythm_gtr = add_channel(
-        &mut p,
-        "Rhythm Guitar",
-        9,
-        device("peel.guitar.electric", Some("Palm Mute")),
-        50,
+        device("peel.guitar.electric", Some("Muted Pluck")),
+        64,
     );
     let lead_gtr = add_channel(
         &mut p,
         "Lead Guitar",
         9,
         device("peel.guitar.electric", Some("Lead")),
-        62,
+        64,
     );
     // Synths.
     let lead = add_channel(
@@ -359,7 +511,14 @@ pub fn showcase() -> Project {
         "Lead",
         10,
         device("peel.synth.poly", Some("Supersaw Lead")),
-        74,
+        76,
+    );
+    let pluck = add_channel(
+        &mut p,
+        "Pluck",
+        10,
+        device("peel.synth.poly", Some("Pluck")),
+        76,
     );
     let stabs = add_channel(
         &mut p,
@@ -367,6 +526,13 @@ pub fn showcase() -> Project {
         11,
         device("peel.synth.poly", Some("Super Chord")),
         69,
+    );
+    let pad = add_channel(
+        &mut p,
+        "Pad",
+        11,
+        device("peel.synth.poly", Some("Future Pad")),
+        64,
     );
     let riser = add_channel(
         &mut p,
@@ -379,29 +545,31 @@ pub fn showcase() -> Project {
     set_gains(
         &mut p,
         &[
-            (kick, -3.0),
-            (clap, -7.0),
+            (kick, -4.0),
+            (clap, -3.0),
             (snare, -11.0),
-            (hat, -9.0),
-            (open_hat, -13.0),
-            (shaker, -12.0),
-            (tom, -11.0),
-            (crash, -14.0),
-            (sub, -12.0),
-            (bass, -10.0),
-            (groove_bass, -9.0),
-            (keys, -9.0),
+            (hat, -6.0),
+            (open_hat, -11.0),
+            (shaker, -9.0),
+            (perc, -14.0),
+            (tom, -16.0),
+            (crash, -12.0),
+            (sub, -17.0),
+            (bass, -12.0),
+            (groove_bass, -14.0),
+            (keys, -12.0),
             (piano, -9.0),
-            (strings, -11.0),
+            (strings, -9.0),
             (violin, -9.0),
-            (pizz, -7.0),
-            (sax, -10.0),
+            (pizz, -9.0),
+            (sax, -12.0),
             (funk_gtr, -9.0),
-            (rhythm_gtr, -15.0),
-            (lead_gtr, -14.0),
-            (lead, -8.0),
-            (stabs, -12.0),
-            (riser, -8.0),
+            (lead_gtr, -13.0),
+            (lead, 1.0),
+            (pluck, -5.0),
+            (stabs, -7.0),
+            (pad, -10.0),
+            (riser, -3.0),
         ],
     );
 
@@ -409,15 +577,31 @@ pub fn showcase() -> Project {
     // under the kick, and a mastering chain.
     let master = p.mixer.tracks[0].id;
     insert(&mut p, master, device("peel.fx.eq", Some("Clean Low End")));
+    insert(&mut p, master, device("peel.fx.multiband", Some("Master")));
     insert(
         &mut p,
         master,
         device("peel.fx.compressor", Some("Gentle Glue")),
     );
+    // A soft clipper shaves the kick peaks so the limiter does not pump.
     insert(
         &mut p,
         master,
-        tweaked("peel.fx.limiter", Some("Master Safety"), &[("input", 3.0)]),
+        tweaked(
+            "peel.fx.drive",
+            None,
+            &[
+                ("type", 0.0),
+                ("drive", 4.0),
+                ("output", -4.0),
+                ("oversampling", 2.0),
+            ],
+        ),
+    );
+    insert(
+        &mut p,
+        master,
+        tweaked("peel.fx.limiter", Some("Master Safety"), &[("input", 7.0)]),
     );
 
     let drum_bus = add_bus(&mut p, "Drum Bus", 0);
@@ -440,7 +624,13 @@ pub fn showcase() -> Project {
         drum_bus,
         device("peel.fx.compressor", Some("Punchy Drums")),
     );
-    for ch in [kick, clap, snare, hat, open_hat, shaker, tom, crash] {
+    // Shave the drum transients so the mix can sit louder.
+    insert(
+        &mut p,
+        drum_bus,
+        tweaked("peel.fx.limiter", Some("Drum Bus Catch"), &[("input", 5.0)]),
+    );
+    for ch in [kick, clap, snare, hat, open_hat, shaker, perc, tom, crash] {
         let t = track_of(&p, ch);
         mixer(&mut p, t).output = Some(drum_bus);
     }
@@ -449,7 +639,7 @@ pub fn showcase() -> Project {
     insert(
         &mut p,
         hall,
-        tweaked("peel.fx.reverb", Some("Warm Hall"), &[("mix", 1.0)]),
+        tweaked("peel.fx.reverb", Some("Big Hall"), &[("mix", 1.0)]),
     );
     let echo = add_bus(&mut p, "Echo", 10);
     insert(
@@ -458,7 +648,7 @@ pub fn showcase() -> Project {
         tweaked("peel.fx.delay", Some("Dotted Ping-Pong"), &[("mix", 1.0)]),
     );
     insert(&mut p, echo, device("peel.fx.eq", Some("Clean Low End")));
-    let sends: [(Id, Id, f32); 11] = [
+    let sends: [(Id, Id, f32); 14] = [
         (clap, hall, -16.0),
         (keys, hall, -12.0),
         (piano, hall, -8.0),
@@ -467,7 +657,10 @@ pub fn showcase() -> Project {
         (pizz, hall, -10.0),
         (sax, hall, -9.0),
         (lead, hall, -12.0),
+        (pluck, hall, -12.0),
+        (pad, hall, -10.0),
         (lead, echo, -14.0),
+        (pluck, echo, -13.0),
         (lead_gtr, echo, -12.0),
         (violin, echo, -16.0),
     ];
@@ -477,15 +670,15 @@ pub fn showcase() -> Project {
     }
 
     let kick_track = track_of(&p, kick);
-    for ch in [sub, bass, stabs, strings, rhythm_gtr] {
+    for ch in [sub, bass, groove_bass, stabs, strings, pad] {
         let t = track_of(&p, ch);
-        let mut duck = device("peel.fx.compressor", Some("Sidechain Duck"));
+        let mut duck = device("peel.fx.compressor", Some("EDM Pump"));
         duck.sidechain = Some(kick_track);
         mixer(&mut p, t).inserts.insert(0, duck);
     }
 
-    // Glitch: a tape stop into the breakdown and a stutter into the
-    // second drop on the whole mix, and a trance gate on the strings.
+    // Glitch: a tape stop into the breakdown and stutters into the second
+    // drop and the key change, plus a trance gate on the strings.
     let master_glitch = device("peel.fx.glitch", None);
     let master_glitch_id = master_glitch.id;
     mixer(&mut p, master).inserts.insert(0, master_glitch);
@@ -550,7 +743,7 @@ pub fn showcase() -> Project {
     let piano_track = track_of(&p, piano);
     insert(&mut p, piano_track, device("peel.fx.eq", Some("Air")));
 
-    // Patterns. Chord voicings per bar follow Dm, Bb, F, C.
+    // Patterns.
     let mut pats: Vec<peel_document::Pattern> = Vec::new();
     let mut add = |pat: peel_document::Pattern| {
         let id = pat.id;
@@ -558,13 +751,31 @@ pub fn showcase() -> Project {
         id
     };
 
-    let sixteenths = |vels: [f32; 4]| -> Vec<(u32, f32)> {
-        (0..16).map(|i| (i, vels[i as usize % 4])).collect()
+    // Drums. Hats and percussion run over two bars so the groove breathes.
+    let two_bars = |vels: [f32; 4], skip: &[u32]| -> Vec<(u32, f32)> {
+        (0..32)
+            .filter(|i| !skip.contains(i))
+            .map(|i| (i, vels[i as usize % 4]))
+            .collect()
     };
+    let at =
+        |list: &[u32], vel: f32| -> Vec<(u32, f32)> { list.iter().map(|&s| (s, vel)).collect() };
 
-    // Verse groove.
-    let mut notes = steps(kick, &[(0, 1.0), (4, 0.9), (8, 1.0), (12, 0.9)], 60);
-    notes.extend(steps(clap, &[(4, 0.7), (12, 0.75)], 60));
+    // Intro percussion, filtered in by the keys.
+    let mut notes = steps(shaker, &two_bars([0.3, 0.45, 0.35, 0.5], &[]), 60);
+    for (s, k, v) in [
+        (6, 64u8, 0.5),
+        (10, 60, 0.45),
+        (22, 64, 0.5),
+        (27, 67, 0.4),
+        (30, 60, 0.45),
+    ] {
+        notes.push(n16(perc, s, 1, k, v));
+    }
+    let intro_perc = add(pattern("Intro Perc", 3, 8, notes));
+
+    // Verse groove, held back so the drop hits harder.
+    let mut notes = steps(clap, &at(&[4, 12, 20, 28], 0.6), 60);
     notes.extend(steps(
         hat,
         &[
@@ -573,32 +784,89 @@ pub fn showcase() -> Project {
             (7, 0.3),
             (10, 0.75),
             (14, 0.75),
-            (15, 0.35),
+            (18, 0.75),
+            (22, 0.75),
+            (23, 0.3),
+            (26, 0.75),
+            (29, 0.35),
+            (30, 0.8),
+            (31, 0.4),
         ],
         60,
     ));
-    notes.extend(steps(shaker, &sixteenths([0.4, 0.6, 0.45, 0.7]), 60));
-    let groove = add(pattern("Groove", 0, 4, notes));
+    notes.extend(steps(shaker, &two_bars([0.35, 0.55, 0.4, 0.6], &[]), 60));
+    for (s, k, v) in [
+        (3, 64u8, 0.55),
+        (11, 60, 0.5),
+        (14, 67, 0.45),
+        (19, 64, 0.55),
+        (26, 60, 0.5),
+        (27, 60, 0.4),
+    ] {
+        notes.push(n16(perc, s, 1, k, v));
+    }
+    let groove_top = add(pattern(
+        "Groove Top",
+        0,
+        8,
+        notes
+            .iter()
+            .map(|n| Note {
+                id: Id::new(),
+                ..*n
+            })
+            .collect(),
+    ));
+    notes.extend(steps(kick, &at(&[0, 4, 8, 12, 16, 20, 24, 28], 0.68), 60));
+    let groove = add(pattern("Groove", 0, 8, notes));
 
-    // Drop beat.
-    let mut notes = steps(kick, &[(0, 1.0), (4, 1.0), (8, 1.0), (12, 1.0)], 60);
-    notes.extend(steps(clap, &[(4, 0.95), (12, 0.95)], 60));
-    notes.extend(steps(snare, &[(4, 0.6), (12, 0.6), (15, 0.25)], 60));
-    notes.extend(steps(hat, &sixteenths([0.45, 0.3, 0.8, 0.35]), 60));
+    // Build: four on the floor with claps, then eighth-note kicks.
+    let mut notes = steps(kick, &at(&[0, 4, 8, 12], 0.95), 60);
+    notes.extend(steps(clap, &at(&[4, 12], 0.7), 60));
+    notes.extend(steps(hat, &at(&[2, 6, 10, 14], 0.6), 60));
+    let build_beat = add(pattern("Build Beat", 0, 4, notes));
+    let mut notes = steps(kick, &at(&[0, 2, 4, 6, 8, 10, 12, 14], 0.9), 60);
+    notes.extend(steps(clap, &at(&[4, 12], 0.8), 60));
+    let build_eighths = add(pattern("Build Eighths", 0, 4, notes));
+
+    // Drop beat: claps layered with snare, sixteenth hats with accents and
+    // ghosts, open hats on the off-beats, and percussion answering in the
+    // second bar.
+    let mut notes = steps(kick, &at(&[0, 4, 8, 12, 16, 20, 24, 28], 1.0), 60);
+    notes.extend(steps(clap, &at(&[4, 12, 20, 28], 0.95), 60));
+    notes.push(n16(clap, 31, 1, 60, 0.35));
     notes.extend(steps(
-        open_hat,
-        &[(2, 0.7), (6, 0.7), (10, 0.7), (14, 0.75)],
+        snare,
+        &[
+            (4, 0.55),
+            (12, 0.55),
+            (20, 0.55),
+            (28, 0.55),
+            (15, 0.22),
+            (30, 0.25),
+        ],
         60,
     ));
-    notes.extend(steps(shaker, &sixteenths([0.35, 0.5, 0.35, 0.55]), 60));
-    let drop_beat = add(pattern("Drop Beat", 0, 4, notes));
-
-    let kick_only = add(pattern(
-        "Four on the Floor",
-        0,
-        4,
-        steps(kick, &[(0, 1.0), (4, 0.95), (8, 1.0), (12, 0.95)], 60),
+    notes.extend(steps(
+        hat,
+        &two_bars([0.4, 0.25, 0.75, 0.3], &[2, 6, 10, 14, 18, 22, 26, 30]),
+        60,
     ));
+    notes.extend(steps(
+        open_hat,
+        &at(&[2, 6, 10, 14, 18, 22, 26, 30], 0.72),
+        60,
+    ));
+    notes.extend(steps(shaker, &two_bars([0.3, 0.45, 0.3, 0.5], &[]), 60));
+    for (s, k, v) in [
+        (19, 64u8, 0.5),
+        (23, 60, 0.45),
+        (29, 67, 0.5),
+        (30, 64, 0.45),
+    ] {
+        notes.push(n16(perc, s, 1, k, v));
+    }
+    let drop_beat = add(pattern("Drop Beat", 0, 8, notes));
 
     // Breakdown: a half-time groove.
     let mut notes = steps(kick, &[(0, 0.85), (10, 0.7)], 60);
@@ -612,10 +880,11 @@ pub fn showcase() -> Project {
     ));
     let half_time = add(pattern("Half Time", 0, 4, notes));
 
-    // An eight-bar snare roll that speeds up and gets louder.
+    // An eight-bar snare roll that speeds up and gets louder, then leaves
+    // the last beat empty before the drop.
     let mut roll = Vec::new();
     let mut hit = |pos32: i64| {
-        let vel = 0.3 + 0.7 * (pos32 as f32 / 256.0);
+        let vel = 0.3 + 0.7 * (pos32 as f32 / 248.0);
         roll.push(Note::new(
             snare,
             Time::new(pos32, 8),
@@ -633,7 +902,7 @@ pub fn showcase() -> Project {
     for pos in (192..224).step_by(2) {
         hit(pos);
     }
-    for pos in 224..256 {
+    for pos in 224..248 {
         hit(pos);
     }
     let snare_roll = add(pattern("Snare Roll", 1, 32, roll));
@@ -645,294 +914,231 @@ pub fn showcase() -> Project {
         notes.push(n16(tom, 8 + i as i64, 1, *key, 0.7 + i as f32 * 0.035));
     }
     let fill = add(pattern("Fill", 1, 4, notes));
-    let crash_hit = add(pattern("Crash", 2, 4, steps(crash, &[(0, 0.9)], 60)));
+    // A crash with a low tom boom under it.
+    let mut notes = steps(crash, &[(0, 0.9)], 60);
+    notes.push(n16(tom, 0, 4, 43, 0.8));
+    let crash_hit = add(pattern("Crash", 2, 4, notes));
 
-    // Basses.
-    let mut notes = Vec::new();
-    for (bar, &r) in ROOTS.iter().enumerate() {
-        let b = bar as i64 * 16;
-        for (s, l, k, v) in [
-            (0, 3, r, 0.95),
-            (4, 2, r, 0.7),
-            (6, 2, r + 12, 0.8),
-            (10, 2, r, 0.75),
-            (12, 2, r + 7, 0.7),
-            (14, 2, r + 12, 0.85),
-        ] {
-            notes.push(n16(groove_bass, b + s, l, k, v));
+    // Basses. Patterns are built in the home key and lifted a whole tone
+    // for the final drop and the outro.
+    let groove_bass_notes = |tr: i8| {
+        let mut notes = Vec::new();
+        for (bar, &r) in ROOTS.iter().enumerate() {
+            let b = bar as i64 * 16;
+            for (s, l, k, v) in [
+                (2, 2, r + 12, 0.85),
+                (6, 2, r + 12, 0.75),
+                (10, 2, r + 12, 0.8),
+                (13, 1, r + 24, 0.6),
+                (14, 2, r + 12, 0.75),
+            ] {
+                notes.push(n16(groove_bass, b + s, l, up(k, tr), v));
+            }
         }
-    }
-    let groove_bass_pat = add(pattern("Groove Bass", 6, 16, notes));
-
-    let mut notes = Vec::new();
-    for (bar, &r) in ROOTS.iter().enumerate() {
-        let b = bar as i64 * 16;
-        for s in [1, 2, 3, 5, 6, 7, 9, 10, 11, 13, 14, 15] {
-            let key = if s == 7 || s == 15 { r + 12 } else { r };
-            let vel = if s % 4 == 2 { 0.9 } else { 0.7 };
-            notes.push(n16(bass, b + s, 1, key, vel));
+        notes
+    };
+    let rolling_notes = |tr: i8| {
+        let mut notes = Vec::new();
+        for (bar, &r) in ROOTS.iter().enumerate() {
+            let b = bar as i64 * 16;
+            for s in [2, 3, 6, 7, 10, 11, 14, 15] {
+                let key = if s % 4 == 3 { r + 24 } else { r + 12 };
+                let vel = if s % 4 == 2 { 0.9 } else { 0.65 };
+                notes.push(n16(bass, b + s, 1, up(key, tr), vel));
+            }
         }
-    }
-    let rolling_bass = add(pattern("Rolling Bass", 6, 16, notes));
+        notes
+    };
+    let sub_notes = |tr: i8| -> Vec<Note> {
+        ROOTS
+            .iter()
+            .enumerate()
+            .map(|(bar, &r)| n16(sub, bar as i64 * 16, 15, up(r, tr), 0.9))
+            .collect()
+    };
+    let groove_bass_pat = add(pattern("Groove Bass", 7, 16, groove_bass_notes(0)));
+    let groove_bass_up = add(pattern("Groove Bass Up", 7, 16, groove_bass_notes(LIFT)));
+    let rolling_bass = add(pattern("Rolling Bass", 6, 16, rolling_notes(0)));
+    let rolling_up = add(pattern("Rolling Bass Up", 6, 16, rolling_notes(LIFT)));
+    let sub_pat = add(pattern("Sub", 6, 16, sub_notes(0)));
+    let sub_up = add(pattern("Sub Up", 6, 16, sub_notes(LIFT)));
 
-    let sub_notes = ROOTS
-        .iter()
-        .enumerate()
-        .map(|(bar, &r)| n16(sub, bar as i64 * 16, 15, r, 0.9))
-        .collect();
-    let sub_pat = add(pattern("Sub", 6, 16, sub_notes));
-
-    // Electric piano: seventh chords with a push on the and of three.
-    let ep: [&[u8]; 4] = [
-        &[57, 60, 62, 65],
-        &[57, 58, 62, 65],
-        &[57, 60, 64, 65],
-        &[55, 60, 62, 64],
-    ];
+    // Electric piano: seventh chords in a dotted, house rhythm.
+    let ep_hits = [(0, 5, 0.72), (6, 5, 0.6), (12, 3, 0.66), (14, 2, 0.48)];
     let keys_pat = add(pattern(
         "Keys",
         4,
         16,
-        chord_hits(keys, &ep, &[(0, 10, 0.72), (10, 6, 0.6)], true, 0),
+        chord_hits(keys, &EP, &ep_hits, true, 0),
+    ));
+    let keys_up = add(pattern(
+        "Keys Up",
+        4,
+        16,
+        chord_hits(keys, &EP, &ep_hits, true, LIFT),
     ));
 
-    // Grand piano: broken chords for the breakdown.
-    let arps: [[u8; 8]; 4] = [
-        [50, 57, 62, 65, 69, 65, 62, 57],
-        [46, 53, 58, 62, 65, 62, 58, 53],
-        [41, 48, 53, 57, 60, 57, 53, 48],
-        [48, 55, 60, 64, 67, 64, 60, 55],
-    ];
+    // Piano: driving eighths through the build, getting louder.
     let mut notes = Vec::new();
-    for (bar, arp) in arps.iter().enumerate() {
-        for (i, &k) in arp.iter().enumerate() {
-            let vel = if i == 0 {
-                0.7
-            } else {
-                0.5 + (i % 3) as f32 * 0.05
-            };
-            notes.push(n16(piano, bar as i64 * 16 + i as i64 * 2, 6, k, vel));
+    for bar in 0..8i64 {
+        let chord = EP[bar as usize % 4];
+        for eighth in 0..8i64 {
+            let vel = 0.45 + 0.4 * (bar as f32 / 7.0) + if eighth % 2 == 0 { 0.08 } else { 0.0 };
+            for &k in chord {
+                notes.push(n16(piano, bar * 16 + eighth * 2, 2, k, vel.min(1.0)));
+            }
+            // The left hand doubles the root an octave down on the beat.
+            if eighth % 2 == 0 {
+                notes.push(n16(
+                    piano,
+                    bar * 16 + eighth * 2,
+                    4,
+                    ROOTS[bar as usize % 4] + 12,
+                    vel,
+                ));
+            }
         }
     }
-    let piano_pat = add(pattern("Piano Arp", 4, 16, notes));
+    let piano_build = add(pattern("Piano Build", 4, 32, notes));
 
-    // Strings: sustained chords.
-    let pad: [&[u8]; 4] = [
-        &[57, 62, 65, 69],
-        &[58, 62, 65, 70],
-        &[57, 60, 65, 69],
-        &[55, 60, 64, 67],
-    ];
+    // Piano in the breakdown: the hook, unhurried, over open left-hand
+    // chords.
+    let mut notes = melody(piano, &hook_line(), 0.62, 0);
+    for bar in 0..8i64 {
+        let r = ROOTS[bar as usize % 4] + 12;
+        notes.push(n16(piano, bar * 16, 16, r, 0.55));
+        notes.push(n16(piano, bar * 16, 16, r + 7, 0.45));
+        notes.push(n16(piano, bar * 16 + 8, 8, r + 12, 0.4));
+    }
+    let piano_hook = add(pattern("Piano Hook", 4, 32, notes));
+
+    // Pad and strings: sustained chords.
+    let pad_pat = add(pattern(
+        "Pad",
+        11,
+        16,
+        chord_hits(pad, &PAD, &[(0, 16, 0.6)], false, 0),
+    ));
     let strings_pat = add(pattern(
         "Strings",
         5,
         16,
-        chord_hits(strings, &pad, &[(0, 16, 0.6)], false, 0),
+        chord_hits(strings, &PAD, &[(0, 16, 0.6)], false, 0),
+    ));
+    let strings_up = add(pattern(
+        "Strings Up",
+        5,
+        16,
+        chord_hits(strings, &PAD, &[(0, 16, 0.6)], false, LIFT),
     ));
 
-    let pizz_lines: [[u8; 8]; 4] = [
-        [62, 65, 69, 74, 77, 74, 69, 65],
-        [62, 65, 70, 74, 77, 74, 70, 65],
-        [60, 65, 69, 72, 77, 72, 69, 65],
-        [60, 64, 67, 72, 76, 72, 67, 64],
-    ];
+    // Pizzicato climbs through the second build in eighths.
     let mut notes = Vec::new();
-    for (bar, line) in pizz_lines.iter().enumerate() {
+    for (bar, tones) in ARP.iter().enumerate() {
+        let line = [
+            tones[0],
+            tones[1],
+            tones[2],
+            tones[3],
+            tones[2] + 12,
+            tones[3],
+            tones[2],
+            tones[1],
+        ];
         for (i, &k) in line.iter().enumerate() {
             let vel = if i % 2 == 0 { 0.75 } else { 0.55 };
-            notes.push(n16(pizz, bar as i64 * 16 + i as i64 * 2, 2, k, vel));
+            notes.push(n16(pizz, bar as i64 * 16 + i as i64 * 2, 2, k - 12, vel));
         }
     }
     let pizz_pat = add(pattern("Pizzicato", 5, 16, notes));
 
-    let violin_pat = add(pattern(
-        "Violin Solo",
+    let violin_pat = add(pattern("Violin", 5, 32, melody(violin, &VIOLIN, 0.72, 0)));
+    let violin_up = add(pattern(
+        "Violin Up",
         5,
         32,
-        melody(
-            violin,
-            &[
-                (0, 12, 74),
-                (12, 4, 76),
-                (16, 8, 77),
-                (24, 4, 76),
-                (28, 4, 74),
-                (32, 12, 72),
-                (44, 4, 74),
-                (48, 16, 76),
-                (64, 8, 81),
-                (72, 4, 79),
-                (76, 4, 77),
-                (80, 12, 77),
-                (92, 4, 79),
-                (96, 8, 76),
-                (104, 8, 72),
-                (112, 16, 74),
-            ],
-            0.72,
-        ),
+        melody(violin, &VIOLIN, 0.72, LIFT),
     ));
+    let sax_pat = add(pattern("Sax", 8, 32, melody(sax, &SAX, 0.78, 0)));
 
-    // Sax: the verse melody, brought back over the second drop.
-    let sax_pat = add(pattern(
-        "Sax Melody",
-        8,
-        32,
-        melody(
-            sax,
-            &[
-                (4, 2, 69),
-                (6, 2, 72),
-                (8, 6, 74),
-                (14, 2, 72),
-                (16, 4, 70),
-                (20, 2, 69),
-                (22, 2, 67),
-                (24, 8, 65),
-                (34, 2, 65),
-                (36, 2, 67),
-                (38, 2, 69),
-                (40, 4, 72),
-                (44, 4, 69),
-                (48, 2, 67),
-                (50, 2, 64),
-                (52, 12, 67),
-                (68, 2, 69),
-                (70, 2, 72),
-                (72, 4, 74),
-                (76, 2, 77),
-                (78, 2, 76),
-                (80, 6, 74),
-                (86, 2, 72),
-                (88, 8, 70),
-                (98, 2, 72),
-                (100, 2, 74),
-                (102, 2, 72),
-                (104, 4, 69),
-                (108, 4, 65),
-                (112, 4, 67),
-                (116, 2, 64),
-                (118, 10, 62),
-            ],
-            0.78,
-        ),
-    ));
-
-    // Guitars.
-    let triads: [&[u8]; 4] = [&[62, 65, 69], &[62, 65, 70], &[60, 65, 69], &[60, 64, 67]];
+    // Funk guitar: muted, syncopated chops.
     let funk_pat = add(pattern(
         "Funk Guitar",
         9,
         16,
         chord_hits(
             funk_gtr,
-            &triads,
+            &TRIADS,
             &[
                 (2, 1, 0.85),
-                (6, 1, 0.8),
-                (7, 1, 0.45),
+                (5, 1, 0.5),
+                (7, 1, 0.75),
                 (10, 1, 0.85),
-                (13, 1, 0.45),
+                (13, 1, 0.5),
                 (14, 1, 0.8),
             ],
             true,
             0,
         ),
     ));
-    let power: [&[u8]; 4] = [&[50, 57, 62], &[46, 53, 58], &[41, 48, 53], &[48, 55, 60]];
-    let chug: Vec<(i64, i64, f32)> = (0..8)
-        .map(|i| {
-            let accent = matches!(i, 0 | 3 | 6);
-            (i * 2, 2, if accent { 0.95 } else { 0.65 })
-        })
-        .collect();
-    let power_pat = add(pattern(
-        "Power Chords",
-        9,
-        16,
-        chord_hits(rhythm_gtr, &power, &chug, true, 0),
-    ));
 
-    // The hook: synth lead, doubled an octave down by the lead guitar in
+    // The hook on the supersaw lead, an octave down on the lead guitar in
     // the second drop.
-    let mut hook: Vec<(i64, i64, u8)> = Vec::new();
-    let bars: [[(i64, i64, u8); 6]; 3] = [
-        [
-            (0, 3, 74),
-            (3, 3, 77),
-            (6, 2, 81),
-            (8, 2, 79),
-            (10, 3, 77),
-            (13, 3, 74),
-        ],
-        [
-            (0, 3, 74),
-            (3, 3, 77),
-            (6, 2, 82),
-            (8, 2, 81),
-            (10, 3, 77),
-            (13, 3, 74),
-        ],
-        [
-            (0, 3, 72),
-            (3, 3, 77),
-            (6, 2, 81),
-            (8, 2, 84),
-            (10, 3, 81),
-            (13, 3, 77),
-        ],
-    ];
-    for half in [0i64, 64] {
-        for (bar, line) in bars.iter().enumerate() {
-            hook.extend(
-                line.iter()
-                    .map(|&(s, l, k)| (half + bar as i64 * 16 + s, l, k)),
-            );
-        }
-    }
-    hook.extend([
-        (48, 3, 76),
-        (51, 3, 79),
-        (54, 2, 84),
-        (56, 4, 81),
-        (60, 4, 79),
-    ]);
-    hook.extend([
-        (112, 2, 79),
-        (114, 2, 81),
-        (116, 2, 84),
-        (118, 2, 86),
-        (120, 8, 88),
-    ]);
-    hook.sort_by_key(|n| n.0);
-    let hook_pat = add(pattern("Hook", 10, 32, melody(lead, &hook, 0.8)));
+    let hook = hook_line();
+    let hook_pat = add(pattern("Hook", 10, 32, melody(lead, &hook, 0.8, 0)));
+    let hook_up = add(pattern("Hook Up", 10, 32, melody(lead, &hook, 0.82, LIFT)));
     let low_hook: Vec<(i64, i64, u8)> = hook.iter().map(|&(s, l, k)| (s, l, k - 12)).collect();
-    let gtr_hook_pat = add(pattern(
+    let gtr_hook = add(pattern(
         "Guitar Hook",
         9,
         32,
-        melody(lead_gtr, &low_hook, 0.85),
+        melody(lead_gtr, &low_hook, 0.85, 0),
+    ));
+    let gtr_hook_up = add(pattern(
+        "Guitar Hook Up",
+        9,
+        32,
+        melody(lead_gtr, &low_hook, 0.85, LIFT),
     ));
 
-    let stab_chords: [&[u8]; 4] = [
-        &[69, 74, 77, 81],
-        &[70, 74, 77, 82],
-        &[69, 72, 77, 81],
-        &[67, 72, 76, 79],
-    ];
+    // Pluck: a sixteenth-note arpeggio that answers the hook, accented in a
+    // 3-3-2 pattern.
+    let pluck_notes = |tr: i8| {
+        let order = [0usize, 1, 2, 3, 2, 1, 3, 2, 0, 1, 2, 3, 1, 2, 3, 2];
+        let mut notes = Vec::new();
+        for (bar, tones) in ARP.iter().enumerate() {
+            for (s, &i) in order.iter().enumerate() {
+                let accent = matches!(s, 0 | 3 | 6 | 8 | 11 | 14);
+                let vel = if accent { 0.82 } else { 0.5 };
+                notes.push(n16(
+                    pluck,
+                    bar as i64 * 16 + s as i64,
+                    1,
+                    up(tones[i], tr),
+                    vel,
+                ));
+            }
+        }
+        notes
+    };
+    let pluck_pat = add(pattern("Pluck Arp", 10, 16, pluck_notes(0)));
+    let pluck_up = add(pattern("Pluck Arp Up", 10, 16, pluck_notes(LIFT)));
+
+    // Supersaw chord stabs on the off-beats, pumped by the kick.
+    let stab_hits = [(2, 3, 0.8), (6, 3, 0.75), (10, 3, 0.8), (14, 2, 0.75)];
     let stabs_pat = add(pattern(
         "Stabs",
         11,
         16,
-        chord_hits(
-            stabs,
-            &stab_chords,
-            &[(2, 2, 0.8), (6, 2, 0.75), (10, 2, 0.8), (14, 2, 0.75)],
-            false,
-            0,
-        ),
+        chord_hits(stabs, &SAW, &stab_hits, false, 0),
     ));
-    let riser_pat = add(pattern("Riser", 11, 32, vec![n16(riser, 0, 128, 72, 0.85)]));
+    let stabs_up = add(pattern(
+        "Stabs Up",
+        11,
+        16,
+        chord_hits(stabs, &SAW, &stab_hits, false, LIFT),
+    ));
+    let riser_pat = add(pattern("Riser", 11, 32, vec![n16(riser, 0, 124, 72, 0.85)]));
 
     p.patterns = pats.into_iter().map(Arc::new).collect();
 
@@ -949,14 +1155,15 @@ pub fn showcase() -> Project {
             "Bass",
             "Keys",
             "Piano",
+            "Pad",
             "Strings",
             "Violin",
             "Pizzicato",
             "Sax",
             "Funk Guitar",
-            "Rhythm Guitar",
             "Lead",
             "Lead Guitar",
+            "Pluck",
             "Stabs",
             "Riser",
             "Keys Filter",
@@ -974,59 +1181,76 @@ pub fn showcase() -> Project {
     );
     let placements: &[(usize, Id, i64, i64)] = &[
         // Drums.
-        (0, groove, 8, 8),
-        (0, kick_only, 16, 7),
-        (0, drop_beat, 24, 16),
+        (0, intro_perc, 4, 4),
+        (0, groove_top, 8, 4),
+        (0, groove, 12, 4),
+        (0, build_beat, 16, 6),
+        (0, build_eighths, 22, 1),
+        (0, drop_beat, 24, 7),
+        (0, drop_beat, 32, 8),
         (0, half_time, 44, 4),
-        (0, kick_only, 48, 7),
-        (0, drop_beat, 56, 15),
-        (0, groove, 72, 4),
+        (0, build_beat, 48, 6),
+        (0, build_eighths, 54, 2),
+        (0, drop_beat, 56, 7),
+        (0, drop_beat, 64, 8),
+        (0, groove, 72, 6),
         (1, crash_hit, 8, 1),
-        (1, fill, 23, 1),
+        (1, fill, 15, 1),
         (1, crash_hit, 24, 1),
+        (1, fill, 31, 1),
         (1, crash_hit, 32, 1),
-        (1, fill, 55, 1),
+        (1, crash_hit, 40, 1),
         (1, crash_hit, 56, 1),
+        (1, fill, 63, 1),
         (1, crash_hit, 64, 1),
-        (1, fill, 71, 1),
         (1, crash_hit, 72, 1),
         (2, snare_roll, 16, 8),
         (2, snare_roll, 48, 8),
         // Bass.
-        (3, groove_bass_pat, 8, 12),
-        (3, groove_bass_pat, 72, 8),
+        (3, groove_bass_pat, 8, 14),
+        (3, groove_bass_up, 72, 8),
         (4, sub_pat, 24, 16),
-        (4, sub_pat, 56, 16),
+        (4, sub_pat, 56, 8),
+        (4, sub_up, 64, 8),
         (5, rolling_bass, 24, 16),
-        (5, rolling_bass, 56, 16),
+        (5, rolling_bass, 56, 8),
+        (5, rolling_up, 64, 8),
         // Keys.
-        (6, keys_pat, 0, 24),
-        (6, keys_pat, 48, 8),
-        (6, keys_pat, 72, 8),
-        (7, piano_pat, 40, 12),
+        (6, keys_pat, 0, 22),
+        (6, keys_up, 72, 8),
+        (7, piano_build, 16, 7),
+        (7, piano_hook, 40, 8),
+        (8, pad_pat, 0, 8),
+        (8, pad_pat, 40, 16),
         // Strings and sax.
-        (8, strings_pat, 0, 8),
-        (8, strings_pat, 16, 24),
-        (8, strings_pat, 44, 4),
-        (8, strings_pat, 56, 24),
-        (9, violin_pat, 40, 8),
-        (9, violin_pat, 72, 8),
-        (10, pizz_pat, 16, 8),
-        (10, pizz_pat, 48, 8),
-        (11, sax_pat, 8, 8),
-        (11, sax_pat, 64, 8),
+        (9, strings_pat, 16, 7),
+        (9, strings_pat, 24, 24),
+        (9, strings_pat, 56, 8),
+        (9, strings_up, 64, 16),
+        (10, violin_pat, 40, 8),
+        (10, violin_up, 72, 8),
+        (11, pizz_pat, 48, 8),
+        (12, sax_pat, 8, 8),
+        (12, sax_pat, 56, 8),
         // Guitars.
-        (12, funk_pat, 8, 16),
-        (13, power_pat, 32, 8),
-        (13, power_pat, 56, 16),
+        (13, funk_pat, 8, 8),
+        (13, funk_pat, 56, 8),
+        (15, gtr_hook, 56, 8),
+        (15, gtr_hook_up, 64, 8),
         // Synths.
         (14, hook_pat, 24, 16),
-        (14, hook_pat, 56, 16),
-        (15, gtr_hook_pat, 56, 16),
-        (16, stabs_pat, 24, 16),
-        (16, stabs_pat, 56, 16),
-        (17, riser_pat, 16, 8),
-        (17, riser_pat, 48, 8),
+        (14, hook_pat, 56, 8),
+        (14, hook_up, 64, 8),
+        (16, pluck_pat, 4, 4),
+        (16, pluck_pat, 16, 7),
+        (16, pluck_pat, 24, 16),
+        (16, pluck_pat, 56, 8),
+        (16, pluck_up, 64, 8),
+        (17, stabs_pat, 24, 16),
+        (17, stabs_pat, 56, 8),
+        (17, stabs_up, 64, 8),
+        (18, riser_pat, 16, 8),
+        (18, riser_pat, 48, 8),
     ];
     for &(lane, pat, bar, bars) in placements {
         lanes.put(&mut p, lane, pat, bar, bars);
@@ -1041,7 +1265,7 @@ pub fn showcase() -> Project {
     let lp = |hz: f32| norm("peel.fx.filter", "cutoff", hz);
     lanes.automate(
         &mut p,
-        18,
+        19,
         SONG,
         AutomationTarget::Param {
             device: keys_filter,
@@ -1055,21 +1279,24 @@ pub fn showcase() -> Project {
         ],
     );
 
-    // Strings fade in, dip for the breakdown and swell back.
+    // Strings swell in through the first build, sit back in the drop,
+    // come forward for the breakdown and fade at the end.
     let strings_track = track_of(&p, strings);
     lanes.automate(
         &mut p,
-        19,
+        20,
         SONG,
         AutomationTarget::TrackGain {
             track: strings_track,
         },
         &[
-            (0.0, 0.0, -0.4),
-            (b(7.0), unity, 0.0),
-            (b(44.0), db_to_fader(-14.0), 0.3),
-            (b(48.0), unity, 0.0),
-            (b(76.0), unity, -0.3),
+            (0.0, 0.0, 0.0),
+            (b(16.0), 0.0, -0.4),
+            (b(23.0), unity, 0.0),
+            (b(24.0), db_to_fader(-4.0), 0.0),
+            (b(40.0), unity, 0.0),
+            (b(56.0), db_to_fader(-4.0), 0.0),
+            (b(76.0), db_to_fader(-4.0), -0.3),
             (b(80.0), db_to_fader(-30.0), 0.0),
         ],
     );
@@ -1084,7 +1311,7 @@ pub fn showcase() -> Project {
     pan.push((b(16.0), 0.5, 0.0));
     lanes.automate(
         &mut p,
-        20,
+        21,
         SONG,
         AutomationTarget::TrackPan {
             track: shaker_track,
@@ -1097,7 +1324,7 @@ pub fn showcase() -> Project {
     let rc = |hz: f32| norm("peel.synth.poly", "filter.cutoff", hz);
     lanes.automate(
         &mut p,
-        21,
+        22,
         SONG,
         AutomationTarget::Param {
             device: riser_dev,
@@ -1118,7 +1345,7 @@ pub fn showcase() -> Project {
     let sp = |hz: f32| norm("peel.drum.snare", "body.pitch", hz);
     lanes.automate(
         &mut p,
-        22,
+        23,
         SONG,
         AutomationTarget::Param {
             device: snare_dev,
@@ -1139,16 +1366,16 @@ pub fn showcase() -> Project {
     let hp = |hz: f32| norm("peel.fx.filter", "cutoff", hz);
     lanes.automate(
         &mut p,
-        23,
+        24,
         SONG,
         AutomationTarget::Param {
             device: drum_filter,
             param: "cutoff".into(),
         },
         &[
-            (b(20.0), hp(20.0), 0.5),
-            (b(24.0), hp(600.0), 0.0),
-            (b(24.0) + 0.25, hp(20.0), 0.0),
+            (b(19.0), hp(20.0), 0.5),
+            (b(23.0), hp(600.0), 0.0),
+            (b(24.0), hp(20.0), 0.0),
             (b(52.0), hp(20.0), 0.5),
             (b(56.0), hp(900.0), 0.0),
             (b(56.0) + 0.25, hp(20.0), 0.0),
@@ -1159,7 +1386,7 @@ pub fn showcase() -> Project {
     let lead_dev = device_of(&p, lead);
     lanes.automate(
         &mut p,
-        24,
+        25,
         SONG,
         AutomationTarget::Param {
             device: lead_dev,
@@ -1175,7 +1402,7 @@ pub fn showcase() -> Project {
     // Echo throws on the last note of each sax phrase.
     let throw = norm("peel.fx.delay", "mix", 0.45);
     let mut echo_pts = vec![(0.0, 0.0, 0.0)];
-    for start in [b(8.0), b(64.0)] {
+    for start in [b(8.0), b(56.0)] {
         for phrase_end in [13.0, 29.5] {
             let at = start + phrase_end;
             echo_pts.push((at - 0.25, 0.0, 0.0));
@@ -1186,7 +1413,7 @@ pub fn showcase() -> Project {
     }
     lanes.automate(
         &mut p,
-        25,
+        26,
         SONG,
         AutomationTarget::Param {
             device: sax_delay,
@@ -1198,7 +1425,7 @@ pub fn showcase() -> Project {
     // The whole mix fades out over the last four bars.
     lanes.automate(
         &mut p,
-        26,
+        27,
         SONG,
         AutomationTarget::TrackGain { track: master },
         &[
@@ -1208,12 +1435,14 @@ pub fn showcase() -> Project {
         ],
     );
 
-    // Pattern switches jump: two points at the same position.
+    // Pattern switches jump: two points at the same position. A tape stop
+    // into the breakdown, a stutter build into the second drop and a short
+    // sixteenth stutter into the key change.
     let tp = |i: f32| norm("peel.fx.glitch", "time.pattern", i);
-    let (off, build, tape) = (tp(0.0), tp(6.0), tp(9.0));
+    let (off, s16, build, tape) = (tp(0.0), tp(3.0), tp(6.0), tp(9.0));
     lanes.automate(
         &mut p,
-        27,
+        28,
         SONG,
         AutomationTarget::Param {
             device: master_glitch_id,
@@ -1229,12 +1458,16 @@ pub fn showcase() -> Project {
             (b(55.0), build, 0.0),
             (b(56.0), build, 0.0),
             (b(56.0), off, 0.0),
+            (b(63.5), off, 0.0),
+            (b(63.5), s16, 0.0),
+            (b(64.0), s16, 0.0),
+            (b(64.0), off, 0.0),
         ],
     );
     let gp = |i: f32| norm("peel.fx.glitch", "gate.pattern", i);
     lanes.automate(
         &mut p,
-        28,
+        29,
         SONG,
         AutomationTarget::Param {
             device: strings_gate,
@@ -1242,8 +1475,8 @@ pub fn showcase() -> Project {
         },
         &[
             (0.0, gp(0.0), 0.0),
-            (b(56.0), gp(0.0), 0.0),
-            (b(56.0), gp(1.0), 0.0),
+            (b(64.0), gp(0.0), 0.0),
+            (b(64.0), gp(1.0), 0.0),
             (b(72.0), gp(1.0), 0.0),
             (b(72.0), gp(0.0), 0.0),
         ],
@@ -1258,6 +1491,7 @@ pub fn showcase() -> Project {
         (40, "Breakdown"),
         (48, "Build"),
         (56, "Drop 2"),
+        (64, "Lift"),
         (72, "Outro"),
     ] {
         arr.markers.push(Marker {

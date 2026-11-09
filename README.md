@@ -20,15 +20,17 @@ effects. There is no web view.
   and a Piano Roll edit the same notes; patterns are painted into the
   Playlist as linked clips, and Make unique splits one off.
 - Thirteen native instruments (five synthesized drums, a polyphonic synth,
-  a mono bass, an FM electric piano, a modelled piano, a modelled electric
-  guitar with its own amp, a bowed violin with ensemble and pizzicato, a
-  saxophone and a sampler) and fourteen effects (EQ with an interactive
-  curve, compressor, limiter, Bass Lift, delay, reverb, drive, filter,
+  a mono bass, a modelled tine electric piano, a modelled piano, a modelled
+  electric guitar with its own amp and cabinet, a bowed violin with
+  ensemble and pizzicato, a reed-modelled saxophone and a sampler) and
+  fifteen effects (EQ with an interactive curve, compressor, multiband
+  compressor, limiter, Bass Lift, delay, reverb, drive, filter,
   chorus, Vintage Chorus, flanger, phaser, Glitch for tempo-synced
-  stutters, tape stops and gates, and utility), with over 150 factory
+  stutters, tape stops and gates, and utility), with over 200 factory
   presets in the Browser. Installed CLAP plugins show up next to them.
-- A demo song, "Afterglow", opens on first launch: 80 bars with a tempo
-  ramp, a slower breakdown, two drops, a drum bus, sidechain ducking,
+- A demo song, "Afterglow", opens on first launch: 80 bars of progressive
+  house with tempo ramps, a slower breakdown, two drops and a key change,
+  a drum bus, sidechain pumping, a mastering chain,
   reverb and delay returns, and automation of volume, pan, filters, pitch
   and effects.
 - Arrangement: pattern, audio and automation clips; trims, fades, slicing,
