@@ -735,7 +735,7 @@ fn finish_take(h: &mut H, pid: Id, ch: Id, before: &[Id]) -> Vec<Note> {
         .filter(|n| !before.contains(&n.id))
         .copied()
         .collect();
-    notes.sort_by(|a, b| a.length.cmp(&b.length));
+    notes.sort_by_key(|a| a.length);
     h.valid();
     notes
 }
