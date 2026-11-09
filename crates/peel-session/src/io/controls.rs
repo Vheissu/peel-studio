@@ -175,8 +175,14 @@ impl Session {
                 "At most {MAX_MAPPINGS} MIDI mappings are supported"
             ));
         }
-        for mapping in &mappings {
+        for (index, mapping) in mappings.iter().enumerate() {
             self.validate_midi_mapping(mapping)?;
+            if mappings[..index]
+                .iter()
+                .any(|m| m.controller == mapping.controller && m.channel == mapping.channel)
+            {
+                return Err("Each MIDI channel/CC can have only one mapping".into());
+            }
         }
         self.io.controls.mappings = mappings;
         self.io.controls.error = None;
@@ -186,22 +192,18 @@ impl Session {
 
     pub fn add_midi_control_mapping(&mut self, mapping: MidiMapping) -> Result<(), String> {
         self.validate_midi_mapping(&mapping)?;
-        let overlaps = |m: &MidiMapping| {
-            m.controller == mapping.controller
-                && (m.channel.is_none()
-                    || mapping.channel.is_none()
-                    || m.channel == mapping.channel)
-        };
+        let same_source =
+            |m: &MidiMapping| m.controller == mapping.controller && m.channel == mapping.channel;
         if self.io.controls.mappings.len() >= MAX_MAPPINGS
-            && !self.io.controls.mappings.iter().any(overlaps)
+            && !self.io.controls.mappings.iter().any(same_source)
         {
             return Err(format!(
                 "At most {MAX_MAPPINGS} MIDI mappings are supported"
             ));
         }
-        // A learned knob replaces its earlier assignment, rather than
-        // unexpectedly moving two unrelated controls at once.
-        self.io.controls.mappings.retain(|m| !overlaps(m));
+        // Replace this exact source only. Channel-specific mappings take
+        // precedence over omni, leaving the omni assignment on other channels.
+        self.io.controls.mappings.retain(|m| !same_source(m));
         self.io.controls.mappings.push(mapping);
         self.io.controls.error = None;
         Ok(())
@@ -381,6 +383,8 @@ impl Session {
 
         // The array is fixed at 2048 entries. A dial can replace its pending
         // value repeatedly, but cannot grow work or memory between frames.
+        let mut processed_control = false;
+        let mut control_error = None;
         for channel in 0..CHANNELS as u8 {
             for controller in 0..CONTROLLERS as u8 {
                 let index = usize::from(channel) * CONTROLLERS + usize::from(controller);
@@ -388,13 +392,21 @@ impl Session {
                 if packed == 0 || !self.io.bridge.controls.accepts(channel) {
                     continue;
                 }
+                let has_specific = self
+                    .io
+                    .controls
+                    .mappings
+                    .iter()
+                    .any(|m| m.controller == controller && m.channel == Some(channel));
                 let mappings: Vec<_> = self
                     .io
                     .controls
                     .mappings
                     .iter()
                     .filter(|m| {
-                        m.controller == controller && m.channel.is_none_or(|ch| ch == channel)
+                        m.controller == controller
+                            && (m.channel == Some(channel)
+                                || (!has_specific && m.channel.is_none()))
                     })
                     .cloned()
                     .collect();
@@ -416,10 +428,11 @@ impl Session {
                     let range = match self.validate_midi_mapping(&mapping) {
                         Ok(range) => range,
                         Err(message) => {
-                            self.io.controls.error = Some(message);
+                            control_error = Some(message);
                             continue;
                         }
                     };
+                    processed_control = true;
                     let value = range.value(&mapping, (packed - 1) as u8);
                     let current = match &mapping.target {
                         MidiControlTarget::DeviceParam { device, key } => {
@@ -484,6 +497,12 @@ impl Session {
                     }
                 }
             }
+        }
+        // A restored target clears its old warning on the next valid
+        // controller message, while another failed mapping in the same
+        // frame still reports its error.
+        if processed_control || control_error.is_some() {
+            self.io.controls.error = control_error;
         }
     }
 }

@@ -201,6 +201,85 @@ fn invalid_mapping_updates_are_atomic_and_missing_targets_are_reported_safely() 
     s.poll_midi();
     assert_eq!(s.doc.revision(), revision);
     assert!(s.midi_control_error().unwrap().contains("no longer exists"));
+    s.doc.undo();
+    s.handle_midi_event(cc(2, 74, 127));
+    s.poll_midi();
+    assert_eq!(value(&s, device, "band2.freq"), 20_000.0);
+    assert_eq!(s.midi_control_error(), None);
+}
+
+#[test]
+fn learning_a_specific_channel_keeps_the_omni_mapping_on_other_channels() {
+    let (mut s, device) = session();
+    let track = s.project().mixer.tracks[0].id;
+    let mut omni = mapping(device);
+    omni.channel = None;
+    s.set_midi_control_mappings(vec![omni.clone()]).unwrap();
+    s.begin_midi_learn(MidiControlTarget::TrackPan { track })
+        .unwrap();
+    s.handle_midi_event(cc(2, 74, 127));
+    s.poll_midi();
+    assert_eq!(s.midi_control_mappings().len(), 2);
+    assert_eq!(s.midi_control_mappings()[0], omni);
+    assert_eq!(s.project().mixer.track(track).unwrap().pan, 1.0);
+    assert_eq!(
+        value(&s, device, "band2.freq"),
+        400.0,
+        "only the specific assignment moves"
+    );
+
+    s.handle_midi_event(cc(3, 74, 0));
+    s.poll_midi();
+    assert_eq!(
+        value(&s, device, "band2.freq"),
+        20.0,
+        "omni still serves other channels"
+    );
+    assert_eq!(s.project().mixer.track(track).unwrap().pan, 1.0);
+    s.handle_midi_event(cc(2, 74, 0));
+    s.poll_midi();
+    assert_eq!(s.project().mixer.track(track).unwrap().pan, -1.0);
+    assert_eq!(value(&s, device, "band2.freq"), 20.0);
+
+    assert!(s.remove_midi_control_mapping(1));
+    s.handle_midi_event(cc(2, 74, 127));
+    s.poll_midi();
+    assert_eq!(
+        value(&s, device, "band2.freq"),
+        20_000.0,
+        "removing the override restores omni"
+    );
+    assert_eq!(s.project().mixer.track(track).unwrap().pan, -1.0);
+}
+
+#[test]
+fn duplicate_sources_are_rejected_and_a_valid_mapping_does_not_hide_another_error() {
+    let (mut s, device) = session();
+    let valid = mapping(device);
+    assert!(
+        s.set_midi_control_mappings(vec![valid.clone(), valid.clone()])
+            .is_err()
+    );
+    assert!(s.midi_control_mappings().is_empty());
+    let track = s.project().mixer.tracks[0].id;
+    s.set_midi_control_mappings(vec![
+        valid,
+        MidiMapping {
+            controller: 75,
+            channel: Some(2),
+            target: MidiControlTarget::TrackPan { track },
+            min: -1.0,
+            max: 1.0,
+        },
+    ])
+    .unwrap();
+    s.doc
+        .edit("Remove EQ", |p| p.mixer.tracks[0].inserts.clear());
+    s.handle_midi_event(cc(2, 74, 127));
+    s.handle_midi_event(cc(2, 75, 127));
+    s.poll_midi();
+    assert_eq!(s.project().mixer.track(track).unwrap().pan, 1.0);
+    assert!(s.midi_control_error().unwrap().contains("no longer exists"));
 }
 
 #[test]
