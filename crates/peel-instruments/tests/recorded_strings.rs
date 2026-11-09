@@ -1262,7 +1262,7 @@ fn palm_descriptor_and_presets() {
     }
     let chugs = &all[0];
     for (k, v) in [
-        ("play.release", 0.025),
+        ("play.release", 0.03),
         ("amp.output", 0.0),
         ("amp.gain", 0.85),
         ("amp.bass", 2.0),

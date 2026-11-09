@@ -275,7 +275,7 @@ static BASS_PARAMS: [ParamDescriptor; 7] = [
 ];
 
 static PALM_PARAMS: [ParamDescriptor; 9] = [
-    release_param(0.025),
+    release_param(0.03),
     ParamDescriptor::choice(OUTPUT, "amp.output", "Output", "Amp", OUTPUTS, 0),
     ParamDescriptor::linear(
         AMP_GAIN,
@@ -418,7 +418,7 @@ macro_rules! palm_preset {
 }
 
 pub static PALM_PRESETS: [Preset; 3] = [
-    palm_preset!("Metal Chugs", release: 0.025, output: 0.0, gain: 0.85, bass: 2.0, mid: -1.0,
+    palm_preset!("Metal Chugs", release: 0.03, output: 0.0, gain: 0.85, bass: 2.0, mid: -1.0,
         treble: 0.0, cab: 2.0, level: 0.0, velocity: 0.6),
     palm_preset!("Clean Palm Mute", release: 0.08, output: 0.0, gain: 0.12, bass: 0.0, mid: 0.0,
         treble: 0.0, cab: 0.0, level: 0.0, velocity: 0.8),
