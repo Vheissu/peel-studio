@@ -19,7 +19,7 @@ effects. There is no web view.
 - Pattern workflow: a Channel Rack step sequencer (with a velocity graph)
   and a Piano Roll edit the same notes; patterns are painted into the
   Playlist as linked clips, and Make unique splits one off.
-- Sixteen native instruments: five synthesized drums, Mallet modal percussion,
+- Seventeen native instruments: a recorded acoustic kit, five synthesized drums, Mallet modal percussion,
   Poly and Cross synths, a mono bass, tine electric piano, acoustic piano,
   electric guitar with amp and cabinet, bowed violin, Zither plucked strings,
   saxophone and sampler. Nineteen effects cover EQ, dynamics, delay, reverb,
@@ -89,9 +89,12 @@ there, so the template itself is never changed. Templates live in a
 delete in the app yet; remove a template's `.peelproj` file and `.peeldata`
 folder by hand.
 
-New drum channels use acoustic presets. The preset menus also include 808
-and 909 circuit models; Rock / Metal, Trap, Synthwave and EDM starters use
-the new kits. Existing projects and older presets retain their sound.
+Acoustic Kit plays real recordings of kick, snare, closed/open hats, ride,
+crash and toms, with four velocity layers and three alternate takes per
+piece. Choose its Full Kit preset for a GM drum keyboard, or a piece preset
+for a Channel Rack row. New Rock / Metal songs use the recorded kit.
+Kick, Snare, Hat and Tom also offer modeled acoustic and 808/909 circuit
+sounds. Existing projects and older presets retain their sound.
 
 In Channels, **Steps** sets the drum grid; the bar count sets the pattern's
 length. Choose 1/32 or 1/64 for fast repeated kicks. The Piano Roll has

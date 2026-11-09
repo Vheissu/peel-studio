@@ -7,6 +7,31 @@ struct Host {
     s: Session,
     c: Control,
 }
+
+#[test]
+fn recorded_kit_presets_retarget_step_notes_as_one_edit() {
+    let mut h = Host::new();
+    let added = h
+        .call(
+            "add_channel",
+            json!({"name":"Kit","type_id":"peel.drum.acoustic"}),
+        )
+        .unwrap();
+    let channel: Id = serde_json::from_value(added["channel"].clone()).unwrap();
+    assert_eq!(h.s.project().channel(channel).unwrap().root_key, 36);
+    let pattern = h.s.project().patterns[0].id;
+    h.call("set_notes", json!({"pattern":pattern,"channel":channel,"notes":[{"start":"0","length":"1/6","key":36,"velocity":0.8}]})).unwrap();
+    h.call(
+        "set_device",
+        json!({"device":added["device"],"preset":"Kick"}),
+    )
+    .unwrap();
+    assert_eq!(h.s.project().channel(channel).unwrap().root_key, 60);
+    assert_eq!(h.s.project().patterns[0].notes[0].key, 60);
+    h.call("history", json!({"direction":"undo"})).unwrap();
+    assert_eq!(h.s.project().channel(channel).unwrap().root_key, 36);
+    assert_eq!(h.s.project().patterns[0].notes[0].key, 36);
+}
 impl Host {
     fn new() -> Self {
         Self {

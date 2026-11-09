@@ -43,6 +43,7 @@ fn all_devices(p: &Project) -> impl Iterator<Item = &DeviceInstance> {
 /// A note as it sounds in the song: device type, beat and key.
 #[derive(Clone, Debug)]
 struct Hit {
+    channel: Id,
     device: String,
     beat: f64,
     len: f64,
@@ -67,6 +68,7 @@ fn hits(p: &Project) -> Vec<Hit> {
                     let device = p.channel(n.channel).unwrap().device.type_id.clone();
                     let len = n.length.as_f64();
                     out.push(Hit {
+                        channel: n.channel,
                         device,
                         beat,
                         len,
@@ -107,6 +109,20 @@ fn in_section(p: &Project, name: &str, device: &str) -> Vec<Hit> {
         .collect()
 }
 
+fn channel_in_section(p: &Project, section_name: &str, channel_name: &str) -> Vec<Hit> {
+    let channel = p
+        .channels
+        .iter()
+        .find(|c| c.name == channel_name)
+        .unwrap()
+        .id;
+    let (a, b) = section(p, section_name, 0);
+    hits(p)
+        .into_iter()
+        .filter(|h| h.beat >= a && h.beat < b && h.channel == channel)
+        .collect()
+}
+
 fn onsets_per_bar(p: &Project, name: &str) -> f64 {
     let (a, b) = section(p, name, 0);
     let n = hits(p).iter().filter(|h| h.beat >= a && h.beat < b).count();
@@ -122,7 +138,8 @@ fn peak_section(name: &str) -> &'static str {
     }
 }
 
-const DRUMS: [&str; 5] = [
+const DRUMS: [&str; 6] = [
+    "peel.drum.acoustic",
     "peel.drum.kick",
     "peel.drum.snare",
     "peel.drum.hat",
@@ -235,7 +252,8 @@ fn songs_are_arranged_in_sections_with_bass_and_harmony() {
             .iter()
             .filter(|h| !DRUMS.contains(&h.device.as_str()))
             .collect();
-        assert!(peak.iter().any(|h| h.device == "peel.drum.kick"), "{name}");
+        let kick = p.channels.iter().find(|c| c.name == "Kick").unwrap().id;
+        assert!(peak.iter().any(|h| h.channel == kick), "{name}");
         assert!(tonal.iter().any(|h| h.key < 48), "{name}: no bass");
         let chord = tonal.iter().any(|h| {
             let stack = tonal
@@ -554,6 +572,21 @@ fn pattern_notes(p: &Project, name: &str, channel: &str) -> Vec<(Time, Time)> {
 #[test]
 fn rock_metal_starts_on_a_sixteenth_triplet_double_kick() {
     let p = super::rock_metal();
+    for (name, preset) in [
+        ("Kick", "Kick"),
+        ("Snare", "Snare"),
+        ("Hat", "Closed Hat"),
+        ("Crash", "Crash"),
+        ("Toms", "Floor Tom"),
+    ] {
+        let channel = p.channels.iter().find(|c| c.name == name).unwrap();
+        assert_eq!(channel.device.type_id, "peel.drum.acoustic");
+        assert_eq!(channel.device.preset.as_deref(), Some(preset));
+        assert!(
+            channel.device.sample.is_none(),
+            "recordings are embedded, not external assets"
+        );
+    }
     assert_eq!(p.bpm(), 108.0);
     assert_eq!(p.swing, 0.0);
     assert_eq!(
@@ -597,7 +630,7 @@ fn rock_metal_starts_on_a_sixteenth_triplet_double_kick() {
 
     // The chorus plays it: twelve kicks a bar.
     let (a, b) = section(&p, "Chorus", 0);
-    let kicks = in_section(&p, "Chorus", "peel.drum.kick");
+    let kicks = channel_in_section(&p, "Chorus", "Kick");
     assert_eq!(kicks.len() as f64, (b - a) / 4.0 * 12.0);
 }
 
@@ -606,7 +639,7 @@ fn rock_metal_verse_is_a_simpler_rock_beat() {
     let p = super::rock_metal();
     let (a, b) = section(&p, "Verse", 0);
     let bars = (b - a) / 4.0;
-    let kicks = in_section(&p, "Verse", "peel.drum.kick");
+    let kicks = channel_in_section(&p, "Verse", "Kick");
     assert!(!kicks.is_empty());
     assert!(
         (kicks.len() as f64) < bars * 6.0,
@@ -617,13 +650,13 @@ fn rock_metal_verse_is_a_simpler_rock_beat() {
         kicks.iter().all(|h| (h.beat * 4.0).fract() == 0.0),
         "verse kicks stay on the sixteenth grid"
     );
-    let snares = in_section(&p, "Verse", "peel.drum.snare");
+    let snares = channel_in_section(&p, "Verse", "Snare");
     let backbeat = snares
         .iter()
         .filter(|h| [1.0, 3.0].contains(&beat_in_bar(h)))
         .count();
     assert!(backbeat * 10 >= snares.len() * 8, "snare on two and four");
-    let hats = in_section(&p, "Verse", "peel.drum.hat");
+    let hats = channel_in_section(&p, "Verse", "Hat");
     assert!(
         hats.iter().all(|h| (h.beat * 2.0).fract() == 0.0),
         "eighth hats"
@@ -679,7 +712,7 @@ fn rock_metal_has_distorted_guitar_and_bass_that_change_by_section() {
         .iter()
         .map(|h| (h.beat * 12.0).round() as i64)
         .collect();
-    let kicks: BTreeSet<i64> = in_section(&p, "Breakdown", "peel.drum.kick")
+    let kicks: BTreeSet<i64> = channel_in_section(&p, "Breakdown", "Kick")
         .iter()
         .map(|h| (h.beat * 12.0).round() as i64)
         .collect();

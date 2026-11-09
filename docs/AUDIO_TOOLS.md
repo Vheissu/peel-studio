@@ -75,6 +75,22 @@ GUIs are not supported by this host yet.
 
 ## Drums
 
+**Acoustic Kit** plays recordings from Karoryfer's CC0 Big Rusty Drums.
+Each piece has four recorded strike strengths and three alternate takes
+per strength. Velocity changes both the source recording and its level;
+repeated hits cycle through real performances without moving the notes.
+The recordings are included in the app and work offline.
+
+Use Full Kit to play GM drum notes: 35/36 kick, 38/40 snare, 42/44 closed
+hat, 46 open hat, 49/57 crash, 51/53/59 ride, 47/48/50 rack tom and
+41/43/45 floor tom. A closed hat chokes an open hat in the same instance;
+ride and crash keep ringing. For the step grid, choose Kick, Snare,
+Closed Hat, Open Hat, Ride, Crash, Rack Tom or Floor Tom. Each preset puts
+that piece on the row's notes. New Rock / Metal songs use these recordings.
+
+Tune, Decay and Tone shape the recorded sound. The original recordings,
+licence and preparation details are listed in `assets/drums/big-rusty/`.
+
 Kick, Snare, Hat and Tom each have three models. With both the
 **Acoustic** and **Circuit** switches off you get the original electronic
 drum, and projects saved before the switches existed sound exactly as

@@ -9,6 +9,7 @@
 //! | `peel.drum.hat`    | Hat     | Drums    | Metallic bank and noise; Circuit and Acoustic models |
 //! | `peel.drum.clap`   | Clap    | Drums    | Multi-burst filtered noise with room tail    |
 //! | `peel.drum.tom`    | Tom     | Drums    | Pitched membrane; Circuit and Acoustic models |
+//! | `peel.drum.acoustic` | Acoustic Kit | Drums | Recorded kit: velocity layers, alternate takes |
 //! | `peel.synth.poly`  | Poly    | Synth    | Polyphonic subtractive synth                 |
 //! | `peel.synth.bass`  | Bass    | Synth    | Monophonic bass with glide and drive         |
 //! | `peel.keys.tine`   | Tine    | Keys     | Electric piano: tine and pickup model        |
@@ -75,6 +76,7 @@ mod hat;
 mod kick;
 mod mallet;
 mod poly;
+mod recorded;
 mod sampler;
 mod sax;
 mod snare;
@@ -85,12 +87,13 @@ mod zither;
 
 use peel_dsp::{Device, DeviceDescriptor, Preset};
 
-static ALL: [&DeviceDescriptor; 16] = [
+static ALL: [&DeviceDescriptor; 17] = [
     &kick::DESC,
     &snare::DESC,
     &hat::DESC,
     &clap::DESC,
     &tom::DESC,
+    &recorded::DESC,
     &mallet::DESC,
     &poly::DESC,
     &bass::DESC,
@@ -117,6 +120,7 @@ pub fn create(type_id: &str) -> Option<Box<dyn Device>> {
         "peel.drum.hat" => Some(hat::create()),
         "peel.drum.clap" => Some(clap::create()),
         "peel.drum.tom" => Some(tom::create()),
+        "peel.drum.acoustic" => Some(recorded::create()),
         "peel.perc.mallet" => Some(mallet::create()),
         "peel.synth.cross" => Some(cross::create()),
         "peel.strings.zither" => Some(zither::create()),
@@ -141,6 +145,7 @@ pub fn presets(type_id: &str) -> &'static [Preset] {
         "peel.drum.hat" => &hat::PRESETS,
         "peel.drum.clap" => &clap::PRESETS,
         "peel.drum.tom" => &tom::PRESETS,
+        "peel.drum.acoustic" => &recorded::PRESETS,
         "peel.perc.mallet" => &mallet::PRESETS,
         "peel.synth.cross" => &cross::PRESETS,
         "peel.strings.zither" => &zither::PRESETS,

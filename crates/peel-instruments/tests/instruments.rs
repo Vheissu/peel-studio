@@ -169,9 +169,16 @@ fn every_preset_plays_finite_audible_audio() {
             for (key, value) in preset.params {
                 dev.set_param(d.param_by_key(key).unwrap().id, *value);
             }
+            // The recorded kit's MIDI mapping leaves key 60 silent, as
+            // General MIDI drum maps do; audition it on the snare.
+            let key = if d.type_id == "peel.drum.acoustic" && preset.name == "Full Kit" {
+                38
+            } else {
+                60
+            };
             let (l, r) = render(
                 dev.as_mut(),
-                &[note_on(0, 60, 0.9, 1), note_off(24_000, 60, 1)],
+                &[note_on(0, key, 0.9, 1), note_off(24_000, key, 1)],
                 48_000,
                 256,
             );

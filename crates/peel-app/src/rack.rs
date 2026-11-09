@@ -1187,9 +1187,16 @@ pub fn add_instrument_preset(s: &mut Session, type_id: &str, preset: Option<&str
         .unwrap_or(desc.name)
         .to_string();
     let mut new_id = None;
+    // The recorded kit's Full Kit preset follows GM drum keys. Start its
+    // steps on the kick; per-piece presets use the usual C5 root.
+    let root = if type_id == "peel.drum.acoustic" && preset.is_none_or(|p| p == "Full Kit") {
+        36
+    } else {
+        60
+    };
     s.doc.edit(format!("Add {name}"), |p| {
         let n = p.channels.len();
-        new_id = Some(template::add_channel(p, &name, n * 5 + 2, dev, 60));
+        new_id = Some(template::add_channel(p, &name, n * 5 + 2, dev, root));
     });
     new_id
 }
@@ -1393,6 +1400,31 @@ pub(crate) mod tests {
         let kick = &session.project().channel(id).unwrap().device;
         assert_eq!(kick.preset.as_deref(), Some("Punch"));
         assert_eq!(kick.params.get("body.acoustic"), Some(&0.0));
+    }
+
+    #[test]
+    fn recorded_kit_steps_start_on_a_playable_drum_key() {
+        let mut session = Session::new_silent(template::empty());
+        for preset in [
+            None,
+            Some("Full Kit"),
+            Some("Kick"),
+            Some("Snare"),
+            Some("Crash"),
+        ] {
+            let id =
+                super::add_instrument_preset(&mut session, "peel.drum.acoustic", preset).unwrap();
+            let ch = session.project().channel(id).unwrap();
+            assert_eq!(
+                ch.root_key,
+                if preset.is_none_or(|p| p == "Full Kit") {
+                    36
+                } else {
+                    60
+                }
+            );
+            assert_eq!(ch.device.type_id, "peel.drum.acoustic");
+        }
     }
 
     /// The real Studio against a silent engine, with scripted input.

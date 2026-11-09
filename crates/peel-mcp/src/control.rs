@@ -232,6 +232,11 @@ impl Control {
             }
             Action::AddChannel { name, type_id } => {
                 let version = device_version(s, &type_id, DeviceKind::Instrument)?;
+                let root_key = if type_id == "peel.drum.acoustic" {
+                    36
+                } else {
+                    60
+                };
                 let mut p = s.project().clone();
                 let color = p.next_channel_color();
                 let track = MixerTrack {
@@ -255,7 +260,7 @@ impl Control {
                     gain_db: 0.0,
                     pan: 0.0,
                     muted: false,
-                    root_key: 60,
+                    root_key,
                 };
                 let result =
                     json!({"channel": channel.id, "device": channel.device.id, "track": track.id});
@@ -355,8 +360,10 @@ impl Control {
                 params,
             } => {
                 let mut p = s.project().clone();
-                let d = peel_session::find_device_mut(&mut p, id(&device)?)
+                let device_id = id(&device)?;
+                let d = peel_session::find_device_mut(&mut p, device_id)
                     .ok_or("Device does not exist")?;
+                let old_piece = d.params.get("kit.piece").copied().unwrap_or(0.0);
                 if let Some(name) = preset {
                     let preset = peel_devices::presets(&d.type_id)
                         .iter()
@@ -374,6 +381,7 @@ impl Control {
                     d.preset = Some(name);
                 }
                 d.params.extend(params);
+                peel_session::update_recorded_kit_mapping(&mut p, device_id, old_piece);
                 commit(s, "Set device", p)
             }
             Action::Transport {

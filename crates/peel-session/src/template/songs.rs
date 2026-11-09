@@ -587,7 +587,7 @@ pub fn synthwave() -> Project {
         hat,
         "x.x.x.x.x.x.x.x.|x.x.x.x.x.x.x.x.|x.x.x.x.x.x.x.x.|x.x.x.x.x.x.....",
     ));
-    for (i, key) in [67u8, 64, 60, 55].into_iter().enumerate() {
+    for (i, key) in [62u8, 60, 59, 58].into_iter().enumerate() {
         drums.push(n16(tom, 60 + i as i64, 1, key, 0.7 + 0.08 * i as f32));
     }
     let drums = s.pattern("Drums", 0, 4, drums);
@@ -766,11 +766,11 @@ pub fn edm() -> Project {
 /// half-time chugs.
 pub fn rock_metal() -> Project {
     let mut s = Song::new(108.0, 0.0, &["Drums", "Bass", "Rhythm", "Chug"]);
-    let kick = s.part("Kick", 0, "peel.drum.kick", "Metal Kick", HIT, -10.0);
-    let snare = s.part("Snare", 9, "peel.drum.snare", "Rock Snare", HIT, -9.0);
-    let hat = s.part("Hat", 2, "peel.drum.hat", "Acoustic Closed", HIT, -16.0);
-    let crash = s.part("Crash", 3, "peel.drum.hat", "Acoustic Crash", HIT, -20.0);
-    let tom = s.part("Toms", 8, "peel.drum.tom", "Acoustic Floor", HIT, -12.0);
+    let kick = s.part("Kick", 0, "peel.drum.acoustic", "Kick", HIT, -2.0);
+    let snare = s.part("Snare", 9, "peel.drum.acoustic", "Snare", HIT, -4.0);
+    let hat = s.part("Hat", 2, "peel.drum.acoustic", "Closed Hat", HIT, -11.0);
+    let crash = s.part("Crash", 3, "peel.drum.acoustic", "Crash", HIT, -15.0);
+    let tom = s.part("Toms", 8, "peel.drum.acoustic", "Floor Tom", HIT, -7.0);
     let bass = s.part("Bass", 6, "peel.synth.bass", "Fingered", 28, -8.0);
     let gtr = s.part("Guitar", 4, "peel.guitar.electric", "High Gain", 40, -14.0);
     let chug = s.part("Chug", 5, "peel.guitar.electric", "Palm Mute", 40, -12.0);

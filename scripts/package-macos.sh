@@ -22,6 +22,8 @@ cp target/release/peel-clap-scan "$APP/Contents/MacOS/peel-clap-scan"
 uv run --no-project --python 3.12.13 scripts/bundle-python.py "$APP/Contents/Resources/python"
 cp LICENSE README.md assets/LICENSES.md "$APP/Contents/Resources/"
 cp docs/SCRIPTING.md "$APP/Contents/Resources/"
+mkdir -p "$APP/Contents/Resources/sound-licenses"
+cp assets/drums/big-rusty/LICENSE.txt assets/drums/big-rusty/README.md assets/drums/big-rusty/manifest.json "$APP/Contents/Resources/sound-licenses/"
 
 # Icon set from the generated PNGs.
 cp assets/icons/peel-16.png dist/iconset/icon_16x16.png

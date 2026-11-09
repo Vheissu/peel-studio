@@ -920,8 +920,15 @@ impl Session {
                 |p| format!("Change {}", p.name),
             );
         self.doc.edit_gesture(gesture, label, |p| {
+            let old_piece = find_device(p, device)
+                .and_then(|d| d.params.get("kit.piece"))
+                .copied()
+                .unwrap_or(0.0);
             if let Some(d) = find_device_mut(p, device) {
                 d.params.insert(key.to_string(), value);
+            }
+            if key == "kit.piece" {
+                update_recorded_kit_mapping(p, device, old_piece);
             }
         });
         if let Some(slot) = self.devices.get_mut(&device) {
@@ -1274,6 +1281,44 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) {
         let _ = self.engine.send(EngineCommand::Panic);
+    }
+}
+
+/// Keeps step notes at the recorded pitch when switching a channel between
+/// the GM kit map and one selected piece. Only notes on the channel's old
+/// root move; other piano-roll notes and their expression stay untouched.
+/// Call inside the same document edit that changes `kit.piece`.
+pub fn update_recorded_kit_mapping(p: &mut Project, device: Id, old_piece: f32) {
+    let Some(ch) = p
+        .channels
+        .iter_mut()
+        .find(|ch| ch.device.id == device && ch.device.type_id == "peel.drum.acoustic")
+    else {
+        return;
+    };
+    let piece = ch.device.params.get("kit.piece").copied().unwrap_or(0.0);
+    if (old_piece >= 0.5) == (piece >= 0.5) {
+        return;
+    }
+    let old_root = ch.root_key;
+    let root = if piece >= 0.5 { 60 } else { 36 };
+    let channel = ch.id;
+    ch.root_key = root;
+    for pat in &mut p.patterns {
+        if !pat
+            .notes
+            .iter()
+            .any(|n| n.channel == channel && n.key == old_root)
+        {
+            continue;
+        }
+        let pat = Arc::make_mut(pat);
+        for note in &mut pat.notes {
+            if note.channel == channel && note.key == old_root {
+                note.key = root;
+            }
+        }
+        pat.sort_notes();
     }
 }
 

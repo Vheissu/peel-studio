@@ -236,6 +236,10 @@ pub(crate) fn is_edited(desc: &DeviceDescriptor, preset: &Preset, dev: &DeviceIn
 /// back to its default, then the preset's values apply.
 pub(crate) fn load_preset(s: &mut Session, device: Id, desc: &DeviceDescriptor, preset: &Preset) {
     s.doc.edit(format!("Load preset {}", preset.name), |p| {
+        let old_piece = peel_session::find_device(p, device)
+            .and_then(|d| d.params.get("kit.piece"))
+            .copied()
+            .unwrap_or(0.0);
         if let Some(d) = peel_session::find_device_mut(p, device) {
             for pd in desc.params {
                 d.params.insert(pd.key.to_string(), pd.default);
@@ -245,6 +249,7 @@ pub(crate) fn load_preset(s: &mut Session, device: Id, desc: &DeviceDescriptor, 
             }
             d.preset = Some(preset.name.to_string());
         }
+        peel_session::update_recorded_kit_mapping(p, device, old_piece);
     });
 }
 
@@ -495,5 +500,42 @@ mod tests {
         assert!(is_edited(d, &presets[1], &find(&s)));
         s.doc.undo();
         assert!(!is_edited(d, &presets[1], &find(&s)));
+    }
+
+    #[test]
+    fn recorded_piece_changes_keep_steps_playable_and_undo_together() {
+        use peel_document::{Note, Time};
+        let mut s = Session::new_silent(peel_session::template::empty());
+        let channel = crate::rack::add_instrument(&mut s, "peel.drum.acoustic").unwrap();
+        let device = s.project().channel(channel).unwrap().device.id;
+        let step = Note::new(channel, Time::ZERO, Time::new(1, 6), 36, 0.87);
+        let other = Note::new(channel, Time::beats(1), Time::new(1, 8), 42, 0.42);
+        s.doc.edit("Add hits", |p| {
+            std::sync::Arc::make_mut(&mut p.patterns[0])
+                .notes
+                .extend([step, other])
+        });
+
+        // The Piece control moves only the step root; the note identity,
+        // timing, velocity and other pitched/GM notes stay as written.
+        s.set_param(device, "kit.piece", 2.0, 91);
+        s.doc.end_gesture();
+        assert_eq!(s.project().channel(channel).unwrap().root_key, 60);
+        let mut moved = step;
+        moved.key = 60;
+        assert_eq!(s.project().patterns[0].notes, vec![moved, other]);
+        s.doc.undo();
+        assert_eq!(s.project().channel(channel).unwrap().root_key, 36);
+        assert_eq!(s.project().patterns[0].notes[0], step);
+        s.doc.redo();
+
+        let d = desc("peel.drum.acoustic");
+        let full = &peel_devices::presets(d.type_id)[0];
+        load_preset(&mut s, device, d, full);
+        assert_eq!(s.project().channel(channel).unwrap().root_key, 36);
+        assert_eq!(s.project().patterns[0].notes, vec![step, other]);
+        s.doc.undo();
+        assert_eq!(s.project().channel(channel).unwrap().root_key, 60);
+        assert_eq!(s.project().patterns[0].notes[0], moved);
     }
 }

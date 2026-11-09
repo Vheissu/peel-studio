@@ -117,3 +117,47 @@ fn save_as_brings_managed_media_to_the_new_file() {
     assert!(reopened.warnings.is_empty(), "{:?}", reopened.warnings);
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn recorded_kit_templates_need_no_external_sample_files() {
+    let dir = temp_dir("recorded-kit-template");
+    let session = Session::new_silent(template::rock_metal());
+    let template = session
+        .save_template(&dir.join("Library"), "My metal kit")
+        .unwrap();
+    let loaded = peel_project::load_template(&template).unwrap();
+    assert!(loaded.project.assets.is_empty());
+    assert!(loaded.warnings.is_empty());
+    for (name, piece) in [
+        ("Kick", 1.0),
+        ("Snare", 2.0),
+        ("Hat", 3.0),
+        ("Crash", 6.0),
+        ("Toms", 8.0),
+    ] {
+        let channel = loaded
+            .project
+            .channels
+            .iter()
+            .find(|c| c.name == name)
+            .unwrap();
+        assert_eq!(channel.device.type_id, "peel.drum.acoustic");
+        assert_eq!(channel.device.params.get("kit.piece"), Some(&piece));
+        assert!(channel.device.sample.is_none());
+        assert!(peel_devices::create(&channel.device.type_id).is_some());
+    }
+    assert!(
+        loaded
+            .project
+            .patterns
+            .iter()
+            .any(|p| p.name == "Double kick")
+    );
+    assert!(
+        files(&dir)
+            .keys()
+            .all(|p| p.extension().is_none_or(|e| e != "wav")),
+        "embedded recordings aren't copied into every personal template"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
