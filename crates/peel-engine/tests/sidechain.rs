@@ -128,7 +128,7 @@ fn a_muted_key_track_still_keys() {
 }
 
 #[test]
-fn a_key_from_a_later_track_is_ignored() {
+fn a_key_from_a_later_track_is_rejected_without_replacing_the_working_graph() {
     let mut p = plan(TempoMap::constant(120.0), &[], 0, None, 16.0);
     let mut keyed = TrackRoute::new(Some(2), 0);
     keyed.inserts.push(5);
@@ -136,13 +136,18 @@ fn a_key_from_a_later_track_is_ignored() {
     p.tracks = vec![keyed, TrackRoute::new(Some(2), 1), TrackRoute::new(None, 2)];
     p.master = 2;
     p.audio = vec![region(0, 0.1), region(1, 0.3)];
-    let mut off = rig(p, None);
+    let mut working = p.clone();
+    working.tracks[0].keys.clear();
+    let mut off = rig(working, None);
+    let error = off.try_set_plan(Box::new(p)).unwrap_err();
+    assert!(error.contains("Sidechain routing"), "{error}");
     off.send(EngineCommand::InstallDevice {
         slot: 5,
         device: Box::new(KeyProbe),
     });
     off.send(EngineCommand::Play);
     let (left, _) = render_blocks(&mut off, BEAT * 2, 256);
-    // The probe runs unkeyed (silence), so only track 1 is heard.
+    // The previous valid graph remains active: the probe runs unkeyed
+    // (silence), so only track 1 is heard.
     assert!((left[BEAT] - 0.3).abs() < 1e-4, "{}", left[BEAT]);
 }
