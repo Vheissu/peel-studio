@@ -137,7 +137,10 @@ impl<S: Synth> Instrument<S> {
                 pitch,
                 pressure,
                 timbre,
-            } => self.synth.expression().set_voice(voice, pitch, pressure, timbre),
+            } => self
+                .synth
+                .expression()
+                .set_voice(voice, pitch, pressure, timbre),
             // Live controllers return to centre; a sequenced note keeps the
             // curve it is playing.
             EventKind::ResetExpression => self.synth.expression().reset_shared(),
@@ -168,7 +171,9 @@ impl<S: Synth> Instrument<S> {
             } = e.kind
                 && v == voice
             {
-                self.synth.expression().prime(voice, pitch, pressure, timbre);
+                self.synth
+                    .expression()
+                    .prime(voice, pitch, pressure, timbre);
             }
         }
     }
@@ -509,7 +514,6 @@ impl Vx {
             (self.tone * octaves * std::f32::consts::LN_2).exp()
         }
     }
-
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -553,7 +557,11 @@ impl Scoped {
         self.pitch = self.pitch_t;
         self.press = self.press_t;
         self.tone = self.tone_t;
-        self.ratio = if self.pitch == 0.0 { 1.0 } else { st_ratio(self.pitch) };
+        self.ratio = if self.pitch == 0.0 {
+            1.0
+        } else {
+            st_ratio(self.pitch)
+        };
     }
 
     fn settled(&self) -> bool {
@@ -814,7 +822,11 @@ impl Expression {
             for e in &mut self.scoped[..self.n] {
                 if e.pitch != e.pitch_t {
                     e.pitch = approach(e.pitch, e.pitch_t, self.k);
-                    e.ratio = if e.pitch == 0.0 { 1.0 } else { st_ratio(e.pitch) };
+                    e.ratio = if e.pitch == 0.0 {
+                        1.0
+                    } else {
+                        st_ratio(e.pitch)
+                    };
                 }
                 e.press = approach(e.press, e.press_t, self.k);
                 e.tone = approach(e.tone, e.tone_t, self.k);
