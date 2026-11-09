@@ -328,3 +328,141 @@ fn member_tracks_in_one_port_share_an_instrument_but_keep_separate_patterns() {
         -24.0,
     );
 }
+
+#[test]
+fn later_track_zone_setup_precedes_parallel_note_on_at_the_same_tick() {
+    let notes = TrackBuilder::new().note(0, 100, 1, 60, 100).build(None);
+    let setup = zone(TrackBuilder::new(), 0, 2)
+        .bend(0, 1, 4096)
+        .build(Some(100));
+    let i = import_smf(
+        &smf(Format::Parallel, 100, vec![notes, setup]),
+        &ImportOptions::default(),
+    )
+    .unwrap();
+    let p = &i.patterns[0];
+    let n = &p.notes[0];
+    assert_eq!(n.length, Time::BEAT);
+    near(at(p, n, Time::ZERO).pitch, 24.0);
+    assert_eq!(i.channels[0].source.midi_channel, 0);
+}
+
+#[test]
+fn repeated_parallel_zone_setup_does_not_cut_notes_but_same_track_reset_does() {
+    let first = zone(TrackBuilder::new(), 0, 2)
+        .note(0, 100, 1, 60, 100)
+        .build(None);
+    let second = zone(TrackBuilder::new(), 0, 2)
+        .note(0, 100, 2, 64, 100)
+        .build(None);
+    let i = import_smf(
+        &smf(Format::Parallel, 100, vec![first, second]),
+        &ImportOptions::default(),
+    )
+    .unwrap();
+    assert!(
+        i.patterns
+            .iter()
+            .flat_map(|p| &p.notes)
+            .all(|n| n.length == Time::BEAT)
+    );
+    for reset in [120, 6] {
+        let t = TrackBuilder::new().on(0, 1, 60, 100);
+        let t = if reset == 120 {
+            t.cc(0, 1, 120, 0)
+        } else {
+            t.cc(0, 0, 101, 0).cc(0, 0, 100, 6).cc(0, 0, 6, 2)
+        };
+        let i = import_smf(
+            &smf(
+                Format::SingleTrack,
+                100,
+                vec![t.off(100, 1, 60).build(None)],
+            ),
+            &ImportOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(i.patterns[0].notes[0].length, Time::new(1, 100));
+    }
+}
+
+#[test]
+fn range_changes_during_a_note_update_all_zone_members_and_accept_mcm_lsb() {
+    let t = zone(TrackBuilder::new(), 0, 2)
+        .cc(0, 0, 38, 0)
+        .bend(0, 1, 4096)
+        .bend(0, 2, 4096)
+        .on(0, 1, 60, 100)
+        .on(0, 2, 64, 100);
+    let t = sensitivity(t, 50, 1, 12, 0).off(100, 1, 60).off(100, 2, 64);
+    let i = import_smf(
+        &smf(Format::SingleTrack, 100, vec![t.build(None)]),
+        &ImportOptions::default(),
+    )
+    .unwrap();
+    let p = &i.patterns[0];
+    for n in &p.notes {
+        near(at(p, n, Time::new(3, 4)).pitch, 6.0);
+    }
+    assert!(
+        i.report.unsupported.is_empty(),
+        "{:?}",
+        i.report.unsupported
+    );
+}
+
+#[test]
+fn dense_controls_do_not_visit_thousands_of_unrelated_channel_notes() {
+    let mut t = TrackBuilder::new();
+    for i in 0..12_000 {
+        t = t
+            .on(0, 1, (i % 128) as u8, 100)
+            .off(1000, 1, (i % 128) as u8);
+    }
+    t = t.on(0, 0, 60, 100).off(1000, 0, 60);
+    for tick in 1..=800 {
+        t = t.bend(tick, 0, if tick % 2 == 0 { 4096 } else { -4096 });
+    }
+    let i = import_smf(
+        &smf(Format::SingleTrack, 100, vec![t.build(None)]),
+        &ImportOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(i.report.total_notes, 12_001);
+    assert_eq!(i.patterns[0].expression.len(), 1);
+}
+
+#[test]
+fn curves_whose_only_changes_are_after_shortened_gate_are_removed() {
+    let t = pressure(TrackBuilder::new().on(0, 0, 60, 100), 120, 0, 100).off(130, 0, 60);
+    let i = import_smf(
+        &smf(Format::SingleTrack, 100, vec![t.build(None)]),
+        &ImportOptions {
+            quantize: Quantize::StartsAndLengths(Time::BEAT),
+            ..ImportOptions::default()
+        },
+    )
+    .unwrap();
+    assert!(i.patterns[0].expression.is_empty());
+}
+
+#[test]
+fn poly_pressure_does_not_visit_other_pitches_on_the_same_channel() {
+    let mut t = TrackBuilder::new();
+    for i in 0..12_000 {
+        t = t
+            .on(0, 1, (i % 127) as u8, 100)
+            .off(1000, 1, (i % 127) as u8);
+    }
+    t = t.on(0, 1, 127, 100).off(1000, 1, 127);
+    for tick in 1..=800 {
+        t = poly(t, tick, 1, 127, if tick % 2 == 0 { 100 } else { 20 });
+    }
+    let i = import_smf(
+        &smf(Format::SingleTrack, 100, vec![t.build(None)]),
+        &ImportOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(i.report.total_notes, 12_001);
+    assert_eq!(i.patterns[0].expression.len(), 1);
+}

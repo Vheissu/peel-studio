@@ -2,6 +2,7 @@
 //! Type 1 tracks share their port's controls; type 2 sequences do not.
 use super::*;
 use peel_document::{ExpressionPoint, MAX_EXPRESSION_POINTS, NoteExpression};
+use std::collections::HashSet;
 
 const MAX_CONTROL_EVENTS: usize = 1_000_000;
 const MAX_REPLAY_WORK: usize = 8_000_000;
@@ -141,9 +142,8 @@ impl Default for ChannelState {
         }
     }
 }
+type NoteKey = (usize, usize);
 struct Active {
-    track: usize,
-    note: usize,
     released: bool,
     poly: Option<f32>,
 }
@@ -152,8 +152,9 @@ struct PortState {
     channels: [ChannelState; 16],
     lower: u8,
     upper: u8,
-    active: Vec<Active>,
-    active_index: HashMap<(usize, usize), usize>,
+    active: HashMap<NoteKey, Active>,
+    channel_notes: [HashSet<NoteKey>; 16],
+    key_notes: HashMap<(u8, u8), HashSet<NoteKey>>,
 }
 impl PortState {
     fn manager(&self, ch: u8) -> Option<u8> {
@@ -188,30 +189,66 @@ impl PortState {
                 .manager
                 .is_some_and(|m| self.channels[usize::from(m)].pedal)
     }
-    fn finish(&mut self, at: usize, tick: u64, scans: &mut [TrackScan]) {
-        let a = self.active.swap_remove(at);
-        self.active_index.remove(&(a.track, a.note));
-        if let Some(moved) = self.active.get(at) {
-            self.active_index.insert((moved.track, moved.note), at);
+    fn finish(&mut self, key: NoteKey, tick: u64, scans: &mut [TrackScan]) {
+        self.active.remove(&key);
+        let note = &mut scans[key.0].notes[key.1];
+        self.channel_notes[usize::from(note.chan)].remove(&key);
+        if let Some(bucket) = self.key_notes.get_mut(&(note.chan, note.key)) {
+            bucket.remove(&key);
         }
-        let note = &mut scans[a.track].notes[a.note];
         note.end = tick.max(note.start + 1);
+    }
+    fn affected_channels(&self, channel: u8) -> [bool; 16] {
+        std::array::from_fn(|ch| {
+            ch == usize::from(channel) || self.manager(ch as u8) == Some(channel)
+        })
+    }
+    fn affected_notes(
+        &self,
+        channels: [bool; 16],
+        pitch: Option<u8>,
+        work: &mut usize,
+    ) -> Result<Vec<NoteKey>> {
+        let buckets: Vec<_> = channels
+            .iter()
+            .enumerate()
+            .filter_map(|(ch, include)| {
+                if !*include {
+                    None
+                } else if let Some(pitch) = pitch {
+                    self.key_notes.get(&(ch as u8, pitch))
+                } else {
+                    Some(&self.channel_notes[ch])
+                }
+            })
+            .collect();
+        let count: usize = buckets.iter().map(|notes| notes.len()).sum();
+        *work += count;
+        if *work > MAX_REPLAY_WORK {
+            return Err(MidiError::TooLarge(
+                "performance replay exceeds 8000000 note updates".into(),
+            ));
+        }
+        let mut notes = Vec::with_capacity(count);
+        for bucket in buckets {
+            notes.extend(bucket.iter().copied());
+        }
+        Ok(notes)
     }
     fn update(
         &mut self,
+        keys: &[NoteKey],
         tick: u64,
         scans: &mut [TrackScan],
-        work: &mut usize,
         points: &mut usize,
+        clipped: &mut bool,
     ) -> Result<()> {
-        for a in &self.active {
-            *work += 1;
-            if *work > MAX_REPLAY_WORK {
-                return Err(MidiError::TooLarge(
-                    "performance replay exceeds 8000000 note updates".into(),
-                ));
-            }
-            let note = &mut scans[a.track].notes[a.note];
+        for &key in keys {
+            let Some(a) = self.active.get(&key) else {
+                continue;
+            };
+            let note = &mut scans[key.0].notes[key.1];
+            *clipped |= self.raw_pitch(note).abs() > 120.0;
             let value = self.snapshot(note, a.poly);
             *points += note.expression.push(note.start, tick, value)?;
             check_points(*points)?;
@@ -271,6 +308,7 @@ struct Event {
     order: usize,
     port: u8,
     kind: Kind,
+    phase: u8,
 }
 
 pub(super) fn apply(
@@ -288,6 +326,7 @@ pub(super) fn apply(
                 order: n.start_order,
                 port: n.port,
                 kind: Kind::Start(i),
+                phase: 0,
             });
             events.push(Event {
                 tick: n.end,
@@ -295,6 +334,7 @@ pub(super) fn apply(
                 order: n.end_order,
                 port: n.port,
                 kind: Kind::End(i),
+                phase: 0,
             });
         }
         for &c in &scan.expression_events {
@@ -304,10 +344,27 @@ pub(super) fn apply(
                 order: c.order,
                 port: c.port,
                 kind: Kind::Control(c),
+                phase: 0,
             });
         }
     }
     events.sort_by_key(|e| (e.tick, e.track, e.order));
+    // Parallel tracks have no total order within a tick. Apply each track's
+    // prefix before its first note-on as setup before starting notes in any
+    // track. Keep the entire prefix (including note-offs) in original order,
+    // and never promote a reset written after a note-on in its own track.
+    let mut track_tick = None;
+    let mut started = false;
+    for event in &mut events {
+        let here = (event.tick, event.track);
+        if track_tick != Some(here) {
+            track_tick = Some(here);
+            started = false;
+        }
+        started |= matches!(event.kind, Kind::Start(_));
+        event.phase = u8::from(started);
+    }
+    events.sort_by_key(|e| (e.tick, e.phase, e.track, e.order));
     let mut ports: BTreeMap<(usize, u8), PortState> = BTreeMap::new();
     let mut work = 0usize;
     let mut points = 0usize;
@@ -319,29 +376,16 @@ pub(super) fn apply(
             0
         };
         let state = ports.entry((sequence, e.port)).or_default();
-        if matches!(e.kind, Kind::Control(_))
-            || (matches!(e.kind, Kind::Start(_)) && opts.sustain == SustainPolicy::ExtendNotes)
-        {
-            work += state.active.len();
-            if work > MAX_REPLAY_WORK {
-                return Err(MidiError::TooLarge(
-                    "performance replay exceeds 8000000 note updates".into(),
-                ));
-            }
-        }
         match e.kind {
             Kind::Start(index) => {
                 let chan = scans[e.track].notes[index].chan;
                 let key = scans[e.track].notes[index].key;
                 if opts.sustain == SustainPolicy::ExtendNotes {
-                    let mut i = 0;
-                    while i < state.active.len() {
-                        let a = &state.active[i];
-                        let old = &scans[a.track].notes[a.note];
-                        if a.released && old.chan == chan && old.key == key {
-                            state.finish(i, e.tick, scans);
-                        } else {
-                            i += 1;
+                    let mask = std::array::from_fn(|ch| ch == usize::from(chan));
+                    for old_key in state.affected_notes(mask, Some(key), &mut work)? {
+                        let old = &scans[old_key.0].notes[old_key.1];
+                        if state.active[&old_key].released && old.key == key {
+                            state.finish(old_key, e.tick, scans);
                         }
                     }
                 }
@@ -351,47 +395,52 @@ pub(super) fn apply(
                 let value = state.snapshot(note, None);
                 points += note.expression.push(note.start, e.tick, value)?;
                 check_points(points)?;
+                let key = (e.track, index);
+                state.channel_notes[usize::from(note.chan)].insert(key);
                 state
-                    .active_index
-                    .insert((e.track, index), state.active.len());
-                state.active.push(Active {
-                    track: e.track,
-                    note: index,
-                    released: false,
-                    poly: None,
-                });
+                    .key_notes
+                    .entry((note.chan, note.key))
+                    .or_default()
+                    .insert(key);
+                state.active.insert(
+                    key,
+                    Active {
+                        released: false,
+                        poly: None,
+                    },
+                );
             }
             Kind::End(index) => {
-                if let Some(&i) = state.active_index.get(&(e.track, index)) {
+                let key = (e.track, index);
+                if state.active.contains_key(&key) {
                     if opts.sustain == SustainPolicy::ExtendNotes
                         && state.pedal(&scans[e.track].notes[index])
                     {
-                        state.active[i].released = true;
+                        state.active.get_mut(&key).unwrap().released = true;
                     } else {
-                        state.finish(i, e.tick, scans);
+                        state.finish(key, e.tick, scans);
                     }
                 }
             }
             Kind::Control(c) => {
                 let ci = usize::from(c.channel);
+                let mut affected = state.affected_channels(c.channel);
                 let mut update = true;
+                let mut finish = None;
+                let mut release_held = false;
+                let mut clear_poly = false;
+                let mut poly = None;
                 match c.message {
                     MidiMessage::PitchBend { bend } => {
-                        let v = i32::from(bend.0.as_int()) - 8192;
-                        state.channels[ci].bend = v as f32 / if v >= 0 { 8191.0 } else { 8192.0 };
+                        let value = i32::from(bend.0.as_int()) - 8192;
+                        state.channels[ci].bend =
+                            value as f32 / if value >= 0 { 8191.0 } else { 8192.0 };
                     }
                     MidiMessage::ChannelAftertouch { vel } => {
                         state.channels[ci].pressure = f32::from(vel.as_int()) / 127.0
                     }
                     MidiMessage::Aftertouch { key, vel } => {
-                        for a in &mut state.active {
-                            let n = &scans[a.track].notes[a.note];
-                            if (n.chan == c.channel || n.manager == Some(c.channel))
-                                && n.key == key.as_int()
-                            {
-                                a.poly = Some(f32::from(vel.as_int()) / 127.0);
-                            }
-                        }
+                        poly = Some((key.as_int(), f32::from(vel.as_int()) / 127.0))
                     }
                     MidiMessage::Controller { controller, value } => {
                         let cc = controller.as_int();
@@ -402,9 +451,13 @@ pub(super) fn apply(
                                     f32::from(value) / 128.0
                                 } else {
                                     0.5 + f32::from(value - 64) / 126.0
-                                };
+                                }
                             }
-                            64 => state.channels[ci].pedal = value >= 64,
+                            64 => {
+                                state.channels[ci].pedal = value >= 64;
+                                release_held = true;
+                                update = false;
+                            }
                             101 => {
                                 state.channels[ci].rpn[0] = value;
                                 update = false;
@@ -429,25 +482,25 @@ pub(super) fn apply(
                                         };
                                         channel.range = range;
                                         if let Some(manager) = state.manager(c.channel) {
-                                            for ch in 0..16u8 {
-                                                if state.manager(ch) == Some(manager) {
-                                                    state.channels[usize::from(ch)].range = range;
+                                            affected = std::array::from_fn(|ch| {
+                                                state.manager(ch as u8) == Some(manager)
+                                            });
+                                            for (ch, include) in affected.iter().enumerate() {
+                                                if *include {
+                                                    state.channels[ch].range = range;
                                                 }
                                             }
                                         }
                                     }
-                                    [0, 6] if cc == 6 && matches!(c.channel, 0 | 15) => {
-                                        let reset = state.configure(c.channel, value);
-                                        let mut i = 0;
-                                        while i < state.active.len() {
-                                            let a = &state.active[i];
-                                            let n = &scans[a.track].notes[a.note];
-                                            if reset[usize::from(n.chan)] {
-                                                state.finish(i, e.tick, scans);
-                                            } else {
-                                                i += 1;
-                                            }
+                                    [0, 6] if matches!(c.channel, 0 | 15) => {
+                                        if cc == 6 {
+                                            affected = state.configure(c.channel, value);
+                                            // MCM does not deselect RPN 6. Its optional data LSB
+                                            // is accepted but has no effect on the member count.
+                                            state.channels[ci].rpn = [0, 6];
+                                            finish = Some(true);
                                         }
+                                        update = false;
                                     }
                                     _ => {
                                         ctx.skip(controller_name(cc));
@@ -456,61 +509,53 @@ pub(super) fn apply(
                                 }
                             }
                             121 => {
-                                let ch = &mut state.channels[ci];
-                                ch.bend = 0.0;
-                                ch.pressure = 0.0;
-                                ch.timbre = 0.5;
-                                ch.pedal = false;
-                                ch.rpn = [127; 2];
-                                for a in &mut state.active {
-                                    let n = &scans[a.track].notes[a.note];
-                                    if n.chan == c.channel || n.manager == Some(c.channel) {
-                                        a.poly = None;
-                                    }
-                                }
+                                let channel = &mut state.channels[ci];
+                                channel.bend = 0.0;
+                                channel.pressure = 0.0;
+                                channel.timbre = 0.5;
+                                channel.pedal = false;
+                                channel.rpn = [127; 2];
+                                clear_poly = true;
+                                release_held = true;
                             }
                             120 | 123 => {
-                                let mut i = 0;
-                                while i < state.active.len() {
-                                    let a = &state.active[i];
-                                    let n = &scans[a.track].notes[a.note];
-                                    if n.chan == c.channel || n.manager == Some(c.channel) {
-                                        if cc == 123
-                                            && opts.sustain == SustainPolicy::ExtendNotes
-                                            && state.pedal(n)
-                                        {
-                                            state.active[i].released = true;
-                                            i += 1;
-                                        } else {
-                                            state.finish(i, e.tick, scans);
-                                        }
-                                    } else {
-                                        i += 1;
-                                    }
-                                }
+                                finish = Some(cc == 120);
+                                update = false;
                             }
                             _ => update = false,
-                        }
-                        if matches!(cc, 64 | 121) {
-                            let mut i = 0;
-                            while i < state.active.len() {
-                                let a = &state.active[i];
-                                if a.released && !state.pedal(&scans[a.track].notes[a.note]) {
-                                    state.finish(i, e.tick, scans);
-                                } else {
-                                    i += 1;
-                                }
-                            }
                         }
                     }
                     _ => update = false,
                 }
-                if update {
-                    for a in &state.active {
-                        let n = &scans[a.track].notes[a.note];
-                        clipped_pitch |= state.raw_pitch(n).abs() > 120.0;
+                if update || finish.is_some() || release_held {
+                    let keys =
+                        state.affected_notes(affected, poly.map(|(key, _)| key), &mut work)?;
+                    for &key in &keys {
+                        let note = &scans[key.0].notes[key.1];
+                        let pedal = opts.sustain == SustainPolicy::ExtendNotes && state.pedal(note);
+                        if let Some(force) = finish {
+                            if force || !pedal {
+                                state.finish(key, e.tick, scans);
+                                continue;
+                            }
+                            state.active.get_mut(&key).unwrap().released = true;
+                        }
+                        let active = state.active.get_mut(&key).unwrap();
+                        if clear_poly {
+                            active.poly = None;
+                        }
+                        if let Some((poly_key, value)) = poly
+                            && note.key == poly_key
+                        {
+                            active.poly = Some(value);
+                        }
+                        if release_held && active.released && !pedal {
+                            state.finish(key, e.tick, scans);
+                        }
                     }
-                    state.update(e.tick, scans, &mut work, &mut points)?;
+                    if update {
+                        state.update(&keys, e.tick, scans, &mut points, &mut clipped_pitch)?;
+                    }
                 }
             }
         }
@@ -521,8 +566,9 @@ pub(super) fn apply(
         } else {
             scans.iter().map(|s| s.end_tick).max().unwrap_or(0)
         };
-        while !state.active.is_empty() {
-            state.finish(0, end, scans);
+        let keys: Vec<_> = state.active.keys().copied().collect();
+        for key in keys {
+            state.finish(key, end, scans);
         }
     }
     if clipped_pitch {
