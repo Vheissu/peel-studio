@@ -1,12 +1,25 @@
-//! `peel.drum.hat`: a bank of six band-limited square oscillators at
-//! inharmonic ratios through band-pass and high-pass filters, mixed with
-//! filtered noise. Short decays give closed hats, long decays give open hats.
+//! `peel.drum.hat`: hats, shakers and cymbals.
+//!
+//! The core is the classic metallic bank: six band-limited square oscillators
+//! at inharmonic ratios through band-pass and high-pass filters, mixed with
+//! high-passed noise. Short decays give closed hats, long decays give open
+//! hats. On top of that:
+//!
+//! * a three-band noise "wash" with a separate decay per band (the highs die
+//!   first, as on a real cymbal), slow random amplitude shimmer, and a strike
+//!   transient, for crashes, splashes and rides;
+//! * a few inharmonic sine partials for the stick "ping" of a ride;
+//! * slow random detune of the oscillator bank so long tails never sit on a
+//!   static tone;
+//! * decorrelated left/right noise for width, with the metal kept central.
+//!
 //! Retriggering chokes the previous hit; optionally a note-off does too.
+//! Harder hits are brighter and have a stronger stick transient.
 
 use peel_dsp::envelope::Decay;
-use peel_dsp::filter::Svf;
+use peel_dsp::filter::{OnePole, Svf};
 use peel_dsp::noise::Noise;
-use peel_dsp::osc::{Osc, Waveform};
+use peel_dsp::osc::{Osc, Waveform, fast_sin};
 use peel_dsp::param::{ParamDescriptor, Unit};
 use peel_dsp::util::db_to_gain;
 use peel_dsp::voice::StealPolicy;
@@ -26,11 +39,25 @@ const CHOKE: ParamId = 6;
 const GATE: ParamId = 7;
 const VELOCITY: ParamId = 8;
 const LEVEL: ParamId = 9;
+const WASH: ParamId = 10;
+const SHIMMER: ParamId = 11;
+const PING: ParamId = 12;
+const BLOOM: ParamId = 13;
+const WIDTH: ParamId = 14;
 
 /// Square-wave frequencies (Hz) of the metallic bank.
 const BANK: [f32; 6] = [205.3, 304.4, 369.6, 522.7, 540.0, 800.0];
+/// Wash band centres relative to the colour control, and decay multipliers.
+const WASH_CENTRE: [f32; 3] = [0.42, 0.78, 1.3];
+const WASH_DECAY: [f32; 3] = [1.0, 0.72, 0.48];
+const WASH_BLOOM: [f32; 3] = [1.0, 0.7, 0.4];
+/// Ride "ping" partials (Hz at no transposition) and their levels.
+const PING_HZ: [f32; 4] = [2_290.0, 3_425.0, 4_950.0, 6_210.0];
+const PING_AMP: [f32; 4] = [1.0, 0.8, 0.55, 0.4];
+/// Cut-offs (Hz) of the slow random modulators; the last one detunes the bank.
+const MOD_HZ: [f32; 4] = [7.0, 11.0, 16.0, 5.0];
 
-static PARAMS: [ParamDescriptor; 9] = [
+static PARAMS: [ParamDescriptor; 14] = [
     ParamDescriptor::linear(
         TUNE,
         "tone.tune",
@@ -71,14 +98,54 @@ static PARAMS: [ParamDescriptor; 9] = [
         6_500.0,
         Unit::Hertz,
     ),
+    ParamDescriptor::linear(
+        WASH,
+        "tone.wash",
+        "Wash",
+        "Tone",
+        0.0,
+        1.0,
+        0.0,
+        Unit::Percent,
+    ),
+    ParamDescriptor::linear(
+        SHIMMER,
+        "tone.shimmer",
+        "Shimmer",
+        "Tone",
+        0.0,
+        1.0,
+        0.0,
+        Unit::Percent,
+    ),
+    ParamDescriptor::linear(
+        PING,
+        "tone.ping",
+        "Ping",
+        "Tone",
+        0.0,
+        1.0,
+        0.0,
+        Unit::Percent,
+    ),
     ParamDescriptor::log(
         DECAY,
         "amp.decay",
         "Decay",
         "Amp",
         0.015,
-        1.5,
+        4.0,
         0.08,
+        Unit::Seconds,
+    ),
+    ParamDescriptor::log(
+        BLOOM,
+        "amp.bloom",
+        "Bloom",
+        "Amp",
+        0.000_2,
+        0.05,
+        0.000_2,
         Unit::Seconds,
     ),
     ParamDescriptor::log(
@@ -92,6 +159,16 @@ static PARAMS: [ParamDescriptor; 9] = [
         Unit::Seconds,
     ),
     ParamDescriptor::toggle(GATE, "amp.gate", "Cut On Release", "Amp", false),
+    ParamDescriptor::linear(
+        WIDTH,
+        "out.width",
+        "Width",
+        "Output",
+        0.0,
+        1.0,
+        0.15,
+        Unit::Percent,
+    ),
     ParamDescriptor::linear(
         VELOCITY,
         "out.velocity",
@@ -117,14 +194,14 @@ static PARAMS: [ParamDescriptor; 9] = [
 pub static DESC: DeviceDescriptor = DeviceDescriptor {
     type_id: "peel.drum.hat",
     name: "Hat",
-    description: "Metallic hi-hat, closed to open, with choke on retrigger",
+    description: "Hi-hat, shaker and cymbal, closed to crash, with choke on retrigger",
     category: "Drums",
     kind: DeviceKind::Instrument,
     version: 1,
     params: &PARAMS,
 };
 
-pub static PRESETS: [Preset; 6] = [
+pub static PRESETS: [Preset; 11] = [
     Preset {
         name: "Closed",
         params: &[
@@ -132,9 +209,14 @@ pub static PRESETS: [Preset; 6] = [
             ("tone.metal", 0.65),
             ("tone.color", 9_000.0),
             ("tone.bright", 6_500.0),
+            ("tone.wash", 0.0),
+            ("tone.shimmer", 0.0),
+            ("tone.ping", 0.0),
             ("amp.decay", 0.08),
+            ("amp.bloom", 0.000_2),
             ("amp.choke", 0.006),
             ("amp.gate", 0.0),
+            ("out.width", 0.15),
             ("out.velocity", 0.7),
             ("out.level", 0.0),
         ],
@@ -145,6 +227,8 @@ pub static PRESETS: [Preset; 6] = [
             ("amp.decay", 0.55),
             ("tone.metal", 0.75),
             ("tone.bright", 6_000.0),
+            ("tone.wash", 0.25),
+            ("tone.shimmer", 0.25),
         ],
     },
     Preset {
@@ -172,6 +256,8 @@ pub static PRESETS: [Preset; 6] = [
             ("tone.metal", 0.3),
             ("tone.color", 12_000.0),
             ("tone.bright", 7_000.0),
+            ("tone.wash", 0.35),
+            ("tone.shimmer", 0.4),
         ],
     },
     Preset {
@@ -182,6 +268,71 @@ pub static PRESETS: [Preset; 6] = [
             ("tone.metal", 0.8),
             ("tone.color", 5_500.0),
             ("tone.bright", 3_500.0),
+        ],
+    },
+    Preset {
+        name: "Shaker",
+        params: &[
+            ("tone.metal", 0.0),
+            ("tone.color", 7_500.0),
+            ("tone.bright", 4_500.0),
+            ("amp.decay", 0.09),
+            ("amp.bloom", 0.006),
+            ("out.width", 0.4),
+            ("out.velocity", 0.6),
+        ],
+    },
+    Preset {
+        name: "Crash",
+        params: &[
+            ("tone.metal", 0.3),
+            ("tone.color", 8_500.0),
+            ("tone.bright", 4_200.0),
+            ("tone.wash", 1.0),
+            ("tone.shimmer", 0.7),
+            ("amp.decay", 2.6),
+            ("amp.bloom", 0.007),
+            ("out.width", 0.45),
+            ("out.velocity", 0.5),
+        ],
+    },
+    Preset {
+        name: "Ride",
+        params: &[
+            ("tone.metal", 0.2),
+            ("tone.color", 7_000.0),
+            ("tone.bright", 3_500.0),
+            ("tone.wash", 0.5),
+            ("tone.shimmer", 0.35),
+            ("tone.ping", 0.8),
+            ("amp.decay", 1.8),
+            ("amp.bloom", 0.002),
+            ("out.width", 0.4),
+            ("out.velocity", 0.6),
+        ],
+    },
+    Preset {
+        name: "Splash",
+        params: &[
+            ("tone.metal", 0.35),
+            ("tone.color", 11_000.0),
+            ("tone.bright", 5_500.0),
+            ("tone.wash", 0.9),
+            ("tone.shimmer", 0.5),
+            ("amp.decay", 0.7),
+            ("amp.bloom", 0.003),
+            ("out.width", 0.4),
+        ],
+    },
+    Preset {
+        name: "Trap Hat",
+        params: &[
+            ("tone.metal", 0.55),
+            ("tone.color", 12_000.0),
+            ("tone.bright", 8_500.0),
+            ("amp.decay", 0.035),
+            ("amp.choke", 0.003),
+            ("out.width", 0.1),
         ],
     },
 ];
@@ -195,14 +346,41 @@ struct HatVoice {
     active: bool,
     osc: [Osc; 6],
     dt: [f32; 6],
-    noise: Noise,
     band: Svf,
     high: Svf,
-    noise_high: Svf,
+    // Noise: one common source and one per channel, mixed by the width.
+    common: Noise,
+    noise_l: Noise,
+    noise_r: Noise,
+    hiss_l: Svf,
+    hiss_r: Svf,
+    wash_l: [Svf; 3],
+    wash_r: [Svf; 3],
     fast: Decay,
     slow: Decay,
+    strike: Decay,
+    band_env: [Decay; 3],
+    // Slow random modulation.
+    mod_noise: Noise,
+    mod_lp: [OnePole; 4],
+    mod_gain: [f32; 4],
+    shimmer: f32,
+    // Ride ping.
+    ping_phase: [f32; 4],
+    ping_dt: [f32; 4],
+    ping_env: Decay,
+    ping_gain: f32,
+    // Stick transient.
+    air: [OnePole; 4],
+    tick_hp: OnePole,
+    tick_env: f32,
+    tick_coef: f32,
+    tick_gain: f32,
     metal_gain: f32,
     noise_gain: f32,
+    wash_gain: f32,
+    mix_common: f32,
+    mix_side: f32,
     gain: f32,
     fade: Fade,
     choke_ms: f32,
@@ -214,14 +392,37 @@ impl HatVoice {
             active: false,
             osc: [Osc::new(); 6],
             dt: [0.0; 6],
-            noise: Noise::new(1),
             band: Svf::new(),
             high: Svf::new(),
-            noise_high: Svf::new(),
+            common: Noise::new(1),
+            noise_l: Noise::new(2),
+            noise_r: Noise::new(3),
+            hiss_l: Svf::new(),
+            hiss_r: Svf::new(),
+            wash_l: [Svf::new(); 3],
+            wash_r: [Svf::new(); 3],
             fast: Decay::new(),
             slow: Decay::new(),
+            strike: Decay::new(),
+            band_env: [Decay::new(); 3],
+            mod_noise: Noise::new(4),
+            mod_lp: [OnePole::new(); 4],
+            mod_gain: [1.0; 4],
+            shimmer: 0.0,
+            ping_phase: [0.0; 4],
+            ping_dt: [0.0; 4],
+            ping_env: Decay::new(),
+            ping_gain: 0.0,
+            air: [OnePole::new(); 4],
+            tick_hp: OnePole::new(),
+            tick_env: 0.0,
+            tick_coef: 0.0,
+            tick_gain: 0.0,
             metal_gain: 1.0,
             noise_gain: 1.0,
+            wash_gain: 0.0,
+            mix_common: 0.84,
+            mix_side: 0.55,
             gain: 1.0,
             fade: Fade::new(),
             choke_ms: 6.0,
@@ -229,20 +430,91 @@ impl HatVoice {
     }
 
     #[inline]
-    fn tick(&mut self) -> f32 {
+    #[allow(clippy::needless_range_loop)]
+    fn tick(&mut self) -> (f32, f32) {
+        // Slow unit-RMS random modulators.
+        let mut m = [0.0f32; 4];
+        for (k, slot) in m.iter_mut().enumerate() {
+            *slot = self.mod_lp[k].low(self.mod_noise.white()) * self.mod_gain[k];
+        }
+
+        // Metal: the bank drifts a few cents so a long tail is never a
+        // static comb of tones.
+        let depth = 0.003 + 0.004 * self.shimmer;
         let mut bank = 0.0;
-        for (o, &dt) in self.osc.iter_mut().zip(self.dt.iter()) {
-            bank += o.tick(Waveform::Square, dt, 0.5);
+        for (i, (o, &dt)) in self.osc.iter_mut().zip(self.dt.iter()).enumerate() {
+            // Each oscillator drifts on its own modulator, so the comb of
+            // partials slowly shifts instead of sitting still.
+            let det = 1.0 + depth * m[(i + 1) % 4];
+            bank += o.tick(Waveform::Square, dt * det, 0.5);
         }
         let metal = self.high.tick(self.band.tick(bank).band_unity).high;
-        let hiss = self.noise_high.tick(self.noise.white()).high;
         let env = 0.55 * self.fast.tick() + 0.45 * self.slow.tick();
-        let out = (metal * self.metal_gain + hiss * self.noise_gain) * env;
-        let out = out * self.gain * self.fade.tick();
-        if self.fade.is_done() || self.slow.is_below(1.0e-4) {
+
+        // Noise: common part plus decorrelated sides.
+        let c = self.common.white() * self.mix_common;
+        let nl = c + self.noise_l.white() * self.mix_side;
+        let nr = c + self.noise_r.white() * self.mix_side;
+        let hiss_l = self.hiss_l.tick(nl).high;
+        let hiss_r = self.hiss_r.tick(nr).high;
+
+        let mono = metal * self.metal_gain * env;
+        let mut l = mono + hiss_l * self.noise_gain * env;
+        let mut r = mono + hiss_r * self.noise_gain * env;
+
+        // Wash: per-band decays and shimmer.
+        let strike = 1.0 + 1.2 * self.strike.tick();
+        if self.wash_gain > 0.0 {
+            for k in 0..3 {
+                let e = self.band_env[k].tick() * strike;
+                let depth = (1.0 + 0.6 * self.shimmer * m[k]).clamp(0.15, 2.5);
+                let a = e * depth * self.wash_gain;
+                l += self.wash_l[k].tick(nl).band_unity * a;
+                r += self.wash_r[k].tick(nr).band_unity * a;
+            }
+        }
+
+        // Ping: inharmonic sine partials.
+        if self.ping_gain > 0.0 {
+            let pe = self.ping_env.tick() * self.ping_gain;
+            let mut p = 0.0;
+            for k in 0..4 {
+                self.ping_phase[k] += self.ping_dt[k];
+                if self.ping_phase[k] >= 1.0 {
+                    self.ping_phase[k] -= 1.0;
+                }
+                p += fast_sin(self.ping_phase[k]) * PING_AMP[k];
+            }
+            l += p * pe;
+            r += p * pe;
+        }
+
+        // Stick transient.
+        if self.tick_env > 1.0e-3 {
+            let t = self.tick_hp.high(c) * self.tick_env * self.tick_gain;
+            self.tick_env *= self.tick_coef;
+            l += t;
+            r += t;
+        }
+
+        // Gentle roll-off above ~15 kHz (two poles per channel), as on a
+        // recorded cymbal, so nothing reaches the Nyquist region.
+        let l = {
+            let t = self.air[0].low(l);
+            self.air[1].low(t)
+        };
+        let r = {
+            let t = self.air[2].low(r);
+            self.air[3].low(t)
+        };
+        let g = self.gain * self.fade.tick();
+        let done = self.slow.is_below(1.0e-4)
+            && (self.wash_gain == 0.0 || self.band_env[0].is_below(1.0e-4))
+            && (self.ping_gain == 0.0 || self.ping_env.is_below(1.0e-4));
+        if self.fade.is_done() || done {
             self.active = false;
         }
-        out
+        (l * g, r * g)
     }
 }
 
@@ -271,7 +543,12 @@ pub(crate) struct Hat {
     metal: f32,
     color: f32,
     bright: f32,
+    wash: f32,
+    shimmer: f32,
+    ping: f32,
     decay: f32,
+    bloom: f32,
+    width: f32,
     choke_ms: f32,
     gate: bool,
     vel_sens: f32,
@@ -291,7 +568,12 @@ impl Hat {
             metal: 0.65,
             color: 9_000.0,
             bright: 6_500.0,
+            wash: 0.0,
+            shimmer: 0.0,
+            ping: 0.0,
             decay: 0.08,
+            bloom: 0.000_2,
+            width: 0.15,
             choke_ms: 6.0,
             gate: false,
             vel_sens: 0.7,
@@ -301,7 +583,7 @@ impl Hat {
     }
 
     fn derive(&mut self) {
-        self.level_gain = db_to_gain(self.level.get()) * 0.75;
+        self.level_gain = db_to_gain(self.level.get()) * 0.68;
     }
 
     fn control(&mut self) {
@@ -329,7 +611,12 @@ impl Synth for Hat {
             METAL => self.metal = v,
             COLOR => self.color = v,
             BRIGHT => self.bright = v,
+            WASH => self.wash = v,
+            SHIMMER => self.shimmer = v,
+            PING => self.ping = v,
             DECAY => self.decay = v,
+            BLOOM => self.bloom = v,
+            WIDTH => self.width = v,
             CHOKE => {
                 self.choke_ms = v * 1000.0;
                 for voice in &mut self.pool.voices {
@@ -346,13 +633,17 @@ impl Synth for Hat {
         }
     }
 
+    #[allow(clippy::needless_range_loop)]
     fn note_on(&mut self, key: u8, velocity: f32, id: u32) {
         let slot = self.pool.begin(key, id);
         self.hits = self.hits.wrapping_add(1);
         let sr = self.sr;
         let ratio = st_ratio(self.tune + key_offset(key));
-        let bright = (self.bright * ratio.sqrt() * lerp(0.75, 1.0, velocity)).min(0.42 * sr);
+        // Harder hits are brighter.
+        let vb = lerp(0.65, 1.1, velocity);
+        let bright = (self.bright * ratio.sqrt() * vb).min(0.42 * sr);
         let color = (self.color * ratio.sqrt()).min(0.42 * sr);
+        let hits = self.hits;
         let v = &mut self.pool.voices[slot];
         v.active = true;
         for (i, &hz) in BANK.iter().enumerate() {
@@ -360,19 +651,73 @@ impl Synth for Hat {
             // Fixed, spread phases so every hit has the same metallic attack.
             v.osc[i] = Osc::with_phase((i as f32 * 0.37 + 0.11).fract());
         }
-        v.noise.reseed(self.hits);
+        v.common.reseed(hits);
+        v.noise_l.reseed(hits.wrapping_mul(2).wrapping_add(5_000));
+        v.noise_r.reseed(hits.wrapping_mul(2).wrapping_add(5_001));
+        v.mod_noise.reseed(hits.wrapping_add(9_000));
         v.band.set_q(color, 1.4, sr);
         v.band.reset();
         v.high.set_q(bright, 0.8, sr);
         v.high.reset();
-        v.noise_high.set_q(bright * 0.8, 0.7, sr);
-        v.noise_high.reset();
+        for f in [&mut v.hiss_l, &mut v.hiss_r] {
+            f.set_q(bright * 0.8, 0.7, sr);
+            f.reset();
+        }
+        let atk = self.bloom;
         v.fast.set_t60(self.decay * 0.3, sr);
-        v.fast.trigger(1.0, 0.000_2, sr);
+        v.fast.trigger(1.0, atk.min(0.004), sr);
         v.slow.set_t60(self.decay, sr);
-        v.slow.trigger(1.0, 0.000_2, sr);
+        v.slow.trigger(1.0, atk, sr);
+
+        // Wash bands.
+        v.strike.set_t60((self.decay * 0.1).clamp(0.02, 0.2), sr);
+        v.strike.trigger(1.0, 0.000_2, sr);
+        for k in 0..3 {
+            let hz = (self.color * WASH_CENTRE[k] * ratio.sqrt() * vb.sqrt()).min(0.42 * sr);
+            for f in [&mut v.wash_l[k], &mut v.wash_r[k]] {
+                f.set_q(hz, 0.9, sr);
+                f.reset();
+            }
+            v.band_env[k].set_t60((self.decay * WASH_DECAY[k]).max(0.02), sr);
+            v.band_env[k].trigger(1.0, atk * WASH_BLOOM[k], sr);
+        }
+        v.wash_gain = self.wash * 0.15 * lerp(0.7, 1.0, velocity);
+
+        // Slow random modulation, scaled to unit RMS.
+        for k in 0..4 {
+            let a = 1.0 - (-std::f32::consts::TAU * MOD_HZ[k] / sr).exp();
+            v.mod_lp[k].set_cutoff(MOD_HZ[k], sr);
+            v.mod_lp[k].reset();
+            v.mod_gain[k] = 1.0 / (0.577 * (a / (2.0 - a)).sqrt());
+        }
+        v.shimmer = self.shimmer;
+
+        // Ping.
+        for k in 0..4 {
+            let f = (PING_HZ[k] * ratio).min(0.42 * sr);
+            v.ping_dt[k] = f / sr;
+            v.ping_phase[k] = 0.0;
+        }
+        v.ping_env.set_t60((self.decay * 0.55).max(0.05), sr);
+        v.ping_env.trigger(1.0, 0.000_3, sr);
+        v.ping_gain = self.ping * 0.22 * lerp(0.6, 1.0, velocity);
+
+        // Stick transient: stronger and brighter with velocity.
+        for a in &mut v.air {
+            a.set_cutoff(15_000.0, sr);
+            a.reset();
+        }
+        v.tick_hp.set_cutoff(lerp(5_000.0, 8_500.0, velocity), sr);
+        v.tick_hp.reset();
+        v.tick_env = 1.0;
+        v.tick_coef = (-1.0 / (0.001_2 * sr)).exp();
+        v.tick_gain = 0.45 * velocity * velocity;
+
         v.metal_gain = self.metal * 1.6;
-        v.noise_gain = lerp(0.9, 0.3, self.metal);
+        v.noise_gain = lerp(0.9, 0.3, self.metal) * (1.0 - 0.7 * self.wash);
+        // Power-preserving blend between a common and decorrelated noise.
+        v.mix_common = (1.0 - self.width).sqrt();
+        v.mix_side = self.width.sqrt();
         v.gain = vel_gain(velocity, self.vel_sens);
         v.choke_ms = self.choke_ms;
         v.fade.reset();
@@ -398,12 +743,14 @@ impl Synth for Hat {
                 self.ctrl = CTRL;
             }
             self.ctrl -= 1;
-            let mut out = 0.0;
+            let (mut l, mut r) = (0.0, 0.0);
             for v in self.pool.voices.iter_mut().filter(|v| v.active) {
-                out += v.tick();
+                let (a, b) = v.tick();
+                l += a;
+                r += b;
             }
-            left[n] = out * self.level_gain;
-            right[n] = out * self.level_gain;
+            left[n] = l * self.level_gain;
+            right[n] = r * self.level_gain;
         }
     }
 

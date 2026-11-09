@@ -1,6 +1,8 @@
 //! `peel.drum.tom`: a pitched membrane built from three inharmonic modes
-//! (ratios 1, 1.59 and 2.14) sharing one downward pitch sweep, plus a stick
-//! impact transient.
+//! (ratios 1, 1.59 and 2.14) sharing one downward pitch sweep, a slightly
+//! detuned copy of the fundamental that makes the tone beat as a real head
+//! does, and a stick impact transient that fades in from zero. Harder hits
+//! start a little sharp, drive the shaper harder and are brighter.
 
 use peel_dsp::envelope::Decay;
 use peel_dsp::filter::{OnePole, Svf};
@@ -143,7 +145,7 @@ pub static DESC: DeviceDescriptor = DeviceDescriptor {
     params: &PARAMS,
 };
 
-pub static PRESETS: [Preset; 6] = [
+pub static PRESETS: [Preset; 8] = [
     Preset {
         name: "Floor",
         params: &[
@@ -206,6 +208,32 @@ pub static PRESETS: [Preset; 6] = [
         ],
     },
     Preset {
+        name: "Big Room",
+        params: &[
+            ("pitch.freq", 95.0),
+            ("pitch.sweep", 14.0),
+            ("pitch.sweep_time", 0.06),
+            ("body.decay", 0.65),
+            ("body.overtone", 0.3),
+            ("body.stick", 0.45),
+            ("body.tone", 7_000.0),
+            ("body.drive", 0.3),
+        ],
+    },
+    Preset {
+        name: "Synth Tom",
+        params: &[
+            ("pitch.freq", 140.0),
+            ("pitch.sweep", 24.0),
+            ("pitch.sweep_time", 0.1),
+            ("body.decay", 0.4),
+            ("body.overtone", 0.0),
+            ("body.stick", 0.1),
+            ("body.tone", 5_000.0),
+            ("body.drive", 0.2),
+        ],
+    },
+    Preset {
         name: "Mellow",
         params: &[
             ("pitch.freq", 140.0),
@@ -227,11 +255,17 @@ pub(crate) fn create() -> Box<dyn Device> {
 #[derive(Clone, Copy)]
 struct TomVoice {
     active: bool,
-    phase: [f32; 3],
-    freq: [f32; 3],
+    phase: [f32; 4],
+    freq: [f32; 4],
     amp: [Decay; 3],
-    mode_gain: [f32; 3],
+    mode_gain: [f32; 4],
     drop: f32,
+    snap_drop: f32,
+    snap_env: f32,
+    snap_coef: f32,
+    stick_atk: f32,
+    stick_atk_inc: f32,
+    push: f32,
     pitch_env: f32,
     pitch_coef: f32,
     noise: Noise,
@@ -249,11 +283,17 @@ impl TomVoice {
     fn new() -> TomVoice {
         TomVoice {
             active: false,
-            phase: [0.0; 3],
-            freq: [110.0; 3],
+            phase: [0.0; 4],
+            freq: [110.0; 4],
             amp: [Decay::new(); 3],
-            mode_gain: [1.0; 3],
+            mode_gain: [1.0; 4],
             drop: 0.0,
+            snap_drop: 0.0,
+            snap_env: 0.0,
+            snap_coef: 0.0,
+            stick_atk: 0.0,
+            stick_atk_inc: 1.0,
+            push: 1.0,
             pitch_env: 0.0,
             pitch_coef: 0.0,
             noise: Noise::new(1),
@@ -269,21 +309,36 @@ impl TomVoice {
     }
 
     #[inline]
-    fn tick(&mut self, sr_inv: f32, drive_g: f32, drive_norm: f32) -> f32 {
-        let m = 1.0 + self.drop * self.pitch_env;
+    #[allow(clippy::needless_range_loop)]
+    fn tick(&mut self, sr_inv: f32, drive_g: f32, drive_norm: f32, drive_mix: f32) -> f32 {
+        let m = 1.0 + self.drop * self.pitch_env + self.snap_drop * self.snap_env;
         self.pitch_env *= self.pitch_coef;
+        self.snap_env *= self.snap_coef;
         let mut body = 0.0;
-        for i in 0..3 {
+        let a = [
+            self.amp[0].tick(),
+            self.amp[0].level(),
+            self.amp[1].tick(),
+            self.amp[2].tick(),
+        ];
+        for i in 0..4 {
             self.phase[i] += (self.freq[i] * m * sr_inv).min(0.45);
             if self.phase[i] >= 1.0 {
                 self.phase[i] -= 1.0;
             }
-            body += fast_sin(self.phase[i]) * self.amp[i].tick() * self.mode_gain[i];
+            body += fast_sin(self.phase[i]) * a[i] * self.mode_gain[i];
         }
-        let stick =
-            self.stick_band.tick(self.noise.white()).band_unity * self.stick_env * self.stick_gain;
+        let atk = self.stick_atk;
+        self.stick_atk = (atk + self.stick_atk_inc).min(1.0);
+        let stick = self.stick_band.tick(self.noise.white()).band_unity
+            * self.stick_env
+            * self.stick_gain
+            * atk;
         self.stick_env *= self.stick_coef;
-        let y = self.lp.low(shape(body + stick, drive_g, drive_norm));
+        let x = body * self.push + stick;
+        let y = self
+            .lp
+            .low(lerp(x, shape(x, drive_g, drive_norm), drive_mix));
         let out = y * self.gain * self.fade.tick();
         if self.fade.is_done() || self.amp[0].is_below(1.0e-4) {
             self.active = false;
@@ -326,6 +381,7 @@ pub(crate) struct Tom {
     tone_hz: f32,
     drive_g: f32,
     drive_norm: f32,
+    drive_mix: f32,
     level_gain: f32,
 }
 
@@ -350,14 +406,17 @@ impl Tom {
             tone_hz: 6_000.0,
             drive_g: 1.0,
             drive_norm: 1.0,
+            drive_mix: 0.0,
             level_gain: 1.0,
         }
     }
 
     fn derive(&mut self) {
         self.tone_hz = self.tone.get().exp();
-        (self.drive_g, self.drive_norm) = drive_curve(self.drive.get());
-        self.level_gain = db_to_gain(self.level.get()) * 0.85;
+        let drive = self.drive.get();
+        (self.drive_g, self.drive_norm) = drive_curve(drive);
+        self.drive_mix = (drive * 5.0).min(1.0);
+        self.level_gain = db_to_gain(self.level.get()) * 0.66;
         for v in self.pool.voices.iter_mut().filter(|v| v.active) {
             v.lp.set_cutoff(self.tone_hz * v.bright, self.sr);
         }
@@ -415,12 +474,22 @@ impl Synth for Tom {
         let v = &mut self.pool.voices[slot];
         v.active = true;
         for i in 0..3 {
-            v.phase[i] = 0.0;
-            v.freq[i] = (f0 * MODES[i]).min(0.4 * sr);
             v.amp[i].set_t60(self.decay * [1.0, 0.55, 0.4][i], sr);
             v.amp[i].trigger(1.0, 0.000_4, sr);
         }
-        v.mode_gain = [1.0, 0.55 * self.overtone, 0.4 * self.overtone];
+        // Fundamental, its slightly detuned twin (beating), modes 2 and 3.
+        let ratios = [MODES[0], MODES[0] * 1.004, MODES[1], MODES[2]];
+        for (i, r) in ratios.iter().enumerate() {
+            v.phase[i] = 0.0;
+            v.freq[i] = (f0 * r).min(0.4 * sr);
+        }
+        v.mode_gain = [1.0, 0.3, 0.55 * self.overtone, 0.4 * self.overtone];
+        v.snap_drop = 0.035 * velocity;
+        v.snap_env = 1.0;
+        v.snap_coef = (-1.0 / (0.005 * sr)).exp();
+        v.push = lerp(0.75, 1.0, velocity);
+        v.stick_atk = 0.0;
+        v.stick_atk_inc = 1.0 / (0.000_3 * sr);
         v.drop = drop;
         v.pitch_env = 1.0;
         v.pitch_coef = (-1.0 / (self.sweep_time * sr)).exp();
@@ -456,7 +525,7 @@ impl Synth for Tom {
             self.ctrl -= 1;
             let mut out = 0.0;
             for v in self.pool.voices.iter_mut().filter(|v| v.active) {
-                out += v.tick(sr_inv, self.drive_g, self.drive_norm);
+                out += v.tick(sr_inv, self.drive_g, self.drive_norm, self.drive_mix);
             }
             left[n] = out * self.level_gain;
             right[n] = out * self.level_gain;

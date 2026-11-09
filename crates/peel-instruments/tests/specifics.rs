@@ -1419,3 +1419,218 @@ fn violin_phrase_analysis() {
     );
     assert!(all_finite(&l) && w(28, 30) > 0.5 * w(1, 2) && w(28, 30) < 2.0 * w(1, 2));
 }
+
+// ------------------------------------------------- drum realism pass
+
+/// A drum device with a named preset applied.
+fn drum_preset(id: &str, preset: &str) -> Box<dyn Device> {
+    let mut d = fresh(id);
+    let desc = d.descriptor();
+    let p = peel_instruments::presets(id)
+        .iter()
+        .find(|p| p.name == preset)
+        .unwrap_or_else(|| panic!("{id} has no preset {preset}"));
+    for (k, v) in p.params {
+        d.set_param(desc.param_by_key(k).unwrap().id, *v);
+    }
+    d
+}
+
+#[test]
+fn modern_drum_presets_exist() {
+    for (id, names) in [
+        (
+            "peel.drum.kick",
+            &["Punch", "Big Room", "Techno", "Sub 808"][..],
+        ),
+        ("peel.drum.snare", &["Crack", "Trap", "Clap Snare"][..]),
+        (
+            "peel.drum.hat",
+            &["Closed", "Open", "Shaker", "Crash", "Ride"][..],
+        ),
+        ("peel.drum.clap", &["Big Room", "EDM"][..]),
+    ] {
+        for n in names {
+            drum_preset(id, n);
+        }
+    }
+}
+
+#[test]
+fn kick_starts_at_zero_and_is_dc_free() {
+    for p in peel_instruments::presets("peel.drum.kick") {
+        let mut d = drum_preset("peel.drum.kick", p.name);
+        let (l, r) = render(d.as_mut(), &[note_on(0, 60, 1.0, 1)], 72_000, 256);
+        assert!(l[0].abs() < 1e-3, "{}: first sample {}", p.name, l[0]);
+        let mean = l.iter().sum::<f32>() / l.len() as f32;
+        assert!(mean.abs() < 0.002, "{}: DC {mean}", p.name);
+        assert!(max_diff(&l, &r) == 0.0, "{}: kick must be mono", p.name);
+    }
+}
+
+#[test]
+fn kick_click_layer_adds_top_end() {
+    let top = |click: f32| {
+        let mut d = fresh("peel.drum.kick");
+        set(d.as_mut(), "click.level", click);
+        let (l, _) = render(d.as_mut(), &[note_on(0, 60, 1.0, 1)], 2_000, 256);
+        // Second difference emphasizes the top end far more than the first.
+        let d2: Vec<f32> = l[..400]
+            .windows(3)
+            .map(|w| w[2] - 2.0 * w[1] + w[0])
+            .collect();
+        rms(&d2)
+    };
+    assert!(top(1.0) > top(0.0) * 1.5, "{} vs {}", top(1.0), top(0.0));
+}
+
+#[test]
+fn kick_snap_stage_raises_the_first_milliseconds() {
+    let early = |snap: f32| {
+        let mut d = fresh("peel.drum.kick");
+        set(d.as_mut(), "click.level", 0.0);
+        set(d.as_mut(), "body.drive", 0.0);
+        set(d.as_mut(), "body.clip", 0.0);
+        set(d.as_mut(), "pitch.snap", snap);
+        let (l, _) = render(d.as_mut(), &[note_on(0, 60, 1.0, 1)], 1_500, 256);
+        brightness(&l[..300])
+    };
+    assert!(early(20.0) > early(0.0) * 1.2);
+}
+
+#[test]
+fn drums_get_brighter_with_velocity() {
+    for (id, preset) in [
+        ("peel.drum.kick", "Big Room"),
+        ("peel.drum.snare", "Crack"),
+        ("peel.drum.hat", "Closed"),
+        ("peel.drum.clap", "Big Room"),
+        ("peel.drum.tom", "Floor"),
+    ] {
+        let b = |vel: f32| {
+            let mut d = drum_preset(id, preset);
+            let (l, _) = render(d.as_mut(), &[note_on(0, 60, vel, 1)], 4_000, 256);
+            let pk = peak(&l).max(1e-6);
+            // Normalize the level away: only the timbre may differ.
+            let n: Vec<f32> = l.iter().map(|x| x / pk).collect();
+            brightness(&n)
+        };
+        assert!(b(1.0) > b(0.3), "{id}: {} vs {}", b(1.0), b(0.3));
+    }
+}
+
+#[test]
+fn snare_room_is_stereo_and_can_be_switched_off() {
+    let mut d = fresh("peel.drum.snare");
+    set(d.as_mut(), "out.room", 0.8);
+    let (l, r) = render(d.as_mut(), &[note_on(0, 60, 1.0, 1)], 12_000, 256);
+    assert!(max_diff(&l, &r) > 0.005, "room should widen the tail");
+    let mut d = fresh("peel.drum.snare");
+    set(d.as_mut(), "out.room", 0.0);
+    let (l, r) = render(d.as_mut(), &[note_on(0, 60, 1.0, 1)], 12_000, 256);
+    assert!(max_diff(&l, &r) < 1e-6, "no room means a mono snare");
+}
+
+#[test]
+fn snare_burst_restrikes_the_noise() {
+    let rises = |burst: f32| {
+        let mut d = fresh("peel.drum.snare");
+        set(d.as_mut(), "noise.burst", burst);
+        set(d.as_mut(), "body.mix", 0.0);
+        set(d.as_mut(), "noise.snap", 0.0);
+        let (l, _) = render(d.as_mut(), &[note_on(0, 60, 1.0, 1)], 2_400, 64);
+        let env = rms_windows(&l[..1_440], 48);
+        // Bursts re-attack; a plain snare only falls.
+        env.windows(2).filter(|w| w[1] > w[0] * 1.5).count()
+    };
+    assert!(rises(0.9) > rises(0.0), "{} vs {}", rises(0.9), rises(0.0));
+}
+
+#[test]
+fn crash_rings_for_seconds_and_a_closed_hat_does_not() {
+    let mut crash = drum_preset("peel.drum.hat", "Crash");
+    let (l, _) = render(crash.as_mut(), &[note_on(0, 60, 1.0, 1)], 96_000, 256);
+    assert!(
+        rms(&l[48_000..54_000]) > 0.0015,
+        "crash should still ring at 1 s"
+    );
+    // The decay is gradual, not a gate: later windows are quieter.
+    assert!(rms(&l[72_000..78_000]) < rms(&l[24_000..30_000]));
+    let mut closed = drum_preset("peel.drum.hat", "Closed");
+    let (l, _) = render(closed.as_mut(), &[note_on(0, 60, 1.0, 1)], 24_000, 256);
+    assert!(rms(&l[12_000..18_000]) < 0.0005);
+}
+
+#[test]
+fn ride_has_an_audible_ping_partial() {
+    let level = |ping: f32| {
+        let mut d = drum_preset("peel.drum.hat", "Ride");
+        set(d.as_mut(), "tone.ping", ping);
+        let (l, _) = render(d.as_mut(), &[note_on(0, 60, 1.0, 1)], 24_000, 256);
+        tone_level(&l[2_000..14_000], 2_290.0)
+    };
+    assert!(
+        level(1.0) > level(0.0) * 1.3,
+        "{} vs {}",
+        level(1.0),
+        level(0.0)
+    );
+}
+
+#[test]
+fn hat_width_controls_the_stereo_image() {
+    let diff = |w: f32| {
+        let mut d = fresh("peel.drum.hat");
+        set(d.as_mut(), "out.width", w);
+        let (l, r) = render(d.as_mut(), &[note_on(0, 60, 1.0, 1)], 4_000, 256);
+        max_diff(&l, &r)
+    };
+    assert!(diff(0.0) < 1e-6, "width 0 is mono");
+    assert!(diff(0.8) > 0.01, "width 0.8 is wide");
+}
+
+#[test]
+fn hats_are_clean_above_the_air_roll_off() {
+    // Very little energy near Nyquist: no aliasing or harsh fizz.
+    for preset in ["Closed", "Open", "Crash", "Ride"] {
+        let mut d = drum_preset("peel.drum.hat", preset);
+        let (l, _) = render(d.as_mut(), &[note_on(0, 60, 1.0, 1)], 8_192, 256);
+        // Average many bins: a single noise bin fluctuates by several dB.
+        let avg = |lo: f32, hi: f32| {
+            let pts: Vec<f32> = (0..16)
+                .map(|i| tone_level(&l[..4_096], lo + (hi - lo) * i as f32 / 15.0))
+                .collect();
+            pts.iter().sum::<f32>() / pts.len() as f32
+        };
+        let near = avg(21_500.0, 23_500.0);
+        let mid = avg(8_000.0, 12_000.0);
+        assert!(near < mid * 0.7, "{preset}: {near} vs {mid}");
+    }
+}
+
+#[test]
+fn clap_starts_softly_and_stays_mostly_mono_compatible() {
+    let mut d = drum_preset("peel.drum.clap", "EDM");
+    let (l, r) = render(d.as_mut(), &[note_on(0, 60, 1.0, 1)], 24_000, 256);
+    assert!(
+        l[0].abs() < 1e-3 && r[0].abs() < 1e-3,
+        "clap must not start with a step"
+    );
+    let (mut lr, mut ll, mut rr) = (0.0f64, 0.0f64, 0.0f64);
+    for (a, b) in l.iter().zip(&r) {
+        lr += (*a as f64) * (*b as f64);
+        ll += (*a as f64).powi(2);
+        rr += (*b as f64).powi(2);
+    }
+    let corr = lr / (ll * rr).sqrt();
+    assert!((0.2..0.95).contains(&corr), "channel correlation {corr}");
+}
+
+#[test]
+fn tom_stays_finite_and_in_range_at_every_velocity() {
+    for vel in [0.05, 0.5, 1.0] {
+        let mut d = fresh("peel.drum.tom");
+        let (l, _) = render(d.as_mut(), &[note_on(0, 60, vel, 1)], 24_000, 256);
+        assert!(all_finite(&l) && peak(&l) < 1.0, "velocity {vel}");
+    }
+}
