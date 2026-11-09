@@ -1,7 +1,8 @@
 //! A bounded, selected-insert audio tap and control-thread spectrum analysis.
 //!
-//! The callback only copies into atomics. A reader makes one seqlock attempt,
-//! never blocks the writer, and discards a concurrent/incomplete snapshot. FFTs,
+//! The callback copies into a free bank while the last completed bank remains
+//! available. A reader pins one immutable bank with one bounded CAS attempt;
+//! the callback never waits for it. FFTs,
 //! peak history and resonance suggestions are computed by [`SpectrumAnalyzer`]
 //! on the control thread. Stereo power is averaged, so anti-phase material is
 //! visible instead of disappearing in a mono sum.
@@ -27,19 +28,63 @@ pub struct AnalysisFrame {
     pub output_right: [f32; FFT_SIZE],
 }
 
-/// Shared audio tap. All storage is allocated before the callback starts.
+/// Shared audio tap. All three banks are allocated before the callback starts.
+/// One bank stays published while another spans the selected processor's DSP;
+/// a temporarily pinned old bank leaves the third bank available to the writer.
 pub struct AnalysisTap {
     // Low 32 bits are slot + 1 (zero disables); high bits are generation.
     target: AtomicU64,
-    writer_key: AtomicU64,
+    // Zero means no publication; otherwise bank index + 1.
+    published: AtomicU32,
+    sequence: AtomicU64,
+    banks: [AnalysisBank; 3],
+}
+
+const BANK_READING: u32 = 1;
+const BANK_WRITING: u32 = 2;
+
+struct AnalysisBank {
+    state: AtomicU32,
+    key: AtomicU64,
     sequence: AtomicU64,
     frames: AtomicU64,
     sample_rate: AtomicU32,
     samples: Box<[AtomicU32]>,
 }
 
+impl AnalysisBank {
+    fn new() -> Self {
+        Self {
+            state: AtomicU32::new(0),
+            key: AtomicU64::new(0),
+            sequence: AtomicU64::new(0),
+            frames: AtomicU64::new(0),
+            sample_rate: AtomicU32::new(0),
+            samples: (0..FFT_SIZE * 4).map(|_| AtomicU32::new(0)).collect(),
+        }
+    }
+
+    #[inline]
+    fn store(&self, frame: usize, channel: usize, sample: f32) {
+        let sample = if sample.is_finite() {
+            sample.clamp(-1e6, 1e6)
+        } else {
+            0.0
+        };
+        self.samples[frame * 4 + channel].store(sample.to_bits(), Ordering::Relaxed);
+    }
+}
+
+struct ReadPin<'a>(&'a AtomicU32);
+impl Drop for ReadPin<'_> {
+    fn drop(&mut self) {
+        self.0.store(0, Ordering::Release);
+    }
+}
+
 pub(crate) struct Capture {
     key: u64,
+    bank: usize,
     start: u64,
     frames: usize,
 }
@@ -48,11 +93,9 @@ impl AnalysisTap {
     pub fn new() -> Self {
         Self {
             target: AtomicU64::new(0),
-            writer_key: AtomicU64::new(0),
+            published: AtomicU32::new(0),
             sequence: AtomicU64::new(0),
-            frames: AtomicU64::new(0),
-            sample_rate: AtomicU32::new(0),
-            samples: (0..FFT_SIZE * 4).map(|_| AtomicU32::new(0)).collect(),
+            banks: std::array::from_fn(|_| AnalysisBank::new()),
         }
     }
 
@@ -85,65 +128,96 @@ impl AnalysisTap {
         if key as u32 != slot + 1 {
             return None;
         }
-        self.sequence.fetch_add(1, Ordering::AcqRel); // odd while writing
-        let start = if self.writer_key.load(Ordering::Relaxed) == key {
-            self.frames.load(Ordering::Relaxed)
-        } else {
-            self.writer_key.store(key, Ordering::Relaxed);
-            0
-        };
+        let published = self.published.load(Ordering::Acquire);
+        // Each candidate gets one CAS attempt. Even multiple concurrent readers
+        // can only drop a visualization block; the callback never retries/spins.
+        let bank = (0..self.banks.len()).find(|&i| {
+            i as u32 + 1 != published
+                && self.banks[i]
+                    .state
+                    .compare_exchange(0, BANK_WRITING, Ordering::Acquire, Ordering::Relaxed)
+                    .is_ok()
+        })?;
+        // Publish the write claim before any relaxed payload stores. The
+        // immutable-bank pin protocol supplies exclusivity; this release fence
+        // also makes that publication order explicit on weakly ordered CPUs.
+        std::sync::atomic::fence(Ordering::Release);
+        let next = &self.banks[bank];
+        let previous = published
+            .checked_sub(1)
+            .and_then(|i| self.banks.get(i as usize));
+        let start = previous
+            .filter(|p| p.key.load(Ordering::Relaxed) == key)
+            .map_or(0, |p| p.frames.load(Ordering::Relaxed));
         let frames = left.len().min(right.len());
-        // Only the final window matters when a host gives a very large block.
+        if start > 0 && frames < FFT_SIZE {
+            // Only the audio callback writes/publishes banks, so the current
+            // published bank cannot change while it is copied here.
+            let previous = previous.expect("a nonzero start has a published bank");
+            for (dst, src) in next.samples.iter().zip(previous.samples.iter()) {
+                dst.store(src.load(Ordering::Relaxed), Ordering::Relaxed);
+            }
+        }
         for i in frames.saturating_sub(FFT_SIZE)..frames {
             let at = (start as usize + i) % FFT_SIZE;
-            self.store(at, 0, left[i]);
-            self.store(at, 1, right[i]);
+            next.store(at, 0, left[i]);
+            next.store(at, 1, right[i]);
         }
-        Some(Capture { key, start, frames })
+        Some(Capture {
+            key,
+            bank,
+            start,
+            frames,
+        })
     }
 
     pub(crate) fn finish(&self, capture: Option<Capture>, left: &[f32], right: &[f32], rate: f32) {
         let Some(c) = capture else { return };
         debug_assert!(left.len() >= c.frames && right.len() >= c.frames);
+        let bank = &self.banks[c.bank];
         for i in c.frames.saturating_sub(FFT_SIZE)..c.frames {
             let at = (c.start as usize + i) % FFT_SIZE;
-            self.store(at, 2, left[i]);
-            self.store(at, 3, right[i]);
+            bank.store(at, 2, left[i]);
+            bank.store(at, 3, right[i]);
         }
-        self.frames
+        bank.frames
             .store(c.start + c.frames as u64, Ordering::Relaxed);
-        self.sample_rate.store(rate.to_bits(), Ordering::Relaxed);
-        self.writer_key.store(c.key, Ordering::Relaxed);
-        self.sequence.fetch_add(1, Ordering::Release); // publish even version
+        bank.sample_rate.store(rate.to_bits(), Ordering::Relaxed);
+        bank.key.store(c.key, Ordering::Relaxed);
+        bank.sequence.store(
+            self.sequence.fetch_add(1, Ordering::Relaxed) + 1,
+            Ordering::Relaxed,
+        );
+        bank.state.store(0, Ordering::Release);
+        self.published.store(c.bank as u32 + 1, Ordering::Release);
     }
 
-    #[inline]
-    fn store(&self, frame: usize, channel: usize, sample: f32) {
-        let sample = if sample.is_finite() {
-            sample.clamp(-1e6, 1e6)
-        } else {
-            0.0
-        };
-        self.samples[frame * 4 + channel].store(sample.to_bits(), Ordering::Relaxed);
-    }
-
-    /// One bounded read attempt. `None` means disabled, no fresh selection
-    /// audio, or a writer overlapped the read; retry on a later UI frame.
+    /// One bounded attempt to pin the last COMPLETE window. Processing the
+    /// next block does not make it unavailable. None means disabled/no audio,
+    /// another reader owns that bank, or selection changed during the read.
     pub fn snapshot(&self) -> Option<AnalysisFrame> {
-        let sequence = self.sequence.load(Ordering::Acquire);
-        let key = self.target.load(Ordering::Acquire);
-        if sequence & 1 != 0 || key as u32 == 0 || self.writer_key.load(Ordering::Relaxed) != key {
+        let published = self.published.load(Ordering::Acquire);
+        let bank = self.banks.get(published.checked_sub(1)? as usize)?;
+        bank.state
+            .compare_exchange(0, BANK_READING, Ordering::Acquire, Ordering::Relaxed)
+            .ok()?;
+        let _pin = ReadPin(&bank.state);
+        if self.published.load(Ordering::Acquire) != published {
             return None;
         }
-        let total = self.frames.load(Ordering::Relaxed);
+        let key = self.target.load(Ordering::Acquire);
+        if key as u32 == 0 || bank.key.load(Ordering::Relaxed) != key {
+            return None;
+        }
+        let total = bank.frames.load(Ordering::Relaxed);
         if total == 0 {
             return None;
         }
         let valid = total.min(FFT_SIZE as u64) as usize;
         let mut out = AnalysisFrame {
             key,
-            sequence,
-            sample_rate: f32::from_bits(self.sample_rate.load(Ordering::Relaxed)),
+            sequence: bank.sequence.load(Ordering::Relaxed),
+            sample_rate: f32::from_bits(bank.sample_rate.load(Ordering::Relaxed)),
             valid_frames: valid,
             total_frames: total,
             input_left: [0.0; FFT_SIZE],
@@ -154,20 +228,17 @@ impl AnalysisTap {
         for i in 0..valid {
             let at = ((total - valid as u64) as usize + i) % FFT_SIZE;
             let dest = FFT_SIZE - valid + i;
-            out.input_left[dest] = f32::from_bits(self.samples[at * 4].load(Ordering::Relaxed));
+            out.input_left[dest] = f32::from_bits(bank.samples[at * 4].load(Ordering::Relaxed));
             out.input_right[dest] =
-                f32::from_bits(self.samples[at * 4 + 1].load(Ordering::Relaxed));
+                f32::from_bits(bank.samples[at * 4 + 1].load(Ordering::Relaxed));
             out.output_left[dest] =
-                f32::from_bits(self.samples[at * 4 + 2].load(Ordering::Relaxed));
+                f32::from_bits(bank.samples[at * 4 + 2].load(Ordering::Relaxed));
             out.output_right[dest] =
-                f32::from_bits(self.samples[at * 4 + 3].load(Ordering::Relaxed));
+                f32::from_bits(bank.samples[at * 4 + 3].load(Ordering::Relaxed));
         }
-        // Acquire fence prevents the payload loads from moving past the final
-        // version check (the payload itself is atomic, so no data race exists).
-        std::sync::atomic::fence(Ordering::Acquire);
-        if self.sequence.load(Ordering::Acquire) != sequence
-            || self.target.load(Ordering::Acquire) != key
-        {
+        // The bank stays immutable until _pin drops. A target-generation check
+        // rejects completed audio from an old selection, even switch-away/back.
+        if self.target.load(Ordering::Acquire) != key {
             return None;
         }
         Some(out)
@@ -482,5 +553,168 @@ fn fft(re: &mut [f32; FFT_SIZE], im: &mut [f32; FFT_SIZE]) {
             }
         }
         len *= 2;
+    }
+}
+
+#[cfg(test)]
+mod tap_tests {
+    use super::*;
+    use std::sync::{Arc, Barrier, atomic::AtomicBool};
+    use std::thread;
+
+    #[test]
+    fn last_complete_window_stays_readable_through_slow_dsp() {
+        let tap = AnalysisTap::new();
+        tap.set_slot(Some(10));
+        let input = [0.5; 256];
+        let output = [0.25; 256];
+        let capture = tap.begin(10, &input, &input);
+        tap.finish(capture, &output, &output, 48_000.0);
+        let published = tap.snapshot().unwrap();
+        // Hold the next capture across arbitrarily long DSP. UI polls must
+        // continue seeing completed audio, rather than resetting their meters.
+        let processing = tap.begin(10, &[0.75; 256], &[0.75; 256]);
+        for _ in 0..64 {
+            let frame = tap
+                .snapshot()
+                .expect("in-flight DSP cannot hide the completed bank");
+            assert_eq!(frame.sequence, published.sequence);
+            assert_eq!(frame.total_frames, 256);
+            assert_eq!(frame.output_left[FFT_SIZE - 1], 0.25);
+        }
+        tap.finish(processing, &[0.125; 256], &[0.125; 256], 48_000.0);
+        let next = tap.snapshot().unwrap();
+        assert!(next.sequence > published.sequence);
+        assert_eq!(next.total_frames, 512);
+        assert_eq!(next.output_left[FFT_SIZE - 1], 0.125);
+        assert_eq!(next.output_left[FFT_SIZE - 257], 0.25);
+    }
+
+    #[test]
+    fn switching_during_capture_and_disabling_reject_old_generations() {
+        let tap = AnalysisTap::new();
+        tap.set_slot(Some(10));
+        let in_flight = tap.begin(10, &[1.0; 64], &[2.0; 64]);
+        tap.set_slot(Some(11));
+        tap.finish(in_flight, &[3.0; 64], &[4.0; 64], 48_000.0);
+        assert!(tap.snapshot().is_none());
+        let capture = tap.begin(11, &[5.0; 64], &[6.0; 64]);
+        tap.finish(capture, &[7.0; 64], &[8.0; 64], 48_000.0);
+        let first = tap.snapshot().unwrap();
+        assert_eq!(first.valid_frames, 64);
+        assert_eq!(first.key as u32, 12);
+        assert!(first.input_left[..FFT_SIZE - 64].iter().all(|&v| v == 0.0));
+        assert!(first.input_left[FFT_SIZE - 64..].iter().all(|&v| v == 5.0));
+        tap.set_slot(None);
+        assert!(tap.snapshot().is_none());
+        tap.set_slot(Some(11));
+        assert!(
+            tap.snapshot().is_none(),
+            "switching back is still a new generation"
+        );
+        let capture = tap.begin(11, &[9.0; 64], &[10.0; 64]);
+        tap.finish(capture, &[11.0; 64], &[12.0; 64], 48_000.0);
+        let second = tap.snapshot().unwrap();
+        assert_ne!(second.key, first.key);
+        assert_eq!(second.valid_frames, 64);
+        assert!(
+            second.output_right[..FFT_SIZE - 64]
+                .iter()
+                .all(|&v| v == 0.0)
+        );
+        assert!(
+            second.output_right[FFT_SIZE - 64..]
+                .iter()
+                .all(|&v| v == 12.0)
+        );
+        // If both spare banks are held by other readers, capture is dropped in
+        // bounded time; the completed publication stays available to this UI.
+        let published = tap.published.load(Ordering::Acquire);
+        for (i, bank) in tap.banks.iter().enumerate() {
+            if i as u32 + 1 != published {
+                bank.state.store(BANK_READING, Ordering::Release);
+            }
+        }
+        assert!(tap.begin(11, &[0.0; 64], &[0.0; 64]).is_none());
+        assert_eq!(tap.snapshot().unwrap().sequence, second.sequence);
+    }
+
+    #[test]
+    fn concurrent_snapshots_keep_all_channels_and_generations_coherent() {
+        let tap = Arc::new(AnalysisTap::new());
+        tap.set_slot(Some(10));
+        let start = Arc::new(Barrier::new(2));
+        let done = Arc::new(AtomicBool::new(false));
+        let writer = {
+            let tap = Arc::clone(&tap);
+            let start = Arc::clone(&start);
+            let done = Arc::clone(&done);
+            thread::spawn(move || {
+                start.wait();
+                for block in 0..2500 {
+                    for slot in [10, 11] {
+                        let left = std::array::from_fn::<_, 64, _>(|i| {
+                            (slot - 10) as f32 * 200_000.0 + (block * 64 + i) as f32 + 1.0
+                        });
+                        let right = left.map(|x| -x);
+                        let output_left = left.map(|x| x * 0.25);
+                        let output_right = left.map(|x| -x * 0.5);
+                        let capture = tap.begin(slot, &left, &right);
+                        if block % 8 == 0 {
+                            thread::yield_now();
+                        }
+                        tap.finish(capture, &output_left, &output_right, 48_000.0);
+                    }
+                }
+                done.store(true, Ordering::Release);
+            })
+        };
+        start.wait();
+        let mut reads = 0;
+        let mut iteration = 0;
+        while !done.load(Ordering::Acquire) || iteration < 1000 {
+            if iteration % 17 == 0 {
+                tap.set_slot(None);
+                assert!(tap.snapshot().is_none());
+                tap.set_slot(Some(if iteration % 34 == 0 { 10 } else { 11 }));
+            }
+            let expected = tap.target.load(Ordering::Acquire);
+            if let Some(frame) = tap.snapshot() {
+                reads += 1;
+                assert_eq!(
+                    frame.key, expected,
+                    "a switch cannot return the prior identity"
+                );
+                assert_eq!(frame.sample_rate, 48_000.0);
+                let valid = frame.valid_frames;
+                for i in 0..FFT_SIZE - valid {
+                    assert_eq!(frame.input_left[i], 0.0);
+                    assert_eq!(frame.input_right[i], 0.0);
+                    assert_eq!(frame.output_left[i], 0.0);
+                    assert_eq!(frame.output_right[i], 0.0);
+                }
+                for i in FFT_SIZE - valid..FFT_SIZE {
+                    let x = frame.input_left[i];
+                    assert_eq!(frame.input_right[i], -x, "input channels tore");
+                    assert_eq!(frame.output_left[i], x * 0.25, "pre/post windows tore");
+                    assert_eq!(frame.output_right[i], -x * 0.5, "output channels tore");
+                    if i > FFT_SIZE - valid {
+                        assert_eq!(x, frame.input_left[i - 1] + 1.0, "ring chronology tore");
+                    }
+                    if frame.key as u32 == 11 {
+                        assert!(x < 200_000.0);
+                    } else {
+                        assert!(x > 200_000.0);
+                    }
+                }
+            }
+            iteration += 1;
+            thread::yield_now();
+        }
+        writer.join().unwrap();
+        assert!(
+            reads > 10,
+            "stress run must observe completed concurrent snapshots"
+        );
     }
 }
