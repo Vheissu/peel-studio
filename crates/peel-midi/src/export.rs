@@ -1,6 +1,6 @@
 //! Standard MIDI File export.
 //!
-//! Exports flatten the document to plain notes first: pattern instances,
+//! Exports flatten the document to note occurrences first: pattern instances,
 //! loops, clip offsets and clip trimming are resolved, muted material and
 //! probability are applied according to the options, and only then are
 //! positions converted to ticks. Peel stores exact rational beats, so a tick
@@ -9,7 +9,7 @@
 
 use midly::num::{u4, u7, u15, u24, u28};
 use midly::{Format, Header, MetaMessage, MidiMessage, Smf, Timing, TrackEvent, TrackEventKind};
-use peel_document::{Channel, ClipContent, Id, Project, Time};
+use peel_document::{Channel, ClipContent, Id, NoteExpression, Project, Time};
 
 use crate::error::{MidiError, Result};
 
@@ -98,8 +98,12 @@ pub struct ExportReport {
     pub tempo_ramps_approximated: usize,
     /// Notes with per-note pan, which MIDI 1.0 notes cannot carry.
     pub notes_with_pan: usize,
-    /// Notes with fine pitch, likewise.
+    /// Notes with fine pitch, preserved through MPE pitch bend.
     pub notes_with_fine_pitch: usize,
+    /// Notes routed independently through MPE member channels.
+    pub mpe_notes: usize,
+    /// Pitch snapshots limited to the MIDI MPE range of +/-96 semitones.
+    pub pitch_values_clamped: usize,
     pub warnings: Vec<String>,
 }
 
@@ -117,7 +121,8 @@ struct FlatNote {
     velocity: f32,
     release: f32,
     has_pan: bool,
-    has_fine: bool,
+    fine: f32,
+    expression: Option<NoteExpression>,
 }
 
 fn overflow<E>(_: E) -> MidiError {
@@ -162,7 +167,15 @@ impl<'a> Flattener<'a> {
     }
 
     /// Adds one occurrence of a note, if mute and probability allow it.
-    fn push(&mut self, note: &peel_document::Note, start: Time, end: Time, salt: u64) {
+    fn push(
+        &mut self,
+        note: &peel_document::Note,
+        expression: Option<&NoteExpression>,
+        start: Time,
+        end: Time,
+        from: Time,
+        salt: u64,
+    ) {
         let Some(channel) = self.project.channel(note.channel) else {
             return;
         };
@@ -192,22 +205,9 @@ impl<'a> Flattener<'a> {
             velocity: note.velocity,
             release: note.release,
             has_pan: note.pan != 0.0,
-            has_fine: note.fine != 0.0,
+            fine: note.fine,
+            expression: expression.map(|e| e.slice(note.id, from, end - start)),
         });
-    }
-}
-
-const EXPRESSION_WARNING: &str =
-    "Note expression was omitted; save a Peel project or export audio to preserve it.";
-
-fn warn_expression(report: &mut ExportReport, pattern: &peel_document::Pattern) {
-    if pattern
-        .expression
-        .iter()
-        .any(|e| !e.pitch.is_empty() || !e.pressure.is_empty() || !e.timbre.is_empty())
-        && !report.warnings.iter().any(|w| w == EXPRESSION_WARNING)
-    {
-        report.warnings.push(EXPRESSION_WARNING.into());
     }
 }
 
@@ -217,10 +217,16 @@ pub fn export_pattern(project: &Project, pattern: Id, opts: &ExportOptions) -> R
         .pattern(pattern)
         .ok_or(MidiError::UnknownPattern(pattern))?;
     let mut fl = Flattener::new(project, opts);
-    warn_expression(&mut fl.report, source);
     for note in &source.notes {
         let end = note.start.checked_add(note.length).map_err(overflow)?;
-        fl.push(note, note.start, end, 0);
+        fl.push(
+            note,
+            source.expression_for(note.id),
+            note.start,
+            end,
+            Time::ZERO,
+            0,
+        );
     }
     let end = source.length;
     build(project, opts, fl, end)
@@ -254,7 +260,6 @@ pub fn export_arrangement(project: &Project, opts: &ExportOptions) -> Result<Mid
         let Some(pattern) = project.pattern(pattern_id) else {
             continue;
         };
-        warn_expression(&mut fl.report, pattern);
         let plen = pattern.length;
         if !plen.is_positive() || !clip.length.is_positive() {
             continue;
@@ -285,16 +290,28 @@ pub fn export_arrangement(project: &Project, opts: &ExportOptions) -> Result<Mid
                     continue;
                 }
                 let local = note.start.checked_add(rel).map_err(overflow)?;
-                if local.is_negative() || local >= clip.length {
+                if local >= clip.length {
                     continue;
                 }
-                let start = clip.start.checked_add(local).map_err(overflow)?;
-                let end = start
+                let source_start = clip.start.checked_add(local).map_err(overflow)?;
+                let start = source_start.max(clip.start);
+                let end = source_start
                     .checked_add(note.length)
                     .map_err(overflow)?
                     .min(clip_end);
+                if end <= start {
+                    continue;
+                }
+                let from = start.checked_sub(source_start).map_err(overflow)?;
                 let salt = (clip.id.short() ^ (k as u64).wrapping_mul(0x9E37_79B9)).wrapping_add(1);
-                fl.push(note, start, end, salt);
+                fl.push(
+                    note,
+                    pattern.expression_for(note.id),
+                    start,
+                    end,
+                    from,
+                    salt,
+                );
             }
             k += 1;
         }
@@ -310,6 +327,10 @@ enum Body {
     Tempo(u32),
     Signature(u8, u8),
     Program(u8, u8),
+    Port(u8),
+    Controller(u8, u8, u8),
+    Pitch(u8, u16),
+    Pressure(u8, u8),
     NoteOn(u8, u8, u8),
     NoteOff(u8, u8, u8),
 }
@@ -390,28 +411,66 @@ fn build(
         max_error: 0.0,
     };
 
-    // Assign MIDI channels to Peel channels that have notes.
+    // MPE members share a port only with their own instrument. Track
+    // boundaries alone do not isolate MIDI channels in a type 1 file.
+    let expressive: std::collections::HashSet<Id> = notes
+        .iter()
+        .filter(|n| {
+            n.fine != 0.0
+                || n.expression.as_ref().is_some_and(|e| {
+                    !e.pitch.is_empty() || !e.pressure.is_empty() || !e.timbre.is_empty()
+                })
+        })
+        .map(|n| n.channel)
+        .collect();
+    let included: Vec<_> = project
+        .channels
+        .iter()
+        .filter(|ch| opts.include_empty_channels || notes.iter().any(|n| n.channel == ch.id))
+        .collect();
+    if opts.format == ExportFormat::Type0 && !expressive.is_empty() && included.len() > 1 {
+        return Err(MidiError::Export(
+            "type 0 cannot isolate MPE from other instruments; choose type 1 or export one instrument".into(),
+        ));
+    }
+    if expressive.len() > 127 {
+        return Err(MidiError::Export(
+            "more than 127 MPE instruments need separate MIDI files".into(),
+        ));
+    }
     const MELODIC: [u8; 15] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15];
     let mut next_melodic = 0usize;
-    let mut midi_channel: Vec<(Id, u8)> = Vec::new();
-    for ch in &project.channels {
-        let has_notes = notes.iter().any(|n| n.channel == ch.id);
-        if !has_notes && !opts.include_empty_channels {
-            continue;
-        }
-        let m = if (opts.is_drum)(ch) {
+    let mut next_port = u8::from(included.iter().any(|ch| !expressive.contains(&ch.id)));
+    let mut midi_channel: Vec<(Id, u8, Option<u8>)> = Vec::new();
+    for ch in included {
+        let is_mpe = expressive.contains(&ch.id);
+        let m = if is_mpe {
+            0
+        } else if (opts.is_drum)(ch) {
             9
         } else {
             let m = MELODIC[next_melodic % MELODIC.len()];
             next_melodic += 1;
             m
         };
-        midi_channel.push((ch.id, m));
+        let port = if is_mpe {
+            let port = next_port;
+            next_port += 1;
+            Some(port)
+        } else {
+            None
+        };
+        midi_channel.push((ch.id, m, port));
     }
     if next_melodic > MELODIC.len() {
         report.warnings.push(format!(
             "{next_melodic} melodic channels share the 15 non-percussion MIDI channels"
         ));
+    }
+    if !expressive.is_empty() {
+        report.warnings.push(
+            "Note expression uses MPE. Type 1 players must honor MIDI Port events to keep instruments separate.".into(),
+        );
     }
 
     // Conductor events: name, meter, tempo.
@@ -452,20 +511,41 @@ fn build(
     // Notes.
     let mut tracks: Vec<(Option<String>, Vec<Ev>)> = Vec::new();
     let mut last_tick: u64 = 0;
-    for (channel_id, m) in &midi_channel {
+    for (channel_id, m, port) in &midi_channel {
         let channel = project.channel(*channel_id).expect("channel exists");
         let mut evs: Vec<Ev> = vec![Ev {
             tick: 0,
             order: 0,
             body: Body::Name(channel.name.clone()),
         }];
-        if let Some(program) = (opts.program_for_channel)(channel) {
+        if opts.format == ExportFormat::Type1 && !expressive.is_empty() {
             evs.push(Ev {
                 tick: 0,
-                order: 1,
-                body: Body::Program(*m, program.min(127)),
+                order: 0,
+                body: Body::Port(port.unwrap_or(0)),
             });
         }
+        if port.is_some() {
+            setup_mpe(&mut evs);
+        }
+        if let Some(program) = (opts.program_for_channel)(channel) {
+            if port.is_some() {
+                for member in 0..16 {
+                    evs.push(Ev {
+                        tick: 0,
+                        order: 0,
+                        body: Body::Program(member, program.min(127)),
+                    });
+                }
+            } else {
+                evs.push(Ev {
+                    tick: 0,
+                    order: 0,
+                    body: Body::Program(*m, program.min(127)),
+                });
+            }
+        }
+        let mut timed = Vec::new();
         for n in notes.iter().filter(|n| n.channel == *channel_id) {
             let Some(start) = to_ticks(n.start, ppq, &mut rounding)? else {
                 report.skipped_negative += 1;
@@ -476,20 +556,54 @@ fn build(
                 end = start + 1;
                 report.lengthened_notes += 1;
             }
+            timed.push((start, end, n));
+        }
+        timed.sort_by_key(|(start, _, _)| *start);
+        let mut member_end = [0u64; 15];
+        for (start, end, n) in timed {
+            let midi = if port.is_some() {
+                let Some((member, _)) = member_end
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, until)| **until <= start)
+                    .min_by_key(|(member, until)| (**until, *member))
+                else {
+                    return Err(MidiError::Export(format!(
+                        "MPE instrument '{}' has more than 15 simultaneous notes at tick {start}; reduce its polyphony or split it into instruments",
+                        channel.name
+                    )));
+                };
+                member_end[member] = end;
+                let midi = member as u8 + 1;
+                expression_events(
+                    n,
+                    midi,
+                    start,
+                    end,
+                    ppq,
+                    &mut rounding,
+                    &mut report,
+                    &mut evs,
+                )?;
+                report.mpe_notes += 1;
+                midi
+            } else {
+                *m
+            };
             evs.push(Ev {
                 tick: start,
-                order: 3,
-                body: Body::NoteOn(*m, n.key, velocity_byte(n.velocity)),
+                order: 4,
+                body: Body::NoteOn(midi, n.key, velocity_byte(n.velocity)),
             });
             evs.push(Ev {
                 tick: end,
                 order: 2,
-                body: Body::NoteOff(*m, n.key, release_byte(n.release)),
+                body: Body::NoteOff(midi, n.key, release_byte(n.release)),
             });
             last_tick = last_tick.max(end);
             report.notes += 1;
             report.notes_with_pan += usize::from(n.has_pan);
-            report.notes_with_fine_pitch += usize::from(n.has_fine);
+            report.notes_with_fine_pitch += usize::from(n.fine != 0.0);
         }
         tracks.push((None, evs));
     }
@@ -504,10 +618,16 @@ fn build(
             rounding.rounded, rounding.max_error
         ));
     }
-    if report.notes_with_pan > 0 || report.notes_with_fine_pitch > 0 {
+    if report.notes_with_pan > 0 {
         report.warnings.push(format!(
-            "{} notes with per-note pan and {} with fine pitch were exported without them",
-            report.notes_with_pan, report.notes_with_fine_pitch
+            "{} notes with per-note pan were exported without pan",
+            report.notes_with_pan
+        ));
+    }
+    if report.pitch_values_clamped > 0 {
+        report.warnings.push(format!(
+            "{} pitch values exceeded the MPE range and were limited to +/-96 semitones",
+            report.pitch_values_clamped
         ));
     }
     if report.audio_clips_omitted > 0 {
@@ -543,6 +663,124 @@ fn build(
 
     let bytes = encode(&mut all, end_tick, ppq, opts.format)?;
     Ok(MidiExport { bytes, report })
+}
+
+/// Configure a lower zone, then explicitly select 96-semitone member bends.
+fn setup_mpe(out: &mut Vec<Ev>) {
+    let mut rpn = |ch, number, value| {
+        for (cc, value) in [
+            (101, 0),
+            (100, number),
+            (6, value),
+            (38, 0),
+            (101, 127),
+            (100, 127),
+        ] {
+            out.push(Ev {
+                tick: 0,
+                order: 0,
+                body: Body::Controller(ch, cc, value),
+            });
+        }
+    };
+    rpn(0, 6, 15);
+    rpn(0, 0, 2);
+    for ch in 1..16 {
+        rpn(ch, 0, 96);
+    }
+    // A receiver may retain manager controls from the previous performance.
+    for body in [
+        Body::Pitch(0, 8192),
+        Body::Pressure(0, 0),
+        Body::Controller(0, 74, 64),
+        Body::Controller(0, 64, 0),
+    ] {
+        out.push(Ev {
+            tick: 0,
+            order: 0,
+            body,
+        });
+    }
+}
+
+fn pitch_byte(value: f32, report: &mut ExportReport) -> u16 {
+    report.pitch_values_clamped += usize::from(!(-96.0..=96.0).contains(&value));
+    // The two halves of MIDI pitch bend have different cardinalities.
+    let value = value.clamp(-96.0, 96.0);
+    let scale = if value < 0.0 { 8192.0 } else { 8191.0 };
+    (8192.0 + value / 96.0 * scale).round().clamp(0.0, 16383.0) as u16
+}
+
+/// CC74 reserves byte 64 for exact neutral, matching the live MPE path.
+fn timbre_byte(value: f32) -> u8 {
+    let value = value.clamp(0.0, 1.0);
+    if value <= 0.5 {
+        (value * 128.0).round() as u8
+    } else {
+        (64.0 + (value - 0.5) * 126.0).round() as u8
+    }
+}
+
+fn control_byte(value: f32) -> u8 {
+    (value * 127.0).round().clamp(0.0, 127.0) as u8
+}
+
+#[allow(clippy::too_many_arguments)]
+fn expression_events(
+    note: &FlatNote,
+    channel: u8,
+    start: u64,
+    end: u64,
+    ppq: u16,
+    rounding: &mut Rounding,
+    report: &mut ExportReport,
+    out: &mut Vec<Ev>,
+) -> Result<()> {
+    let initial = note
+        .expression
+        .as_ref()
+        .map(|e| e.at(Time::ZERO))
+        .unwrap_or_default();
+    let fine = note.fine / 100.0;
+    for body in [
+        Body::Pitch(channel, pitch_byte(initial.pitch + fine, report)),
+        Body::Pressure(channel, control_byte(initial.pressure)),
+        Body::Controller(channel, 74, timbre_byte(initial.timbre)),
+    ] {
+        out.push(Ev {
+            tick: start,
+            order: 3,
+            body,
+        });
+    }
+    let Some(expression) = &note.expression else {
+        return Ok(());
+    };
+    for (kind, points) in [
+        (0, &expression.pitch),
+        (1, &expression.pressure),
+        (2, &expression.timbre),
+    ] {
+        for point in points.iter().filter(|p| p.offset > Time::ZERO) {
+            let at = note.start.checked_add(point.offset).map_err(overflow)?;
+            let tick = to_ticks(at, ppq, rounding)?
+                .unwrap_or(start)
+                .clamp(start, end);
+            let body = match kind {
+                0 => Body::Pitch(channel, pitch_byte(point.value + fine, report)),
+                1 => Body::Pressure(channel, control_byte(point.value)),
+                _ => Body::Controller(channel, 74, timbre_byte(point.value)),
+            };
+            // At an onset tick, the final rounded controller wins before On.
+            // At an ending tick it still precedes Off and the next note reset.
+            out.push(Ev {
+                tick,
+                order: if tick == start { 3 } else { 1 },
+                body,
+            });
+        }
+    }
+    Ok(())
 }
 
 fn tempo_events(
@@ -647,6 +885,26 @@ fn encode(
                 Body::Signature(n, d) => {
                     TrackEventKind::Meta(MetaMessage::TimeSignature(*n, *d, 24, 8))
                 }
+                Body::Port(port) => TrackEventKind::Meta(MetaMessage::MidiPort(u7::new(*port))),
+                Body::Controller(ch, controller, value) => TrackEventKind::Midi {
+                    channel: u4::new(*ch),
+                    message: MidiMessage::Controller {
+                        controller: u7::new(*controller),
+                        value: u7::new(*value),
+                    },
+                },
+                Body::Pitch(ch, value) => TrackEventKind::Midi {
+                    channel: u4::new(*ch),
+                    message: MidiMessage::PitchBend {
+                        bend: midly::PitchBend(midly::num::u14::new(*value)),
+                    },
+                },
+                Body::Pressure(ch, value) => TrackEventKind::Midi {
+                    channel: u4::new(*ch),
+                    message: MidiMessage::ChannelAftertouch {
+                        vel: u7::new(*value),
+                    },
+                },
                 Body::Program(ch, p) => TrackEventKind::Midi {
                     channel: u4::new(*ch),
                     message: MidiMessage::ProgramChange {
