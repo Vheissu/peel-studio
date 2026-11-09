@@ -30,6 +30,8 @@ effects. There is no web view.
 - Mixing: console-style strips with inserts, bus routing, post-fader sends,
   sidechain compression, gain reduction meters, pan, faders, meters, mute
   and solo; curved automation of any device parameter, track volume or pan.
+- Performance: launch Playlist clips live by lane and scene on the next
+  bar, and capture the performance as a new arrangement.
 - Composing tools: legato, articulate, chop, arpeggiate, strum, flam,
   humanize, velocity levels, flip and tidy, previewed live before they
   apply.

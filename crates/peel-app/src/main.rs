@@ -8,6 +8,7 @@ mod keys;
 mod midi;
 mod mixer;
 mod note_tools;
+mod perform;
 mod piano_roll;
 mod playlist;
 mod prefs;

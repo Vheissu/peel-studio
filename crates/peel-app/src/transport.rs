@@ -83,7 +83,11 @@ pub fn draw(ui: &mut Ui, r: Rect, win: &WindowControl, studio: &mut Studio) {
     ui.tooltip(&stop, "Stop and return");
     if stop.clicked {
         if playing {
-            studio.session.stop();
+            if studio.session.performing() {
+                studio.session.stop_performance();
+            } else {
+                studio.session.stop();
+            }
         } else {
             studio.session.seek(0.0);
         }

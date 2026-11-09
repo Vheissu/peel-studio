@@ -194,6 +194,7 @@ impl Studio {
         match std::env::var("PEEL_DOCK").as_deref() {
             Ok("roll") => self.ws.dock = DockTab::PianoRoll,
             Ok("mixer") => self.ws.dock = DockTab::Mixer,
+            Ok("perform") => self.ws.dock = DockTab::Perform,
             _ => {}
         }
         if let Some(path) = std::env::var_os("PEEL_AUDIO") {
@@ -237,6 +238,12 @@ impl Studio {
                 self.session.set_param(dev, "sample.start", 0.18, 1);
                 self.session.doc.end_gesture();
             }
+        }
+        if std::env::var_os("PEEL_PERFORM").is_some() {
+            self.session
+                .replace_project(peel_session::template::house());
+            self.ws.dock = DockTab::Perform;
+            self.session.launch_scene(0);
         }
         if std::env::var_os("PEEL_SIDECHAIN").is_some() {
             let p = self.session.project();
@@ -436,6 +443,7 @@ impl Studio {
         switch(NamedKey::F6, DockTab::Rack, &mut self.ws);
         switch(NamedKey::F7, DockTab::PianoRoll, &mut self.ws);
         switch(NamedKey::F9, DockTab::Mixer, &mut self.ws);
+        switch(NamedKey::F10, DockTab::Perform, &mut self.ws);
         if ui.input.take_named(NamedKey::F1) {
             self.show_keys = !self.show_keys;
         }
@@ -1000,6 +1008,7 @@ fn dock(ui: &mut Ui, r: Rect, studio: &mut Studio) {
         (DockTab::Rack, peel_ui::icons::ROWS, "Channels"),
         (DockTab::PianoRoll, peel_ui::icons::PIANO_KEYS, "Piano roll"),
         (DockTab::Mixer, peel_ui::icons::FADERS, "Mixer"),
+        (DockTab::Perform, peel_ui::icons::SQUARES, "Perform"),
     ];
     for (tab, icon, label) in items {
         // Only the active tab spells out its name.
@@ -1032,6 +1041,7 @@ fn dock(ui: &mut Ui, r: Rect, studio: &mut Studio) {
                 DockTab::Rack => "F6",
                 DockTab::PianoRoll => "F7",
                 DockTab::Mixer => "F9",
+                DockTab::Perform => "F10",
             };
             ui.tooltip(&resp, &format!("{label} ({shortcut})"));
         }
@@ -1050,5 +1060,8 @@ fn dock(ui: &mut Ui, r: Rect, studio: &mut Studio) {
             piano_roll::draw(ui, content, tools, &mut studio.session, &mut studio.ws)
         }
         DockTab::Mixer => mixer::draw(ui, content, &mut studio.session, &mut studio.ws),
+        DockTab::Perform => {
+            crate::perform::draw(ui, content, tools, &mut studio.session, &mut studio.ws)
+        }
     }
 }

@@ -28,6 +28,7 @@ processing, persistence and tests all exist.
 | Tempo and curves | Tempo changes and ramps in the Playlist, curved automation segments | Done |
 | Audio clips | Gain, reverse, normalize, routing, render to audio, tempo following with time-stretch | Done |
 | Note tools | Legato, articulate, chop, arpeggiate, strum, flam, humanize, levels, flip, tidy with live preview | Done |
+| Performance | Launch lanes and scenes from Playlist clips, next-bar launches, capture to an arrangement | Done |
 | Sidechain and stems | Sidechain keys as graph dependencies, gain reduction meters, solo through buses and returns, stem export | Done |
 | Audio device selection | Choose output and buffer size | Done |
 | Accessibility | AccessKit tree, keyboard focus traversal, named controls | Done |
@@ -49,6 +50,7 @@ across the graph.
 
 ## Phase 4: the rest of the specification
 
-Performance mode and clip launching, stem separation and analysis,
+Launch options (gate, one-shot, follow actions), controller pads, stem
+separation and analysis,
 scripting and controller SDK, remote control, video, mastering assistant,
 localization, signed installers and auto-update.

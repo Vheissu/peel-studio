@@ -12,6 +12,7 @@ pub enum DockTab {
     Rack,
     PianoRoll,
     Mixer,
+    Perform,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -1355,3 +1355,22 @@ fn the_welcome_screen_starts_a_house_project() {
             .any(|c| c.name == "Pad")
     );
 }
+
+#[test]
+fn the_perform_view_launches_and_stops_clips() {
+    let mut h = Harness::new();
+    h.click(W::new(("dock-tab", "Perform")));
+    h.frame();
+    let slots = h.session().performance_slots();
+    let (lane, beat) = (slots[0].0, slots[0].1[0].clip);
+    h.click(W::new(("perform-slot", beat)));
+    assert!(h.session().performing() && h.session().is_playing());
+    assert_eq!(
+        h.session().slot_state(lane, beat),
+        peel_session::SlotState::Playing
+    );
+    // A scene launch queues the other lanes; Stop all ends the performance.
+    h.click(W::new(("perform-scene", 0usize)));
+    h.click(W::new("perform-stop"));
+    assert!(!h.session().performing() && !h.session().is_playing());
+}

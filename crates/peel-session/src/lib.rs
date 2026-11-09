@@ -10,6 +10,7 @@ mod bounce;
 mod compile;
 mod export;
 mod io;
+mod perform;
 mod plugins;
 mod record;
 mod samples;
@@ -36,6 +37,7 @@ pub use io::{
 pub use peel_engine::{
     InputChannels, InputDeviceInfo, InputInfo, InputInjector, LatencyReport, list_input_devices,
 };
+pub use perform::{Slot as PerformSlot, SlotState};
 pub use plugins::{PluginRegistry, type_id_for as plugin_type_id};
 pub use record::{MonitorStatus, RecordingStatus};
 pub use samples::SampleLoader;
@@ -78,6 +80,7 @@ pub struct Session {
     samples: SampleLoader,
     plugins: PluginRegistry,
     bounce: Option<bounce::Bounce>,
+    perform: Option<perform::Performance>,
     notice: Option<Notice>,
     missing: Vec<String>,
     /// Audio device selection and live MIDI input (see `io.rs`).
@@ -171,6 +174,7 @@ impl Session {
             samples: SampleLoader::new(),
             plugins,
             bounce: None,
+            perform: None,
             notice: None,
             missing: Vec::new(),
             io,
@@ -198,6 +202,7 @@ impl Session {
         self.plugins.idle();
         self.poll_bounce();
         self.poll_stretches();
+        self.extend_performance();
         self.poll_recording();
         for (asset, result) in self.samples.poll() {
             match result {
@@ -475,8 +480,9 @@ impl Session {
             );
         }
         let samples = self.clip_samples();
+        let performance = self.performance_project();
         let (mut plan, index) = compile(
-            self.doc.project(),
+            performance.as_ref().unwrap_or(self.doc.project()),
             &CompileContext {
                 mode: self.mode,
                 slots: &slots,
@@ -484,6 +490,11 @@ impl Session {
                 samples: &samples,
             },
         );
+        if performance.is_some() {
+            // Launches play on and on; the plan is extended as it goes.
+            plan.loop_range = None;
+            plan.length_beats = f64::INFINITY;
+        }
         if self.recording_free_runs() {
             // A take is one straight recording: the transport must not wrap
             // at the loop or stop at the end of the arrangement under it.
@@ -642,7 +653,10 @@ impl Session {
     }
 
     pub fn toggle_play(&mut self) {
-        if self.playing {
+        if self.perform.is_some() {
+            // Stopping a performance ends it (a capture is kept).
+            self.stop_performance();
+        } else if self.playing {
             self.stop()
         } else {
             self.play()
