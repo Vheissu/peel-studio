@@ -17,8 +17,11 @@ struct Voice {
     timbre: f32,
     remaining: Option<usize>,
     age: usize,
+    scoped: bool,
 }
 struct Probe {
+    bend: f32,
+    pressure: f32,
     voices: [Option<Voice>; 8],
     release: usize,
     attack: usize,
@@ -64,6 +67,7 @@ impl Device for Probe {
                                 timbre: 0.5,
                                 remaining: None,
                                 age: 0,
+                                scoped: false,
                             });
                         }
                     }
@@ -81,9 +85,17 @@ impl Device for Probe {
                                 timbre,
                                 remaining: v.remaining,
                                 age: v.age,
+                                scoped: true,
                             };
                         }
                     }
+                    EventKind::ClearVoiceExpression { voice } => {
+                        for v in self.voices.iter_mut().flatten().filter(|v| v.id == voice) {
+                            v.scoped = false;
+                        }
+                    }
+                    EventKind::PitchBend { semitones } => self.bend = semitones,
+                    EventKind::ChannelPressure { value } => self.pressure = value,
                     EventKind::NoteOff { voice, .. } => {
                         for slot in &mut self.voices {
                             if let Some(v) = slot.as_mut().filter(|v| v.id == voice) {
@@ -105,7 +117,9 @@ impl Device for Probe {
                 .iter()
                 .flatten()
                 .map(|v| {
-                    (1.0 + v.pitch / 120.0 + v.pressure + v.timbre)
+                    (1.0 + (if v.scoped { v.pitch } else { self.bend }) / 120.0
+                        + if v.scoped { v.pressure } else { self.pressure }
+                        + if v.scoped { v.timbre } else { 0.5 })
                         * 0.1
                         * if self.attack == 0 {
                             1.0
@@ -221,6 +235,8 @@ fn engine(p: RenderPlan) -> OfflineEngine {
     e.send(Cmd::InstallDevice {
         slot: 0,
         device: Box::new(Probe {
+            bend: 0.0,
+            pressure: 0.0,
             voices: [None; 8],
             release: 0,
             attack: 0,
@@ -260,6 +276,8 @@ fn a_refused_last_expression_point_recovers_when_the_next_chunk_has_room() {
     e.send(Cmd::InstallDevice {
         slot: 0,
         device: Box::new(Probe {
+            bend: 0.0,
+            pressure: 0.0,
             voices: [None; 8],
             release: 0,
             attack: 0,
@@ -280,6 +298,130 @@ fn a_refused_last_expression_point_recovers_when_the_next_chunk_has_room() {
     assert_value(before[31], 0.75); // four queued live notes consume the soft cap
     let (after, _) = render_blocks(&mut e, 32, 32);
     assert_value(after[0], 0.89); // the held sequence voice receives its deferred last point
+}
+
+#[test]
+fn a_small_event_buffer_starts_each_chord_note_on_its_own_initial_expression() {
+    use peel_engine::EngineConfig;
+    let mut p = curved_plan();
+    p.sequence.clear();
+    p.expression_notes.clear();
+    p.note_identities.clear();
+    p.note_identity_index.clear();
+    for voice in 1..=3 {
+        let pitch = voice as f32 * 12.0;
+        p.sequence.extend([
+            SeqEvent {
+                beat: 0.0,
+                channel: 0,
+                order: 1,
+                kind: SeqKind::NoteOn {
+                    key: 60,
+                    velocity: 1.0,
+                    voice,
+                },
+            },
+            snapshot(0.0, voice, pitch, 0.0, 0.5),
+            SeqEvent {
+                beat: 2.0,
+                channel: 0,
+                order: 0,
+                kind: SeqKind::NoteOff {
+                    key: 60,
+                    velocity: 0.0,
+                    voice,
+                },
+            },
+        ]);
+        p.expression_notes.push(ExpressionNote {
+            start_beat: 0.0,
+            end_beat: 2.0,
+            channel: 0,
+            key: 60,
+            velocity: 1.0,
+            voice,
+            points: vec![ExpressionState {
+                beat: 0.0,
+                pitch,
+                pressure: 0.0,
+                timbre: 0.5,
+            }],
+        });
+    }
+    p.sequence
+        .sort_by(|a, b| a.beat.total_cmp(&b.beat).then(a.order.cmp(&b.order)));
+    let config = EngineConfig {
+        events_per_block: 4,
+        max_block: 256,
+        ..config()
+    };
+    let mut e = OfflineEngine::new(SR, &config);
+    e.send(Cmd::InstallDevice {
+        slot: 0,
+        device: Box::new(Probe {
+            bend: 0.0,
+            pressure: 0.0,
+            voices: [None; 8],
+            release: 0,
+            attack: 0,
+        }),
+    });
+    e.try_set_plan(Box::new(p)).unwrap();
+    e.send(Cmd::Play);
+    let (mut left, mut right) = ([0.0; 32], [0.0; 32]);
+    #[cfg(all(feature = "rt-check", debug_assertions))]
+    assert_no_alloc::assert_no_alloc(|| e.render(&mut left, &mut right));
+    #[cfg(not(all(feature = "rt-check", debug_assertions)))]
+    e.render(&mut left, &mut right);
+    assert!(
+        left.iter().all(|&value| (value - 0.33).abs() < 1e-6),
+        "only two complete on+seed pairs fit: {left:?}"
+    );
+    e.render(&mut left, &mut right);
+    assert_value(left[0], 0.33);
+    assert_eq!(
+        e.telemetry()
+            .dropped_notes
+            .load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
+}
+
+#[test]
+fn clearing_a_held_notes_last_curve_releases_the_override_without_retriggering() {
+    let original = curved_plan();
+    let mut e = engine(original.clone());
+    e.send(Cmd::InstallDevice {
+        slot: 0,
+        device: Box::new(Probe {
+            bend: 0.0,
+            pressure: 0.0,
+            voices: [None; 8],
+            release: 0,
+            attack: 64,
+        }),
+    });
+    let live = e.take_live_input().unwrap();
+    live.target().set(Some(0));
+    e.send(Cmd::Play);
+    render_blocks(&mut e, BEAT + BEAT / 4, 137);
+    assert!(live.expression(EventKind::PitchBend { semitones: -12.0 }));
+    let (scoped, _) = render_blocks(&mut e, 32, 32);
+    assert_value(scoped[0], 0.29); // the saved curve owns this sounding note
+    let mut plain = original;
+    plain
+        .sequence
+        .retain(|e| !matches!(e.kind, SeqKind::Expression { .. }));
+    plain.expression_notes.clear();
+    e.try_set_plan(Box::new(plain)).unwrap();
+    let (cleared, _) = render_blocks(&mut e, 32, 32);
+    assert_value(cleared[0], 0.14); // current shared bend, same held envelope
+    assert!(live.expression(EventKind::PitchBend { semitones: 12.0 }));
+    let (bent, _) = render_blocks(&mut e, 32, 32);
+    assert_value(bent[0], 0.16);
+    assert!(live.expression(EventKind::ChannelPressure { value: 0.5 }));
+    let (pressed, _) = render_blocks(&mut e, 32, 32);
+    assert_value(pressed[0], 0.21);
 }
 
 #[test]
@@ -344,6 +486,8 @@ fn inserting_and_deleting_an_earlier_same_key_note_keeps_the_original_voice_curv
     e.send(Cmd::InstallDevice {
         slot: 0,
         device: Box::new(Probe {
+            bend: 0.0,
+            pressure: 0.0,
             voices: [None; 8],
             release: 0,
             attack: 64,
@@ -599,6 +743,8 @@ fn loop_articulations_do_not_retarget_the_previous_release_tail() {
     e.send(Cmd::InstallDevice {
         slot: 0,
         device: Box::new(Probe {
+            bend: 0.0,
+            pressure: 0.0,
             voices: [None; 8],
             release: 16,
             attack: 0,
@@ -637,11 +783,20 @@ fn expression_playback_seek_loop_and_plan_chase_never_allocate_or_free() {
         plan: Box::new(p),
     };
     let mut replacement = Some(make(p.clone()));
+    let mut plain = p.clone();
+    plain
+        .sequence
+        .retain(|e| !matches!(e.kind, SeqKind::Expression { .. }));
+    plain.expression_notes.clear();
+    plain.prepare_expression_chase();
+    let mut clearing = Some(make(plain));
     let (tx, _retired) = rtrb::RingBuffer::new(64);
     let mut e = Engine::new(SR, &config, Arc::new(Telemetry::new()), tx, None);
     e.handle_command(Cmd::InstallDevice {
         slot: 0,
         device: Box::new(Probe {
+            bend: 0.0,
+            pressure: 0.0,
             voices: [None; 8],
             release: 0,
             attack: 0,
@@ -669,6 +824,9 @@ fn expression_playback_seek_loop_and_plan_chase_never_allocate_or_free() {
             }
             if i == 400 {
                 e.handle_command(Cmd::Seek { beat: 1.25 });
+            }
+            if i == 600 {
+                e.handle_command(clearing.take().unwrap());
             }
             e.render(&mut l, &mut r);
         }

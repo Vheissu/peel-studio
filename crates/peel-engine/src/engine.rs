@@ -820,14 +820,21 @@ impl Engine {
     /// Match a still-sounding note by musical identity before event-order ids
     /// change. The two prepared indexes keep this O(active voices * log notes).
     fn remap_source_identities(&mut self, new: &RenderPlan) {
-        let old = &self.plan;
+        let Engine {
+            plan: old,
+            active,
+            stage,
+            live,
+            ..
+        } = self;
         if old.note_identities.is_empty() && new.note_identities.is_empty() {
             return;
         }
-        for note in self.active.as_mut_slice().iter_mut().filter(|n| !n.live) {
+        for note in active.as_mut_slice().iter_mut().filter(|n| !n.live) {
+            let old_source = note.source_voice;
             note.source_voice = old
                 .note_identities
-                .binary_search_by_key(&note.source_voice, |n| n.voice)
+                .binary_search_by_key(&old_source, |n| n.voice)
                 .ok()
                 .and_then(|i| {
                     let identity = old.note_identities[i].identity;
@@ -837,6 +844,23 @@ impl Engine {
                         .map(|i| new.note_identity_index[i].1)
                 })
                 .unwrap_or(crate::LIVE_TARGET_NONE);
+            let expressed = |plan: &RenderPlan, voice| {
+                plan.expression_notes
+                    .binary_search_by_key(&voice, |n| n.voice)
+                    .ok()
+                    .is_some_and(|i| !plan.expression_notes[i].points.is_empty())
+            };
+            if note.source_voice != crate::LIVE_TARGET_NONE
+                && expressed(old, old_source)
+                && !expressed(new, note.source_voice)
+            {
+                let kind = EventKind::ClearVoiceExpression { voice: note.voice };
+                if stage.push_on(note.slot as usize, 0, kind) {
+                    live.clear_deferred_expression(note.slot, kind);
+                } else {
+                    live.defer_expression(note.slot, kind);
+                }
+            }
         }
     }
 
@@ -1282,18 +1306,39 @@ impl Engine {
                     velocity,
                     voice,
                 } => {
-                    if !matches!(slots.get(slot), Some(Some(_)))
-                        || active.contains_voice(route.slot, voice)
-                    {
+                    if !matches!(slots.get(slot), Some(Some(_))) {
                         continue;
                     }
-                    let expressed = plan
+                    let span = plan
                         .expression_notes
                         .binary_search_by_key(&voice, |n| n.voice)
-                        .is_ok();
+                        .ok()
+                        .map(|i| &plan.expression_notes[i]);
+                    let seed = span.and_then(|n| {
+                        let end = n.points.partition_point(|p| p.beat <= ev.beat);
+                        end.checked_sub(1).map(|i| n.points[i])
+                    });
+                    // A retained note at this onset still needs its revised seed,
+                    // but it must not retrigger its envelope.
+                    if let Some(actual_voice) = active.voice_for_source(route.slot, voice) {
+                        if let Some(seed) = seed {
+                            let kind = EventKind::VoiceExpression {
+                                voice: actual_voice,
+                                pitch: seed.pitch,
+                                pressure: seed.pressure,
+                                timbre: seed.timbre,
+                            };
+                            if stage.push_on(slot, offset, kind) {
+                                live.clear_deferred_expression(route.slot, kind);
+                            } else {
+                                live.defer_expression(route.slot, kind);
+                            }
+                        }
+                        continue;
+                    }
                     if voice >= LIVE_VOICE_BASE
                         || active.is_full()
-                        || !stage.has_on_room(slot, if expressed { 2 } else { 1 })
+                        || !stage.has_on_room(slot, 1 + usize::from(seed.is_some()))
                     {
                         telemetry.dropped_notes.fetch_add(1, Ordering::Relaxed);
                         continue;
@@ -1308,6 +1353,18 @@ impl Engine {
                             voice: actual_voice,
                         },
                     );
+                    if let Some(seed) = seed {
+                        // Staged together, so a chord cannot consume the seed's
+                        // room with other NoteOns and start on the wrong pitch.
+                        let kind = EventKind::VoiceExpression {
+                            voice: actual_voice,
+                            pitch: seed.pitch,
+                            pressure: seed.pressure,
+                            timbre: seed.timbre,
+                        };
+                        stage.push_on(slot, offset, kind);
+                        live.clear_deferred_expression(route.slot, kind);
+                    }
                     active.push(ActiveNote {
                         slot: route.slot,
                         key,
@@ -1323,6 +1380,21 @@ impl Engine {
                     pressure,
                     timbre,
                 } => {
+                    // NoteOn already staged this seed atomically. Chased notes
+                    // also receive their initial state as a pair.
+                    let initial = plan
+                        .expression_notes
+                        .binary_search_by_key(&voice, |n| n.voice)
+                        .ok()
+                        .is_some_and(|i| {
+                            plan.expression_notes[i]
+                                .points
+                                .first()
+                                .is_some_and(|p| p.beat == ev.beat)
+                        });
+                    if initial {
+                        continue;
+                    }
                     if let Some(actual_voice) = active.voice_for_source(route.slot, voice) {
                         let kind = EventKind::VoiceExpression {
                             voice: actual_voice,
