@@ -20,6 +20,7 @@
 //! | `peel.fx.glitch`     | Glitch  | Creative   |
 //! | `peel.fx.multiband`  | Multiband | Dynamics |
 //! | `peel.fx.mastering`  | Mastering | Mastering |
+//! | `peel.fx.mastering`  | Mastering | Mastering |
 //!
 //! Every effect processes the left and right buffers in place, ignores note
 //! events, splits blocks at parameter events so changes land on the exact

@@ -66,5 +66,8 @@ pub fn accepts_sidechain(type_id: &str) -> bool {
 
 /// Device types that report gain reduction for a meter.
 pub fn shows_reduction(type_id: &str) -> bool {
-    matches!(type_id, "peel.fx.compressor" | "peel.fx.limiter")
+    matches!(
+        type_id,
+        "peel.fx.compressor" | "peel.fx.limiter" | "peel.fx.mastering"
+    )
 }
