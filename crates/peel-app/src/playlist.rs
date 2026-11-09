@@ -1234,6 +1234,7 @@ fn clips(
                 MenuItem::new(if c.muted { "Unmute clip" } else { "Mute clip" }),
                 MenuItem::Separator,
                 MenuItem::new("Delete clip").shortcut("Del"),
+                MenuItem::new("Chop at hits").enabled(!reversed),
             ];
             let cid = c.id;
             match ui.menu(menu_id, at, &audio_items) {
@@ -1262,6 +1263,10 @@ fn clips(
                 Some(3) => s.doc.edit("Delete clip", |p| {
                     p.arrangement_mut().clips.retain(|x| x.id != cid)
                 }),
+                Some(4) => match chop_at_hits(s, &c) {
+                    Some(n) => s.notify(format!("Chopped into {n} clips"), false),
+                    None => s.notify("No hits found in this clip", true),
+                },
                 _ => {}
             }
         } else if let Some(choice) = ui.menu(menu_id, at, &items) {
@@ -2776,4 +2781,76 @@ pub(crate) fn tension_handle_at(
         return None;
     };
     tension_handle(&v, c, auto_body(clip_rect(&v, lane, c)), points, i)
+}
+
+/// Cuts an audio clip at every hit (onset) inside it, as one undo step.
+/// Returns how many clips it became, or `None` when there was nothing to
+/// cut (no decoded audio or no hits).
+pub fn chop_at_hits(s: &mut Session, c: &Clip) -> Option<usize> {
+    let ClipContent::Audio {
+        asset, source_bpm, ..
+    } = &c.content
+    else {
+        return None;
+    };
+    let buf = s.sample(*asset)?;
+    let rate = f64::from(buf.sample_rate);
+    let hits = peel_dsp::stretch::onsets(&buf.channels, buf.frames(), buf.sample_rate);
+    // File seconds to song beats for this clip.
+    let tempo = peel_time::TempoMap::from_segments(&s.project().tempo);
+    let src_start = match source_bpm {
+        Some(b) => c.offset.as_f64() * 60.0 / b,
+        None => peel_session::clip_source_start_seconds(&tempo, c),
+    };
+    let beat_of = |sec: f64| -> f64 {
+        match source_bpm {
+            Some(b) => c.start.as_f64() + (sec - src_start) * b / 60.0,
+            None => {
+                let t0 = tempo.beat_to_seconds(c.start.as_f64());
+                tempo.seconds_to_beat(t0 + sec - src_start)
+            }
+        }
+    };
+    let min = Time::new(1, 32);
+    let mut cuts: Vec<Time> = hits
+        .iter()
+        .map(|&f| Time::from_f64(beat_of(f as f64 / rate), 960))
+        .filter(|t| *t > c.start + min && *t < c.end() - min)
+        .collect();
+    cuts.dedup();
+    if cuts.is_empty() {
+        return None;
+    }
+    let mut bounds = vec![c.start];
+    bounds.extend(cuts);
+    bounds.push(c.end());
+    let pieces: Vec<Clip> = bounds
+        .windows(2)
+        .enumerate()
+        .map(|(i, w)| {
+            let mut p = c.clone();
+            if i > 0 {
+                p.id = Id::new();
+            }
+            p.start = w[0];
+            p.length = w[1] - w[0];
+            p.offset = c.offset + (w[0] - c.start);
+            if let ClipContent::Audio {
+                fade_in, fade_out, ..
+            } = &mut p.content
+            {
+                *fade_in = Time::ZERO;
+                *fade_out = Time::ZERO;
+            }
+            p
+        })
+        .collect();
+    let n = pieces.len();
+    let cid = c.id;
+    s.doc.edit("Chop at hits", |p| {
+        let arr = p.arrangement_mut();
+        arr.clips.retain(|x| x.id != cid);
+        arr.clips.extend(pieces);
+    });
+    Some(n)
 }

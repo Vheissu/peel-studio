@@ -1402,3 +1402,74 @@ fn the_perform_view_launches_and_stops_clips() {
     h.click(W::new("perform-stop"));
     assert!(!h.session().performing() && !h.session().is_playing());
 }
+
+#[test]
+fn chopping_an_audio_clip_cuts_it_at_each_hit() {
+    let dir = std::env::temp_dir().join(format!("peel-app-chop-{}", peel_document::Id::new()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("hits.wav");
+    let sr = 48_000u32;
+    // Four hits half a second apart.
+    let mut x = vec![0.0f32; sr as usize * 2];
+    for k in 0..4 {
+        let at = k * sr as usize / 2;
+        for i in 0..400 {
+            x[at + i] = (1.0 - i as f32 / 400.0) * if i % 2 == 0 { 0.8 } else { -0.8 };
+        }
+    }
+    peel_media::write_wav(&path, &[&x, &x], sr, peel_media::WavFormat::FLOAT32).unwrap();
+    let mut h = Harness::new();
+    let lane = h.session().project().arrangement().tracks[4].id;
+    h.studio
+        .session
+        .add_audio_clip(lane, Time::beats(4), &path)
+        .unwrap();
+    let clip = h
+        .session()
+        .project()
+        .arrangement()
+        .clips
+        .iter()
+        .find(|c| c.track == lane)
+        .unwrap()
+        .clone();
+    let ClipContent::Audio { asset, .. } = clip.content else {
+        unreachable!()
+    };
+    for _ in 0..300 {
+        if h.session().sample(asset).is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        h.frame();
+    }
+    assert_eq!(
+        crate::playlist::chop_at_hits(&mut h.studio.session, &clip),
+        Some(4)
+    );
+    let mut pieces: Vec<_> = h
+        .session()
+        .project()
+        .arrangement()
+        .clips
+        .iter()
+        .filter(|c| c.track == lane)
+        .cloned()
+        .collect();
+    pieces.sort_by_key(|c| c.start);
+    assert_eq!(pieces.len(), 4);
+    let beat = 118.0 / 60.0 * 0.5;
+    for (k, p) in pieces.iter().enumerate() {
+        let want = 4.0 + k as f64 * beat;
+        assert!(
+            (p.start.as_f64() - want).abs() < 0.03,
+            "piece {k} at {} not {want}",
+            p.start.as_f64()
+        );
+        // Each piece reads the file where it sits.
+        assert_eq!(p.offset, clip.offset + (p.start - clip.start));
+    }
+    assert_eq!(pieces.last().unwrap().end(), clip.end());
+    assert_eq!(h.session().doc.undo_label(), Some("Chop at hits"));
+    std::fs::remove_dir_all(&dir).ok();
+}

@@ -59,7 +59,7 @@ pub fn stretch(channels: &[Vec<f32>], ratio: f64, sample_rate: f32) -> Vec<Vec<f
 
 /// Onset positions: where short-term energy jumps well above what came just
 /// before. At least 60 ms apart.
-fn onsets(channels: &[Vec<f32>], n: usize, sample_rate: f32) -> Vec<usize> {
+pub fn onsets(channels: &[Vec<f32>], n: usize, sample_rate: f32) -> Vec<usize> {
     let frame = ((sample_rate * 0.004) as usize).max(16);
     let energy: Vec<f32> = (0..n / frame)
         .map(|f| {
