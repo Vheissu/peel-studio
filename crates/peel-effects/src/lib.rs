@@ -13,6 +13,10 @@
 //! | `peel.fx.filter`     | Filter  | Filter     |
 //! | `peel.fx.chorus`     | Chorus  | Modulation |
 //! | `peel.fx.utility`    | Utility | Utility    |
+//! | `peel.fx.bass_lift`  | Bass Lift | EQ       |
+//! | `peel.fx.vintage_chorus` | Vintage Chorus | Modulation |
+//! | `peel.fx.flanger`    | Flanger | Modulation |
+//! | `peel.fx.phaser`     | Phaser  | Modulation |
 //!
 //! Every effect processes the left and right buffers in place, ignores note
 //! events, splits blocks at parameter events so changes land on the exact
@@ -26,19 +30,23 @@ use peel_dsp::{Device, DeviceDescriptor, Preset};
 mod common;
 mod oversample;
 
+pub mod bass_lift;
 pub mod chorus;
 pub mod compressor;
 pub mod delay;
 pub mod drive;
 pub mod eq;
 pub mod filter;
+pub mod flanger;
 pub mod limiter;
+pub mod phaser;
 pub mod reverb;
 pub mod utility;
+pub mod vintage_chorus;
 
 /// Every effect descriptor, in browser order.
 pub fn descriptors() -> &'static [&'static DeviceDescriptor] {
-    static ALL: [&DeviceDescriptor; 9] = [
+    static ALL: [&DeviceDescriptor; 13] = [
         &eq::DESCRIPTOR,
         &compressor::DESCRIPTOR,
         &limiter::DESCRIPTOR,
@@ -48,6 +56,10 @@ pub fn descriptors() -> &'static [&'static DeviceDescriptor] {
         &filter::DESCRIPTOR,
         &chorus::DESCRIPTOR,
         &utility::DESCRIPTOR,
+        &bass_lift::DESCRIPTOR,
+        &vintage_chorus::DESCRIPTOR,
+        &flanger::DESCRIPTOR,
+        &phaser::DESCRIPTOR,
     ];
     &ALL
 }
@@ -67,6 +79,10 @@ pub fn create(type_id: &str) -> Option<Box<dyn Device>> {
         "peel.fx.filter" => Box::new(filter::Filter::new()),
         "peel.fx.chorus" => Box::new(chorus::Chorus::new()),
         "peel.fx.utility" => Box::new(utility::Utility::new()),
+        "peel.fx.bass_lift" => Box::new(bass_lift::BassLift::new()),
+        "peel.fx.vintage_chorus" => Box::new(vintage_chorus::VintageChorus::new()),
+        "peel.fx.flanger" => Box::new(flanger::Flanger::new()),
+        "peel.fx.phaser" => Box::new(phaser::Phaser::new()),
         _ => return None,
     })
 }
@@ -84,6 +100,10 @@ pub fn presets(type_id: &str) -> &'static [Preset] {
         "peel.fx.filter" => &filter::PRESETS,
         "peel.fx.chorus" => &chorus::PRESETS,
         "peel.fx.utility" => &utility::PRESETS,
+        "peel.fx.bass_lift" => &bass_lift::PRESETS,
+        "peel.fx.vintage_chorus" => &vintage_chorus::PRESETS,
+        "peel.fx.flanger" => &flanger::PRESETS,
+        "peel.fx.phaser" => &phaser::PRESETS,
         _ => &[],
     }
 }
