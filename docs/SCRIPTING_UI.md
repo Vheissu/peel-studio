@@ -33,11 +33,12 @@ peel.call("ui.set", {"dock": "rack", "panels": {"browser": True}})
 | `notes` | IDs of notes in the selected pattern; an empty array clears the selection |
 | `clips` | IDs of clips in the active arrangement; an empty array clears the selection |
 | `focus` | Object with `kind` (`channel`, `track`, `clip`) and `id`, or `{"kind":"none"}` |
-| `panels` | Optional booleans: `browser`, `inspector`, `scripts`, `editor`, `help` |
+| `panels` | Optional booleans: `browser`, `inspector`, `scripts`, `editor`, `help`, `meter`, `status_details` |
+| `sizes` | Optional dimensions in logical pixels: `browser` (180–420), `inspector` (240–480), `editor` height (180–1200, limited by the current window) |
 
 Inspector and Scripts share the right column. Showing one hides the other;
-setting both false hides the column. Visibility choices are saved in user
-preferences. Selection and focus remain session state. Unknown targets or
+setting both false hides the column. Visibility, sizes and active tabs are saved in user preferences. Pattern,
+channel, note and clip selection and focus remain session state. Unknown targets or
 invalid options reject the complete `ui.set` request without changing it.
 
 `ui.get` returns those fields and the current focus. `peel.call("tools", {})`

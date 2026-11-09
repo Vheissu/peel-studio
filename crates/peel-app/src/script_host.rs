@@ -67,7 +67,8 @@ pub fn execute(
                 "pattern":{"type":"string"},"channel":{"type":"string"},
                 "notes":{"type":"array","items":{"type":"string"}},"clips":{"type":"array","items":{"type":"string"}},
                 "focus":{"type":"object","properties":{"kind":{"enum":["channel","track","clip","none"]},"id":{"type":"string"}}},
-                "panels":{"type":"object","additionalProperties":false,"properties":{"browser":{"type":"boolean"},"inspector":{"type":"boolean"},"scripts":{"type":"boolean"},"editor":{"type":"boolean"},"help":{"type":"boolean"}}}
+                "panels":{"type":"object","additionalProperties":false,"properties":{"browser":{"type":"boolean"},"inspector":{"type":"boolean"},"scripts":{"type":"boolean"},"editor":{"type":"boolean"},"help":{"type":"boolean"},"meter":{"type":"boolean"},"status_details":{"type":"boolean"}}},
+                "sizes":{"type":"object","additionalProperties":false,"properties":{"browser":{"type":"number","minimum":180,"maximum":420},"inspector":{"type":"number","minimum":240,"maximum":480},"editor":{"type":"number","minimum":180,"maximum":1200}}}
             }}}));
             Ok(Value::Array(tools.clone()))
         }
@@ -99,7 +100,8 @@ fn view(session: &Session, ws: &Workspace, prefs: &Prefs) -> Value {
         "browser_tab":match ws.browser_tab {BrowserTab::Instruments=>"instruments",BrowserTab::Effects=>"effects",BrowserTab::Samples=>"samples",BrowserTab::Patterns=>"patterns"},
         "pattern":session.selected_pattern(),"channel":ws.selected_channel,
         "notes":ws.roll.selection,"clips":ws.playlist.selection,"focus":focus,
-        "panels":{"browser":prefs.show_browser,"inspector":prefs.show_inspector,"scripts":prefs.show_scripts,"editor":prefs.show_editor,"help":prefs.show_help}})
+        "panels":{"browser":prefs.show_browser,"inspector":prefs.show_inspector,"scripts":prefs.show_scripts,"editor":prefs.show_editor,"help":prefs.show_help,"meter":prefs.show_meter,"status_details":prefs.show_status_details},
+        "sizes":{"browser":ws.browser_w,"inspector":ws.inspector_w,"editor":ws.dock_h}})
 }
 
 #[derive(Default, Deserialize)]
@@ -110,6 +112,15 @@ struct Panels {
     scripts: Option<bool>,
     editor: Option<bool>,
     help: Option<bool>,
+    meter: Option<bool>,
+    status_details: Option<bool>,
+}
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct Sizes {
+    browser: Option<f32>,
+    inspector: Option<f32>,
+    editor: Option<f32>,
 }
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -130,6 +141,7 @@ struct Update {
     notes: Option<Vec<Id>>,
     clips: Option<Vec<Id>>,
     panels: Panels,
+    sizes: Sizes,
     focus: Option<ViewFocus>,
 }
 fn update(
@@ -141,6 +153,15 @@ fn update(
     let change: Update = serde_json::from_value(args).map_err(|e| e.to_string())?;
     if change.panels.inspector == Some(true) && change.panels.scripts == Some(true) {
         return Err("Inspector and Scripts share the right column; choose one".into());
+    }
+    for (value, min, max, name) in [
+        (change.sizes.browser, 180.0, 420.0, "browser"),
+        (change.sizes.inspector, 240.0, 480.0, "inspector"),
+        (change.sizes.editor, 180.0, 1200.0, "editor"),
+    ] {
+        if value.is_some_and(|v| !v.is_finite() || !(min..=max).contains(&v)) {
+            return Err(format!("{name} size must be between {min} and {max}"));
+        }
     }
     let dock = change
         .dock
@@ -264,6 +285,22 @@ fn update(
     if let Some(focus) = focus {
         ws.focus = focus;
     }
+    if let Some(on) = change.panels.meter {
+        prefs.show_meter = on;
+    }
+    if let Some(on) = change.panels.status_details {
+        prefs.show_status_details = on;
+    }
+    if let Some(w) = change.sizes.browser {
+        ws.browser_w = w;
+    }
+    if let Some(w) = change.sizes.inspector {
+        ws.inspector_w = w;
+    }
+    if let Some(h) = change.sizes.editor {
+        ws.dock_h = h;
+    }
+    prefs.capture_layout(ws);
     prefs.save();
     Ok(view(session, ws, prefs))
 }
@@ -305,11 +342,17 @@ mod tests {
         let pattern = session.project().patterns[0].id;
         let channel = session.project().channels[0].id;
         let note = session.project().patterns[0].notes[0].id;
-        let state=execute(&mut session,&mut ws,&mut prefs,&mut control,"ui.set",json!({"dock":"mixer","pattern":pattern,"channel":channel,"notes":[note],"panels":{"browser":false,"help":true}})).unwrap();
+        let state=execute(&mut session,&mut ws,&mut prefs,&mut control,"ui.set",json!({"dock":"mixer","pattern":pattern,"channel":channel,"notes":[note],"panels":{"browser":false,"help":true,"meter":false,"status_details":false},"sizes":{"browser":280,"inspector":320,"editor":360}})).unwrap();
         assert_eq!(state["dock"], "mixer");
         assert_eq!(ws.selected_channel, Some(channel));
         assert!(!prefs.show_browser);
         assert!(prefs.show_help);
+        assert!(!prefs.show_meter);
+        assert!(!prefs.show_status_details);
+        assert_eq!(prefs.browser_w, Some(280.0));
+        assert_eq!(prefs.inspector_w, Some(320.0));
+        assert_eq!(prefs.dock_h, Some(360.0));
+        assert_eq!(prefs.dock_tab, Some(DockTab::Mixer));
         assert!(ws.roll.selection.contains(&note));
         assert!(!session.doc.can_undo());
         assert!(
@@ -324,6 +367,19 @@ mod tests {
             .is_err()
         );
         assert_eq!(ws.dock, DockTab::Mixer);
+        assert!(
+            execute(
+                &mut session,
+                &mut ws,
+                &mut prefs,
+                &mut control,
+                "ui.set",
+                json!({"dock":"rack","sizes":{"browser":1}})
+            )
+            .is_err()
+        );
+        assert_eq!(ws.dock, DockTab::Mixer);
+        assert_eq!(ws.browser_w, 280.0);
         let state = execute(
             &mut session,
             &mut ws,
