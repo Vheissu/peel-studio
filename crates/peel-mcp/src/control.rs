@@ -70,7 +70,7 @@ impl Control {
                 "compensation_latency_ms": s.compensation_latency_samples() as f32 / s.sample_rate().max(1.0) * 1000.0,
                 "assets": s.project().assets.iter().map(|a| json!({"id":a.id,"loading":s.audio_loading(a.id),"duration_seconds":s.asset_duration_seconds(a.id)})).collect::<Vec<_>>(),
                 "missing_devices": s.missing_devices(), "plugins_scanning": s.plugins_scanning(),
-                "recording": s.is_recording(), "armed_lanes": s.armed_lanes(),
+                "recording": s.is_recording(), "pattern_recording":s.pattern_recording_active(), "armed_lanes": s.armed_lanes(),
                 "record_blocker": s.record_blocker(), "input_open": s.input_is_open(),
                 "input_error": s.input_error(), "input_warning": s.input_warning(),
                 "monitoring": s.monitoring(), "midi_enabled": s.midi_enabled(), "mpe": s.mpe_config(),
@@ -789,7 +789,7 @@ fn lane_exists(s: &Session, lane: Id) -> Result<(), String> {
     }
 }
 fn can_replace(s: &Session, discard: bool) -> Result<(), String> {
-    if s.is_recording() {
+    if s.is_recording() || s.pattern_recording_active() {
         return Err("Stop recording before replacing the project".into());
     }
     if s.doc.is_dirty() && !discard {

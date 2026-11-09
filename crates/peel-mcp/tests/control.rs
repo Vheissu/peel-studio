@@ -611,3 +611,29 @@ fn explicit_mpe_off_disables_rpn_reactivation_even_if_runtime_already_reports_of
     rpn(&mut h, 15);
     assert_eq!(h.call("mpe", json!({})).unwrap()["config"]["mode"], "off");
 }
+
+#[test]
+fn replacing_a_project_cannot_drop_a_buffered_pattern_take() {
+    let mut h = Host::new();
+    let project = h.s.project().id;
+    h.s.set_pattern_recording_active(true);
+    assert!(
+        h.call(
+            "new_project",
+            json!({"title":"Other","discard_changes":true})
+        )
+        .is_err()
+    );
+    assert_eq!(h.s.project().id, project);
+    assert_eq!(
+        h.call("status", json!({})).unwrap()["pattern_recording"],
+        true
+    );
+    h.s.set_pattern_recording_active(false);
+    h.call(
+        "new_project",
+        json!({"title":"Other","discard_changes":true}),
+    )
+    .unwrap();
+    assert_ne!(h.s.project().id, project);
+}

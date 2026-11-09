@@ -319,7 +319,7 @@ impl Recorder {
                 break;
             }
             let mut saved = Note::new(channel, start, duration, note.key, note.velocity);
-            saved.release = release;
+            saved.release = if stop < end { 0.5 } else { release };
             let before = note
                 .snapshots
                 .partition_point(|(at, _)| *at <= cursor + 1e-9);
@@ -407,6 +407,7 @@ impl Recorder {
     }
 
     fn finish(&mut self, s: &mut Session) {
+        s.set_pattern_recording_active(false);
         let at = self.take.as_ref().map_or(0.0, |t| t.clock.cursor);
         self.flush(s, None, at);
         let take = self.take.take();
@@ -456,6 +457,12 @@ impl Recorder {
         if omitted {
             self.overflow(s);
         }
+    }
+
+    /// Finish before changing projects or saving a shutdown recovery snapshot.
+    pub fn finish_capture(&mut self, s: &mut Session) {
+        self.armed = false;
+        self.frame(s);
     }
 
     /// Drains even when disarmed so an earlier performance cannot enter a take.
@@ -532,6 +539,7 @@ impl Recorder {
         if !self.armed {
             self.warned = false;
         }
+        s.set_pattern_recording_active(self.take.is_some());
     }
 }
 

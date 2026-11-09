@@ -113,6 +113,7 @@ pub struct Session {
     mode: PlayMode,
     selected_pattern: Id,
     playing: bool,
+    pattern_recording_active: bool,
     play_start: f64,
     metronome: bool,
     /// Song playback wraps at the loop range (or the arrangement end).
@@ -211,6 +212,7 @@ impl Session {
                 PlayMode::Song => Id::NIL,
             },
             playing: false,
+            pattern_recording_active: false,
             play_start: 0.0,
             metronome: false,
             looping: true,
@@ -733,6 +735,16 @@ impl Session {
         }
     }
 
+    /// A desktop pattern take is buffered until its final undoable edit.
+    pub fn pattern_recording_active(&self) -> bool {
+        self.pattern_recording_active
+    }
+
+    /// Updated by the pattern recorder, independently of audio input recording.
+    pub fn set_pattern_recording_active(&mut self, active: bool) {
+        self.pattern_recording_active = active;
+    }
+
     pub fn is_playing(&self) -> bool {
         self.playing
     }
@@ -1042,6 +1054,7 @@ impl Session {
 
     /// Replaces the document (new project, template, open).
     pub fn replace_project(&mut self, project: Project) {
+        self.pattern_recording_active = false;
         self.stop();
         self.forget_lanes();
         self.doc.replace(project);

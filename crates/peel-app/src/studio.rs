@@ -251,6 +251,7 @@ impl Studio {
                     .map_or(peel_session::template::beat_and_melody as fn() -> _, |t| {
                         t.1
                     });
+                self.prepare_project_change();
                 self.session.replace_project(make());
                 self.reset_workspace();
             }
@@ -259,6 +260,7 @@ impl Studio {
                 p.mixer.tracks[0]
                     .inserts
                     .push(peel_session::template::device("peel.fx.limiter", None));
+                self.prepare_project_change();
                 self.session.replace_project(p);
                 self.reset_workspace();
             }
@@ -693,6 +695,7 @@ impl Studio {
             self.open();
         }
         if input.take_command("n", false) {
+            self.prepare_project_change();
             self.session
                 .replace_project(peel_session::template::beat_and_melody());
             self.reset_workspace();
@@ -899,7 +902,14 @@ impl Studio {
         self.open_path(path);
     }
 
+    pub(crate) fn prepare_project_change(&mut self) {
+        self.recorder.finish_capture(&mut self.session);
+        // Keep the outgoing take recoverable before replacing its document.
+        self.autosave(true);
+    }
+
     pub fn open_path(&mut self, path: PathBuf) {
+        self.prepare_project_change();
         let ext = path
             .extension()
             .map(|e| e.to_string_lossy().to_lowercase())
@@ -1219,6 +1229,7 @@ impl App for Studio {
     }
 
     fn shutdown(&mut self) {
+        self.recorder.finish_capture(&mut self.session);
         self.session.panic();
         // Unsaved work stays recoverable; a clean session leaves nothing.
         if self.session.doc.is_dirty() {

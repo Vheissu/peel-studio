@@ -18,6 +18,12 @@ pub fn pump(studio: &mut Studio) {
     control.tick();
     if let Some(run) = &mut running {
         run.job.pump(|name, args| {
+            if matches!(
+                name,
+                "new_project" | "peel_new_project" | "open_project" | "peel_open_project"
+            ) {
+                studio.prepare_project_change();
+            }
             let before = studio.session.project().id;
             let recording = studio.session.is_recording();
             let target = studio.session.live_target();
@@ -714,6 +720,68 @@ mod recording_tests {
         );
         assert_eq!(ws.dock, dock);
         assert_eq!(session.project(), &before);
+    }
+
+    #[test]
+    fn shutdown_finishes_a_buffered_take_before_the_recovery_snapshot() {
+        let mut studio = Studio::new(Session::new_silent(template::beat_and_melody()));
+        let pid = studio.session.selected_pattern();
+        let ch = studio
+            .session
+            .project()
+            .channels
+            .iter()
+            .find(|c| c.name == "Piano")
+            .unwrap()
+            .id;
+        let before = studio
+            .session
+            .project()
+            .pattern(pid)
+            .unwrap()
+            .notes_for(ch)
+            .count();
+        studio
+            .session
+            .set_mode(peel_session::PlayMode::Pattern(pid));
+        studio.session.set_live_target(Some(ch));
+        record_pattern(&mut studio, json!({"armed":true})).unwrap();
+        studio.session.play();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while studio.session.position() < 0.01 {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        studio.recorder.frame(&mut studio.session);
+        studio.session.live_note(ch, 60, 0.8, true);
+        studio.session.pitch_bend(0.5);
+        studio.recorder.frame(&mut studio.session);
+        assert!(studio.session.pattern_recording_active());
+        assert_eq!(
+            studio
+                .session
+                .project()
+                .pattern(pid)
+                .unwrap()
+                .notes_for(ch)
+                .count(),
+            before
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        peel_ui::App::shutdown(&mut studio);
+        assert!(!studio.session.pattern_recording_active());
+        let pattern = studio.session.project().pattern(pid).unwrap();
+        assert_eq!(pattern.notes_for(ch).count(), before + 1);
+        assert!(
+            pattern
+                .expression
+                .iter()
+                .any(|e| e.pitch.iter().any(|p| p.value == 1.0))
+        );
+        assert!(
+            studio.session.doc.is_dirty(),
+            "shutdown recovery must include the take"
+        );
     }
 
     #[test]

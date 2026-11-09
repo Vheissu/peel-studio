@@ -145,8 +145,13 @@ fn a_held_note_and_its_curves_continue_after_the_pattern_wrap() {
     assert_eq!(notes.len(), 2);
     let start = notes.iter().find(|n| n.start == Time::new(7, 2)).unwrap();
     assert_eq!(start.end(), Time::beats(4));
+    assert_eq!(start.release, 0.5, "loop cuts use a neutral release");
     let continuation = notes.iter().find(|n| n.start == Time::ZERO).unwrap();
     assert_eq!(continuation.length, Time::new(1, 2));
+    assert_eq!(
+        continuation.release, 0.3,
+        "the final segment keeps the physical release"
+    );
     let curve = pt.expression_for(continuation.id).unwrap();
     assert_eq!(curve.at(Time::ZERO).pitch, 2.0);
     assert_eq!(curve.at(Time::new(1, 4)).pitch, 4.0);
