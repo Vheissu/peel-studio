@@ -767,6 +767,9 @@ pub fn add_instrument(s: &mut Session, type_id: &str) -> Option<Id> {
 
 /// Adds an instrument channel with a factory preset applied.
 pub fn add_instrument_preset(s: &mut Session, type_id: &str, preset: Option<&str>) -> Option<Id> {
+    if crate::util::mixer_full(s) {
+        return None;
+    }
     let desc = peel_devices::descriptor(type_id)?;
     let dev = template::device(type_id, preset);
     let name = preset
@@ -787,6 +790,9 @@ pub fn add_instrument_preset(s: &mut Session, type_id: &str, preset: Option<&str
 
 /// Adds a channel playing an installed plugin instrument.
 pub fn add_plugin_channel(s: &mut Session, type_id: &str, name: &str) -> Option<Id> {
+    if crate::util::mixer_full(s) {
+        return None;
+    }
     let dev = peel_document::DeviceInstance::new(type_id, 1);
     let mut new_id = None;
     s.doc.edit(format!("Add {name}"), |p| {
@@ -798,6 +804,9 @@ pub fn add_plugin_channel(s: &mut Session, type_id: &str, name: &str) -> Option<
 
 /// Adds a sampler channel playing `path`.
 pub fn add_sample_channel(s: &mut Session, path: &Path) -> Option<Id> {
+    if crate::util::mixer_full(s) {
+        return None;
+    }
     let asset = match s.reference_audio_file(path) {
         Ok(a) => a,
         Err(e) => {
@@ -823,6 +832,9 @@ pub fn add_sample_channel(s: &mut Session, path: &Path) -> Option<Id> {
 }
 
 fn clone_channel(s: &mut Session, cid: Id) {
+    if crate::util::mixer_full(s) {
+        return;
+    }
     let Some(src) = s.project().channel(cid).cloned() else {
         return;
     };

@@ -178,6 +178,9 @@ impl Studio {
         {
             self.session.notify(format!("Outputs: {e}"), true);
         }
+        if let Some(dir) = prefs.recordings_dir.clone().filter(|d| d.is_dir()) {
+            self.session.set_recordings_dir(Some(dir));
+        }
         if let Some(c) = prefs.primary_output
             && self.session.primary_output_channels() != c
             && let Err(e) = self.session.set_primary_output_channels(c)
@@ -529,10 +532,8 @@ impl Studio {
                         .find(|d| d.type_id == "peel.fx.eq")
                         .map(|d| d.id);
                     let id = existing.unwrap_or_else(|| {
-                        let eq = peel_session::template::device(
-                            "peel.fx.eq",
-                            Some("Vocal Presence"),
-                        );
+                        let eq =
+                            peel_session::template::device("peel.fx.eq", Some("Vocal Presence"));
                         let id = eq.id;
                         self.session
                             .doc

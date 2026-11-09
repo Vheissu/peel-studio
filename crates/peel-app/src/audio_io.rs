@@ -13,7 +13,9 @@ use peel_session::{
     InputChannels, InputDeviceInfo, OutputChannels, OutputDeviceInfo, OutputRoute, Session,
 };
 use peel_ui::Id as W;
-use peel_ui::{Align, Color, CursorIcon, LayerId, MenuItem, Rect, Ui, icons, vec2};
+use peel_ui::{
+    Align, Color, CursorIcon, FocusKind, LayerId, MenuItem, Rect, Role, Semantics, Ui, icons, vec2,
+};
 
 use crate::instrument_editor::{Rows, section, switch};
 use crate::prefs::Prefs;
@@ -112,14 +114,21 @@ pub fn draw(
     let sheet = crate::fx_editor::sheet_rect(area);
     ui.with_layer(LayerId::ABOVE, |ui| {
         ui.scene.push_clip_absolute(area);
-        ui.scene.rect(area, 0.0, Color::rgba(0.03, 0.04, 0.06, 0.62));
+        ui.scene
+            .rect(area, 0.0, Color::rgba(0.03, 0.04, 0.06, 0.62));
         let scrim = ui.interact(W::new("io-scrim"), area);
         ui.scene.shadow(sheet, t.radius_l, 18.0, t.shadow);
         ui.scene.rect(sheet, t.radius_l, t.panel);
         let swallow = ui.interact(W::new("io-sheet"), sheet);
         let mut body = sheet;
         let mut head = body.cut_top(t.header_h + 4.0).shrink2(14.0, 5.0);
-        let close = ui.icon_button(W::new("io-close"), head.cut_right(30.0), icons::X, false, None);
+        let close = ui.icon_button(
+            W::new("io-close"),
+            head.cut_right(30.0),
+            icons::X,
+            false,
+            None,
+        );
         ui.name(&close, "Close audio");
         ui.tooltip(&close, "Close (Esc)");
         let rescan = ui.button(W::new("io-rescan"), head.cut_right(80.0), "Rescan");
@@ -146,7 +155,8 @@ pub fn draw(
             ..body
         };
         left.w = half;
-        ui.scene.vline(body.x + half + 14.0, body.y, body.bottom(), t.line);
+        ui.scene
+            .vline(body.x + half + 14.0, body.y, body.bottom(), t.line);
         ui.scene.push_clip(left.expand(2.0));
         input_column(ui, left, s, ws, prefs, recorder);
         ui.scene.pop_clip();
@@ -188,7 +198,13 @@ fn level_bars(ui: &mut Ui, r: Rect, peaks: (f32, f32), live: bool) {
 fn labelled(ui: &mut Ui, rows: &mut Rows, h: f32, label: &str) -> Rect {
     let t = ui.theme.clone();
     let mut row = rows.row(h);
-    ui.text(row.cut_left(78.0), label, t.caption, t.text_faint, Align::Start);
+    ui.text(
+        row.cut_left(78.0),
+        label,
+        t.caption,
+        t.text_faint,
+        Align::Start,
+    );
     row
 }
 
@@ -223,7 +239,11 @@ fn input_column(
     let row = labelled(ui, &mut rows, 30.0, "Device");
     let open = s.input_is_open();
     let label = match (open, s.input_info()) {
-        (true, Some(info)) => format!("{}  ·  {} kHz", info.device_name, info.sample_rate as f32 / 1000.0),
+        (true, Some(info)) => format!(
+            "{}  ·  {} kHz",
+            info.device_name,
+            info.sample_rate as f32 / 1000.0
+        ),
         _ => match s.requested_input_device() {
             Some(d) => format!("{d} (closed)"),
             None => "Closed".into(),
@@ -291,19 +311,26 @@ fn input_column(
     let figure = bars.cut_right(60.0);
     ui.text(
         figure,
-        &if open { crate::util::peak_text(peak) } else { "-inf".into() },
+        &if open {
+            crate::util::peak_text(peak)
+        } else {
+            "-inf".into()
+        },
         t.readout_small,
         if peak >= 1.0 { t.record } else { t.text_dim },
         Align::End,
     );
     level_bars(ui, bars.shrink2(0.0, 3.0), ws.input_meter, open);
     rows.gap(4.0);
-    for (text, c) in [
-        (s.input_error(), t.record),
-        (s.input_warning(), t.warn),
-    ] {
+    for (text, c) in [(s.input_error(), t.record), (s.input_warning(), t.warn)] {
         if let Some(text) = text {
-            let used = ui.text_wrapped(vec2(rows.x + 78.0, rows.y), rows.w - 78.0, &text, t.caption, c);
+            let used = ui.text_wrapped(
+                vec2(rows.x + 78.0, rows.y),
+                rows.w - 78.0,
+                &text,
+                t.caption,
+                c,
+            );
             rows.gap(used + 4.0);
         }
     }
@@ -330,8 +357,10 @@ fn input_column(
     if sl.changed {
         s.set_monitoring(mon.on, norm * 2.0);
     }
-    let note = if mon.on && mon.available {
-        format!(
+    // Only a running monitor has something to report; the feedback caution
+    // is there on request.
+    if mon.on && mon.available {
+        let note = format!(
             "{:.0} ms through{}",
             mon.latency_ms,
             if mon.underruns + mon.dropped_frames > 0 {
@@ -339,21 +368,42 @@ fn input_column(
             } else {
                 String::new()
             }
-        )
-    } else if let Some(why) = mon.unavailable_reason.as_deref().filter(|_| mon.on) {
-        why.to_string()
+        );
+        let used = ui.text_wrapped(
+            vec2(rows.x + 78.0, rows.y + 4.0),
+            rows.w - 78.0,
+            &note,
+            t.caption,
+            t.text_faint,
+        );
+        rows.gap(used + 14.0);
+    } else if mon.on {
+        let why = mon
+            .unavailable_reason
+            .clone()
+            .unwrap_or_else(|| "Waiting for the input".into());
+        let used = ui.text_wrapped(
+            vec2(rows.x + 78.0, rows.y + 4.0),
+            rows.w - 78.0,
+            &why,
+            t.caption,
+            t.warn,
+        );
+        rows.gap(used + 14.0);
     } else {
-        "Off. Monitoring through speakers can feed back: use headphones.".into()
-    };
-    let warn = mon.on && !mon.available;
-    let used = ui.text_wrapped(
-        vec2(rows.x + 78.0, rows.y + 4.0),
-        rows.w - 78.0,
-        &note,
-        t.caption,
-        if warn { t.warn } else { t.text_faint },
-    );
-    rows.gap(used + 14.0);
+        let used = crate::util::hint(
+            ui,
+            W::new("io-monitor-hint"),
+            Rect {
+                x: rows.x + 78.0,
+                y: rows.y + 4.0,
+                w: rows.w - 78.0,
+                h: 40.0,
+            },
+            "Use headphones: monitoring through speakers can feed back.",
+        );
+        rows.gap(used + 14.0);
+    }
 
     // Recording: pick the lane, then Record. A vocal take is three
     // steps: choose the input above, choose a lane, press Record.
@@ -394,7 +444,8 @@ fn input_column(
                 muted: false,
             };
             let nid = new.id;
-            s.doc.edit("Add lane", |p| p.arrangement_mut().tracks.push(new));
+            s.doc
+                .edit("Add lane", |p| p.arrangement_mut().tracks.push(new));
             s.arm_lane(nid, true);
         }
     }
@@ -402,7 +453,11 @@ fn input_column(
     // Record and Stop.
     let mut row = rows.row(40.0);
     let recording = s.is_recording();
-    let blocker = if recorder.armed && s.is_playing() { None } else { s.record_blocker() };
+    let blocker = if recorder.armed && s.is_playing() {
+        None
+    } else {
+        s.record_blocker()
+    };
     if recording || (recorder.armed && s.is_playing()) {
         let stop = ui.button_primary(W::new("io-stop"), row.cut_left(120.0), "Stop");
         if stop.clicked {
@@ -424,10 +479,18 @@ fn input_column(
                 t.record
             },
         );
-        let ink = if ok { crate::util::ink_on(t.record) } else { t.text_faint };
+        let ink = if ok {
+            crate::util::ink_on(t.record)
+        } else {
+            t.text_faint
+        };
         ui.icon(Rect { w: 36.0, ..rec_r }, icons::RECORD, 16.0, ink);
         ui.text(
-            Rect { x: rec_r.x + 32.0, w: rec_r.w - 32.0, ..rec_r },
+            Rect {
+                x: rec_r.x + 32.0,
+                w: rec_r.w - 32.0,
+                ..rec_r
+            },
             "Record",
             t.label,
             ink,
@@ -465,7 +528,13 @@ fn input_column(
             if armed_count == 1 { "" } else { "s" }
         ),
     };
-    ui.text(row, &status_text, t.label, if recording { t.record } else { t.text_dim }, Align::Start);
+    ui.text(
+        row,
+        &status_text,
+        t.label,
+        if recording { t.record } else { t.text_dim },
+        Align::Start,
+    );
     rows.gap(6.0);
     if let Some(why) = blocker {
         let used = ui.text_wrapped(vec2(rows.x, rows.y), rows.w, &why, t.caption, t.text_faint);
@@ -496,19 +565,74 @@ fn input_column(
         s.set_record_offset_ms(v as f32);
     }
     ui.text(
-        Rect { x: row.x + 96.0, w: row.w - 96.0, ..row },
-        &format!(
-            "Added to the measured {:.1} ms round trip",
-            lat.round_trip_s() * 1000.0
-        ),
+        Rect {
+            x: row.x + 96.0,
+            w: row.w - 96.0,
+            ..row
+        },
+        &format!("on top of {:.1} ms measured", lat.round_trip_s() * 1000.0),
         t.caption,
         t.text_faint,
         Align::Start,
     );
     rows.gap(8.0);
+    // Where takes go: the folder's name, the full path on hover.
     let dir = s.recordings_dir();
-    let shown = ui.fit_text(&format!("Takes are saved as WAV in {}", dir.display()), t.caption, rows.w);
-    ui.text(rows.row(18.0), &shown, t.caption, t.text_faint, Align::Start);
+    let name = dir.file_name().map_or_else(
+        || dir.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    );
+    let mut row = labelled(ui, &mut rows, 28.0, "Folder");
+    let choose_r = row.cut_right(84.0);
+    row.cut_right(6.0);
+    let busy = s.is_recording();
+    let choose = ui.interact_node(
+        W::new("io-folder"),
+        choose_r,
+        FocusKind::Activate,
+        Semantics::new(Role::Button)
+            .label("Choose recordings folder")
+            .disabled(busy),
+    );
+    ui.scene.rect(
+        choose_r,
+        t.radius_m,
+        if busy {
+            t.control.alpha(0.4)
+        } else if choose.hovered {
+            t.control_hover
+        } else {
+            t.control
+        },
+    );
+    ui.text(
+        choose_r,
+        "Choose",
+        t.label,
+        if busy { t.text_faint } else { t.text },
+        Align::Center,
+    );
+    ui.focus_ring(W::new("io-folder"), choose_r, t.radius_m);
+    ui.tooltip(
+        &choose,
+        if busy {
+            "Not while recording"
+        } else {
+            "Choose where takes are saved"
+        },
+    );
+    if choose.clicked
+        && !busy
+        && let Some(picked) = crate::dialogs::folder(&dir)
+    {
+        s.set_recordings_dir(Some(picked.clone()));
+        prefs.recordings_dir = Some(picked);
+        prefs.save();
+    }
+    let shown = ui.fit_text(&name, t.label, row.w);
+    let path_hit = ui.interact(W::new("io-folder-path"), row);
+    ui.text(row, &shown, t.label, t.text_dim, Align::Start);
+    ui.tooltip(&path_hit, &dir.display().to_string());
 }
 
 fn output_column(ui: &mut Ui, r: Rect, s: &mut Session, prefs: &mut Prefs) {
@@ -583,14 +707,20 @@ fn output_column(ui: &mut Ui, r: Rect, s: &mut Session, prefs: &mut Prefs) {
     let mut dirty = routes.clone();
     if routes.is_empty() {
         let r = rows.row(20.0);
-        ui.text(r, "None. Add one to play to another device.", t.caption, t.text_faint, Align::Start);
+        ui.text(r, "No extra outputs", t.caption, t.text_faint, Align::Start);
     }
     for (i, route) in routes.iter().enumerate() {
         ui.scene.hline(rows.x, rows.x + rows.w, rows.y, t.line);
         rows.gap(8.0);
         let mut head = rows.row(24.0);
         let healthy = status.get(i).is_none_or(|st| st.healthy);
-        let x = ui.icon_button(W::new(("io-route-remove", i)), head.cut_right(26.0), icons::X, false, None);
+        let x = ui.icon_button(
+            W::new(("io-route-remove", i)),
+            head.cut_right(26.0),
+            icons::X,
+            false,
+            None,
+        );
         ui.name(&x, &format!("Remove {}", route.name));
         ui.tooltip(&x, "Remove this output");
         let m = switch(
@@ -767,12 +897,16 @@ fn output_column(ui: &mut Ui, r: Rect, s: &mut Session, prefs: &mut Prefs) {
         let used = ui.text_wrapped(vec2(rows.x, rows.y), rows.w, &e, t.caption, t.record);
         rows.gap(used + 6.0);
     }
-    let used = ui.text_wrapped(
-        vec2(rows.x, rows.y),
-        rows.w,
-        "Each extra output runs on its own device clock and is drift-corrected: use it for cue mixes, headphones or the computer's speakers. It is not sample-locked to the main output. For synchronized multichannel playback use an aggregate device from the operating system.",
-        t.caption,
-        t.text_faint,
+    let used = crate::util::hint(
+        ui,
+        W::new("io-clock-hint"),
+        Rect {
+            x: rows.x,
+            y: rows.y,
+            w: rows.w,
+            h: 60.0,
+        },
+        "Each extra output runs on its own clock, drift-corrected: good for cues and headphones, not sample-locked to the main output. Use an aggregate device for that.",
     );
     rows.gap(used);
 
@@ -828,7 +962,11 @@ mod tests {
     fn with_one_device_the_extra_output_takes_a_free_pair() {
         let devices = vec![dev("Interface", 8, true)];
         let r = new_route(&devices, "Interface", 0).unwrap();
-        assert_eq!(r.channels, OutputChannels::Stereo(2, 3), "the main pair stays free");
+        assert_eq!(
+            r.channels,
+            OutputChannels::Stereo(2, 3),
+            "the main pair stays free"
+        );
         let small = vec![dev("Speakers", 2, true)];
         let r = new_route(&small, "Speakers", 0).unwrap();
         assert_eq!(r.channels, OutputChannels::Stereo(0, 1));
@@ -838,7 +976,10 @@ mod tests {
     #[test]
     fn input_labels_name_mono_and_stereo_choices() {
         assert_eq!(input_label(InputChannels::Mono(0)), "Input 1 (mono)");
-        assert_eq!(input_label(InputChannels::Stereo(2, 3)), "Inputs 3 + 4 (stereo)");
+        assert_eq!(
+            input_label(InputChannels::Stereo(2, 3)),
+            "Inputs 3 + 4 (stereo)"
+        );
         assert_eq!(channel_choices_in(4).len(), 4 + 2);
     }
 }

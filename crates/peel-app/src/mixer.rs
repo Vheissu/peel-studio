@@ -169,7 +169,14 @@ pub fn toolbar(ui: &mut Ui, tools: Rect, s: &mut Session, ws: &mut Workspace) {
         maxed,
         None,
     );
-    ui.name(&fill, if maxed { "Restore mixer" } else { "Expand mixer" });
+    ui.name(
+        &fill,
+        if maxed {
+            "Restore mixer"
+        } else {
+            "Expand mixer"
+        },
+    );
     ui.tooltip(
         &fill,
         if maxed {
@@ -241,7 +248,7 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
     let b = ui.icon_button(W::new("mixer-add"), add_r, icons::PLUS, false, None);
     ui.name(&b, "Add mixer track");
     ui.tooltip(&b, "Add mixer track");
-    if b.clicked {
+    if b.clicked && !crate::util::mixer_full(s) {
         let n = tracks.len();
         s.doc.edit("Add mixer track", |p| {
             p.mixer.tracks.push(MixerTrack {
@@ -432,7 +439,13 @@ fn strip(
     }
     if plan.pan_text {
         let pt = col_r.cut_top(14.0);
-        ui.text(pt, &format_pan(tr.pan), t.caption, t.text_faint, Align::Center);
+        ui.text(
+            pt,
+            &format_pan(tr.pan),
+            t.caption,
+            t.text_faint,
+            Align::Center,
+        );
     }
     col_r.cut_top(4.0);
 
@@ -504,7 +517,11 @@ fn strip(
             6.0,
             0.25,
             t.readout_small,
-            if tr.gain_db > 0.05 { t.accent } else { t.text_dim },
+            if tr.gain_db > 0.05 {
+                t.accent
+            } else {
+                t.text_dim
+            },
             |v| {
                 if v <= -95.0 {
                     "-inf".to_string()
@@ -558,7 +575,11 @@ fn strip(
         pk_r,
         FocusKind::Activate,
         Semantics::new(Role::Button)
-            .label(format!("{} peak {} dB, clear", tr.name, peak_text(hold_max)))
+            .label(format!(
+                "{} peak {} dB, clear",
+                tr.name,
+                peak_text(hold_max)
+            ))
             .toggled(clipped),
     );
     ui.scene.rect(
@@ -576,7 +597,11 @@ fn strip(
         pk_r,
         &peak_text(hold_max),
         t.caption,
-        if clipped { ink_on(t.record) } else { t.text_dim },
+        if clipped {
+            ink_on(t.record)
+        } else {
+            t.text_dim
+        },
         Align::Center,
     );
     ui.tooltip(
@@ -599,7 +624,11 @@ fn strip(
     let mut fm = col_r;
     let meter_r = fm.cut_right(plan.meter_w);
     fm.cut_right(4.0);
-    let scale_r = if plan.scale { fm.cut_left(24.0) } else { Rect::ZERO };
+    let scale_r = if plan.scale {
+        fm.cut_left(24.0)
+    } else {
+        Rect::ZERO
+    };
     let cap_h = 22.0;
     if plan.scale {
         let travel = (fm.h - cap_h).max(1.0);
@@ -943,7 +972,10 @@ fn send_targets(s: &Session, tr: &MixerTrack) -> Vec<(Id, String)> {
         .iter()
         .skip(1)
         .filter(|x| x.id != tr.id)
-        .filter(|x| tr.sends.iter().any(|sd| sd.target == x.id) || !crate::inspector::reaches(p, x.id, tr.id))
+        .filter(|x| {
+            tr.sends.iter().any(|sd| sd.target == x.id)
+                || !crate::inspector::reaches(p, x.id, tr.id)
+        })
         .map(|x| (x.id, x.name.clone()))
         .collect()
 }
@@ -1115,9 +1147,19 @@ fn mastering_button(
     ui.scene.rect(
         row,
         t.radius_s,
-        if on { t.accent } else { t.control.mix(t.control_hover, hot) },
+        if on {
+            t.accent
+        } else {
+            t.control.mix(t.control_hover, hot)
+        },
     );
-    let ink = if on { t.text_on_accent } else if available { t.text } else { t.text_faint };
+    let ink = if on {
+        t.text_on_accent
+    } else if available {
+        t.text
+    } else {
+        t.text_faint
+    };
     let mut inner = row.shrink2(4.0, 0.0);
     if plan.width > 70.0 {
         ui.icon(inner.cut_left(16.0), icons::SLIDERS, 14.0, ink);
@@ -1160,7 +1202,8 @@ pub fn open_mastering(s: &mut Session, ws: &mut Workspace) -> Option<Id> {
         None => {
             let dev = template::device(MASTER_TYPE, None);
             let id = dev.id;
-            s.doc.edit("Add Mastering", |p| p.mixer.tracks[0].inserts.push(dev));
+            s.doc
+                .edit("Add Mastering", |p| p.mixer.tracks[0].inserts.push(dev));
             id
         }
     };
@@ -1169,15 +1212,7 @@ pub fn open_mastering(s: &mut Session, ws: &mut Workspace) -> Option<Id> {
     Some(id)
 }
 
-fn toggle(
-    ui: &mut Ui,
-    id: W,
-    r: Rect,
-    label: &str,
-    name: &str,
-    on: bool,
-    color: Color,
-) -> bool {
+fn toggle(ui: &mut Ui, id: W, r: Rect, label: &str, name: &str, on: bool, color: Color) -> bool {
     let t = ui.theme.clone();
     let resp = ui.interact_node(
         id,

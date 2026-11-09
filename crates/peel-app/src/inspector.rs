@@ -1321,7 +1321,13 @@ pub(crate) fn reduction_meter(ui: &mut Ui, r: Rect, s: &Session, device: Id) {
 }
 
 /// Chooses which mixer track keys a sidechain-capable insert.
-pub(crate) fn sidechain_row(ui: &mut Ui, row: Rect, s: &mut Session, track: Id, dev: &DeviceInstance) {
+pub(crate) fn sidechain_row(
+    ui: &mut Ui,
+    row: Rect,
+    s: &mut Session,
+    track: Id,
+    dev: &DeviceInstance,
+) {
     let t = ui.theme.clone();
     let mut rr = row;
     ui.text(

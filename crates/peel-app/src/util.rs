@@ -181,6 +181,19 @@ pub fn reduction_db(ui: &mut Ui, s: &peel_session::Session, device: peel_documen
     st.1
 }
 
+/// True (after a short notice) when the project already has as many mixer
+/// tracks as the engine can play; adding another would be silently wrong.
+pub fn mixer_full(s: &mut peel_session::Session) -> bool {
+    let full = s.project().mixer.tracks.len() >= peel_engine::MAX_TRACKS;
+    if full {
+        s.notify(
+            format!("The mixer is full ({} tracks)", peel_engine::MAX_TRACKS),
+            true,
+        );
+    }
+    full
+}
+
 /// Linear peak as dBFS text; `-inf` below -90.
 pub fn peak_text(peak: f32) -> String {
     if peak <= 3.2e-5 {

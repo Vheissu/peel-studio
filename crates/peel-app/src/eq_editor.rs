@@ -192,17 +192,27 @@ pub(crate) fn edit_params(
     });
 }
 
-pub(crate) fn load_preset(s: &mut Session, dev: &DeviceInstance, desc: &'static DeviceDescriptor, i: usize) {
+pub(crate) fn load_preset(
+    s: &mut Session,
+    dev: &DeviceInstance,
+    desc: &'static DeviceDescriptor,
+    i: usize,
+) {
     let preset = peel_devices::presets(desc.type_id)[i];
-    edit_params(s, dev.id, &format!("Load preset {}", preset.name), |m, name| {
-        for pd in desc.params {
-            m.insert(pd.key.to_string(), pd.default);
-        }
-        for (k, v) in preset.params {
-            m.insert((*k).to_string(), *v);
-        }
-        *name = Some(preset.name.to_string());
-    });
+    edit_params(
+        s,
+        dev.id,
+        &format!("Load preset {}", preset.name),
+        |m, name| {
+            for pd in desc.params {
+                m.insert(pd.key.to_string(), pd.default);
+            }
+            for (k, v) in preset.params {
+                m.insert((*k).to_string(), *v);
+            }
+            *name = Some(preset.name.to_string());
+        },
+    );
 }
 
 pub(crate) fn reset_all(s: &mut Session, dev: &DeviceInstance, desc: &'static DeviceDescriptor) {
@@ -294,7 +304,13 @@ fn chip(ui: &mut Ui, id: W, r: Rect, label: &str, on: bool) -> bool {
             t.control.alpha(0.5)
         },
     );
-    ui.text(r, label, t.caption, if on { t.text } else { t.text_dim }, Align::Center);
+    ui.text(
+        r,
+        label,
+        t.caption,
+        if on { t.text } else { t.text_dim },
+        Align::Center,
+    );
     ui.focus_ring(id, r, t.radius_s);
     if resp.hovered {
         ui.set_cursor(CursorIcon::Pointer);
@@ -333,7 +349,8 @@ fn top_bar(
     // A/B compare.
     let ab = row.cut_left(72.0);
     let mut sel = ws.fx.eq.active_slot;
-    if ui.segmented(W::new(("eq-ab", dev.id)), ab, &["A", "B"], &mut sel) && sel != ws.fx.eq.active_slot
+    if ui.segmented(W::new(("eq-ab", dev.id)), ab, &["A", "B"], &mut sel)
+        && sel != ws.fx.eq.active_slot
     {
         let live = snapshot(dev, desc);
         let eq = &mut ws.fx.eq;
@@ -658,17 +675,16 @@ fn nodes(
             id,
             Rect::from_center(c, 22.0, 26.0),
             FocusKind::Adjust,
-            Semantics::new(Role::Button)
-                .label(name)
-                .value(format!("{}{}", fmt_hz(freq), if on { "" } else { ", off" })),
+            Semantics::new(Role::Button).label(name).value(format!(
+                "{}{}",
+                fmt_hz(freq),
+                if on { "" } else { ", off" }
+            )),
         );
         let hot = resp.hovered || resp.active || ws.fx.eq.band == row;
         let body = Rect::from_center(c, 10.0, if hot { 22.0 } else { 18.0 });
-        ui.scene.rect(
-            body,
-            3.0,
-            if on { t.text_dim } else { t.well },
-        );
+        ui.scene
+            .rect(body, 3.0, if on { t.text_dim } else { t.well });
         if !on {
             ui.scene.outline(body, 3.0, 1.5, t.text_faint);
         }
@@ -716,7 +732,11 @@ fn nodes(
         let color = Color::hex(BAND_COLORS[band - 1]);
         let c = vec2(plot.x_of(freq), plot.y_gain(gain));
         let id = W::new(("eq-node", dev.id, band));
-        let kind = if band == 1 || band == 4 { "shelf" } else { "bell" };
+        let kind = if band == 1 || band == 4 {
+            "shelf"
+        } else {
+            "bell"
+        };
         let resp = ui.interact_node(
             id,
             Rect::from_center(c, 26.0, 26.0),
@@ -755,7 +775,13 @@ fn nodes(
             ws.fx.eq.band = band;
         }
         if resp.double_clicked {
-            set(s, dev.id, &key("enable"), if on { 0.0 } else { 1.0 }, id.0 ^ 0xe0);
+            set(
+                s,
+                dev.id,
+                &key("enable"),
+                if on { 0.0 } else { 1.0 },
+                id.0 ^ 0xe0,
+            );
             s.doc.end_gesture();
         } else if resp.dragging {
             let fine = if ui.input.modifiers.shift { 0.2 } else { 1.0 };
@@ -908,9 +934,17 @@ fn log_field(
     }
     let ppx = *ui.state::<f64>(id.with("ppx"));
     let mut v = f64::from(value);
-    let resp = ui.drag_number(id, r, &mut v, f64::from(min), f64::from(max), ppx, t.readout_small, t.text, |v| {
-        fmt(v as f32)
-    });
+    let resp = ui.drag_number(
+        id,
+        r,
+        &mut v,
+        f64::from(min),
+        f64::from(max),
+        ppx,
+        t.readout_small,
+        t.text,
+        |v| fmt(v as f32),
+    );
     ui.name(&resp, name);
     resp.changed.then_some((v as f32, resp.released))
 }
@@ -949,7 +983,11 @@ fn rail_bands(
         let mut rr = r.cut_top(32.0);
         r.cut_top(2.0);
         let sel = ws.fx.eq.band == row;
-        ui.scene.rect(rr, t.radius_s, if sel { t.raised } else { Color::TRANSPARENT });
+        ui.scene.rect(
+            rr,
+            t.radius_s,
+            if sel { t.raised } else { Color::TRANSPARENT },
+        );
         let (name, key, color) = match row {
             1..=4 => (
                 format!("Band {row}"),
@@ -966,17 +1004,26 @@ fn rail_bands(
             row_id.with("on"),
             toggle_r,
             FocusKind::Activate,
-            Semantics::new(Role::Button).label(format!("{name} on")).toggled(on),
+            Semantics::new(Role::Button)
+                .label(format!("{name} on"))
+                .toggled(on),
         );
         let dot = Rect::from_center(toggle_r.center(), 12.0, 12.0);
         if on {
             ui.scene.circle(dot.center(), 6.0, color);
         } else {
-            ui.scene.circle_stroke(dot.center(), 5.0, t.well, 1.5, color.alpha(0.8));
+            ui.scene
+                .circle_stroke(dot.center(), 5.0, t.well, 1.5, color.alpha(0.8));
         }
         ui.focus_ring(row_id.with("on"), toggle_r, 6.0);
         if t_resp.clicked {
-            set(s, dev.id, &format!("{key}.enable"), if on { 0.0 } else { 1.0 }, row_id.0);
+            set(
+                s,
+                dev.id,
+                &format!("{key}.enable"),
+                if on { 0.0 } else { 1.0 },
+                row_id.0,
+            );
             s.doc.end_gesture();
         }
         let name_r = rr.cut_left(42.0);
@@ -984,14 +1031,22 @@ fn rail_bands(
             row_id,
             name_r,
             FocusKind::Activate,
-            Semantics::new(Role::Button).label(format!("Select {name}")).selected(sel),
+            Semantics::new(Role::Button)
+                .label(format!("Select {name}"))
+                .selected(sel),
         );
         let short = match row {
             5 => "HP",
             6 => "LP",
             n => ["1", "2", "3", "4"][n - 1],
         };
-        ui.text(name_r, short, t.label, if on { t.text } else { t.text_faint }, Align::Start);
+        ui.text(
+            name_r,
+            short,
+            t.label,
+            if on { t.text } else { t.text_faint },
+            Align::Start,
+        );
         ui.focus_ring(row_id, name_r, t.radius_s);
         if nr.clicked {
             ws.fx.eq.band = row;
@@ -1019,12 +1074,26 @@ fn rail_bands(
             rr.cut_left(4.0);
             let gid = W::new(("eq-g", dev.id, row));
             let mut gv = f64::from(value(dev, desc, &format!("{key}.gain")));
-            let resp = ui.drag_number(gid, gr, &mut gv, -24.0, 24.0, 0.1, t.readout_small, t.text, |v| {
-                format!("{v:+.1}")
-            });
+            let resp = ui.drag_number(
+                gid,
+                gr,
+                &mut gv,
+                -24.0,
+                24.0,
+                0.1,
+                t.readout_small,
+                t.text,
+                |v| format!("{v:+.1}"),
+            );
             ui.name(&resp, &format!("{name} gain in dB"));
             if resp.changed {
-                set(s, dev.id, &format!("{key}.gain"), (gv as f32 * 10.0).round() / 10.0, gid.0);
+                set(
+                    s,
+                    dev.id,
+                    &format!("{key}.gain"),
+                    (gv as f32 * 10.0).round() / 10.0,
+                    gid.0,
+                );
             }
             if resp.released {
                 s.doc.end_gesture();
@@ -1050,8 +1119,19 @@ fn rail_bands(
             let slope = value(dev, desc, &format!("{key}.slope")).round() as usize;
             let mut sel_s = slope.min(3);
             let sr = rr.cut_left(122.0).shrink2(0.0, 3.0);
-            if ui.segmented(W::new(("eq-slope", dev.id, row)), sr, &["6", "12", "24", "48"], &mut sel_s) {
-                set(s, dev.id, &format!("{key}.slope"), sel_s as f32, W::new(("eq-slope-g", row, sel_s)).0);
+            if ui.segmented(
+                W::new(("eq-slope", dev.id, row)),
+                sr,
+                &["6", "12", "24", "48"],
+                &mut sel_s,
+            ) {
+                set(
+                    s,
+                    dev.id,
+                    &format!("{key}.slope"),
+                    sel_s as f32,
+                    W::new(("eq-slope-g", row, sel_s)).0,
+                );
                 s.doc.end_gesture();
             }
         }
@@ -1061,15 +1141,35 @@ fn rail_bands(
     r.cut_top(10.0);
     // Output gain.
     let mut orow = r.cut_top(30.0);
-    ui.text(orow.cut_left(70.0), "Output", t.label, t.text_dim, Align::Start);
+    ui.text(
+        orow.cut_left(70.0),
+        "Output",
+        t.label,
+        t.text_dim,
+        Align::Start,
+    );
     let gid = W::new(("eq-out", dev.id));
     let mut gv = f64::from(value(dev, desc, "output"));
-    let resp = ui.drag_number(gid, orow.cut_left(80.0).shrink2(0.0, 3.0), &mut gv, -24.0, 24.0, 0.1, t.readout_small, t.text, |v| {
-        format!("{v:+.1} dB")
-    });
+    let resp = ui.drag_number(
+        gid,
+        orow.cut_left(80.0).shrink2(0.0, 3.0),
+        &mut gv,
+        -24.0,
+        24.0,
+        0.1,
+        t.readout_small,
+        t.text,
+        |v| format!("{v:+.1} dB"),
+    );
     ui.name(&resp, "EQ output gain in dB");
     if resp.changed {
-        set(s, dev.id, "output", (gv as f32 * 10.0).round() / 10.0, gid.0);
+        set(
+            s,
+            dev.id,
+            "output",
+            (gv as f32 * 10.0).round() / 10.0,
+            gid.0,
+        );
     }
     if resp.released {
         s.doc.end_gesture();
@@ -1090,7 +1190,12 @@ mod tests {
     #[test]
     fn plot_axes_round_trip() {
         let p = Plot {
-            r: Rect { x: 10.0, y: 20.0, w: 800.0, h: 300.0 },
+            r: Rect {
+                x: 10.0,
+                y: 20.0,
+                w: 800.0,
+                h: 300.0,
+            },
         };
         for f in [20.0f32, 100.0, 1000.0, 20_000.0] {
             assert!((p.f_of(p.x_of(f)) - f).abs() / f < 1e-3, "{f}");
@@ -1104,14 +1209,44 @@ mod tests {
     #[test]
     fn suggestions_use_the_selected_free_bell_first() {
         // Selected bell 3 is free: use it, no replacement.
-        assert_eq!(choose_target(3, [false, true]), Target { band: 3, replaces: false });
+        assert_eq!(
+            choose_target(3, [false, true]),
+            Target {
+                band: 3,
+                replaces: false
+            }
+        );
         // Selected bell 2 is in use: replacing it must be explicit.
-        assert_eq!(choose_target(2, [false, true]), Target { band: 2, replaces: true });
+        assert_eq!(
+            choose_target(2, [false, true]),
+            Target {
+                band: 2,
+                replaces: true
+            }
+        );
         // A shelf is selected: take the first free bell.
-        assert_eq!(choose_target(1, [false, true]), Target { band: 3, replaces: false });
-        assert_eq!(choose_target(4, [true, true]), Target { band: 2, replaces: false });
+        assert_eq!(
+            choose_target(1, [false, true]),
+            Target {
+                band: 3,
+                replaces: false
+            }
+        );
+        assert_eq!(
+            choose_target(4, [true, true]),
+            Target {
+                band: 2,
+                replaces: false
+            }
+        );
         // Both bells busy and nothing selected: offer Band 2 as a replacement.
-        assert_eq!(choose_target(1, [false, false]), Target { band: 2, replaces: true });
+        assert_eq!(
+            choose_target(1, [false, false]),
+            Target {
+                band: 2,
+                replaces: true
+            }
+        );
     }
 
     #[test]
@@ -1123,12 +1258,22 @@ mod tests {
 
     #[test]
     fn candidate_cuts_stay_conservative() {
-        let r = Resonance { frequency_hz: 30_000.0, q: 40.0, cut_db: -20.0, prominence_db: 12.0 };
+        let r = Resonance {
+            frequency_hz: 30_000.0,
+            q: 40.0,
+            cut_db: -20.0,
+            prominence_db: 12.0,
+        };
         let (f, g, q) = bell_for(&r);
         assert_eq!(f, F_HI);
         assert_eq!(g, -MAX_CUT_DB);
         assert_eq!(q, 12.0);
-        let tiny = Resonance { frequency_hz: 1000.0, q: 0.2, cut_db: -0.1, prominence_db: 5.0 };
+        let tiny = Resonance {
+            frequency_hz: 1000.0,
+            q: 0.2,
+            cut_db: -0.1,
+            prominence_db: 5.0,
+        };
         let (_, g, q) = bell_for(&tiny);
         assert_eq!(g, -0.5);
         assert_eq!(q, 1.0);

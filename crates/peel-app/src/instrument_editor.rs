@@ -185,7 +185,8 @@ pub fn draw(ui: &mut Ui, area: Rect, s: &mut Session, ws: &mut Workspace, prefs:
     let sheet = crate::fx_editor::sheet_rect(area);
     ui.with_layer(LayerId::ABOVE, |ui| {
         ui.scene.push_clip_absolute(area);
-        ui.scene.rect(area, 0.0, Color::rgba(0.03, 0.04, 0.06, 0.62));
+        ui.scene
+            .rect(area, 0.0, Color::rgba(0.03, 0.04, 0.06, 0.62));
         let scrim = ui.interact(W::new("inst-scrim"), area);
         ui.scene.shadow(sheet, t.radius_l, 18.0, t.shadow);
         ui.scene.rect(sheet, t.radius_l, t.panel);
@@ -259,7 +260,13 @@ fn header(
 ) -> bool {
     let t = ui.theme.clone();
     let mut row = head.shrink2(12.0, 5.0);
-    let close_btn = ui.icon_button(W::new("inst-close"), row.cut_right(30.0), icons::X, false, None);
+    let close_btn = ui.icon_button(
+        W::new("inst-close"),
+        row.cut_right(30.0),
+        icons::X,
+        false,
+        None,
+    );
     ui.name(&close_btn, "Close instrument");
     ui.tooltip(&close_btn, "Close (Esc)");
     row.cut_right(6.0);
@@ -333,7 +340,13 @@ fn header(
         let dot = inner.cut_left(10.0);
         ui.scene.circle(dot.center(), 3.5, *c);
         inner.cut_left(4.0);
-        ui.text(inner, n, t.label, if on { t.text } else { t.text_dim }, Align::Start);
+        ui.text(
+            inner,
+            n,
+            t.label,
+            if on { t.text } else { t.text_dim },
+            Align::Start,
+        );
         if on {
             ui.scene.rect(
                 Rect {
@@ -370,7 +383,13 @@ fn header(
     false
 }
 
-fn params(ui: &mut Ui, body: Rect, ch: &peel_document::Channel, s: &mut Session, ws: &mut Workspace) {
+fn params(
+    ui: &mut Ui,
+    body: Rect,
+    ch: &peel_document::Channel,
+    s: &mut Session,
+    ws: &mut Workspace,
+) {
     let t = ui.theme.clone();
     let Some(desc) = peel_devices::descriptor(&ch.device.type_id) else {
         ui.text(
@@ -411,9 +430,9 @@ fn piano(ui: &mut Ui, r: Rect, ch: &peel_document::Channel, s: &mut Session, ws:
         id,
         r,
         FocusKind::Activate,
-        Semantics::new(Role::Group)
-            .label("Piano")
-            .description("Click and drag to play. The computer keyboard plays too: Z to M, Q to P."),
+        Semantics::new(Role::Group).label("Piano").description(
+            "Click and drag to play. The computer keyboard plays too: Z to M, Q to P.",
+        ),
     );
     let hover = ui.pointer().and_then(|p| key_at(&keys, p));
     // Mouse: press plays, dragging across keys glides, release stops.
@@ -485,7 +504,11 @@ fn piano(ui: &mut Ui, r: Rect, ch: &peel_document::Channel, s: &mut Session, ws:
                 },
                 l,
                 t.caption.size(10.5),
-                if on { crate::util::ink_on(accent) } else { Color::hex(0x6B7584) },
+                if on {
+                    crate::util::ink_on(accent)
+                } else {
+                    Color::hex(0x6B7584)
+                },
                 Align::Center,
             );
         }
@@ -498,7 +521,11 @@ fn piano(ui: &mut Ui, r: Rect, ch: &peel_document::Channel, s: &mut Session, ws:
                 },
                 &label,
                 t.caption,
-                if on { crate::util::ink_on(accent) } else { Color::hex(0x4A5362) },
+                if on {
+                    crate::util::ink_on(accent)
+                } else {
+                    Color::hex(0x4A5362)
+                },
                 Align::Center,
             );
         }
@@ -528,7 +555,11 @@ fn piano(ui: &mut Ui, r: Rect, ch: &peel_document::Channel, s: &mut Session, ws:
                 },
                 l,
                 t.caption.size(10.0),
-                if on { crate::util::ink_on(accent) } else { Color::hex(0x8B95A5) },
+                if on {
+                    crate::util::ink_on(accent)
+                } else {
+                    Color::hex(0x8B95A5)
+                },
                 Align::Center,
             );
         }
@@ -565,7 +596,11 @@ pub(crate) fn section(ui: &mut Ui, rows: &mut Rows, name: &str) {
     let r = rows.row(22.0);
     ui.scene.hline(r.x, r.right(), r.y, t.line);
     ui.text(
-        Rect { y: r.y + 4.0, h: r.h - 4.0, ..r },
+        Rect {
+            y: r.y + 4.0,
+            h: r.h - 4.0,
+            ..r
+        },
         name,
         t.label,
         t.text_dim,
@@ -573,7 +608,15 @@ pub(crate) fn section(ui: &mut Ui, rows: &mut Rows, name: &str) {
     );
 }
 
-pub(crate) fn switch(ui: &mut Ui, id: W, r: Rect, label: &str, tip: &str, on: bool, color: Color) -> bool {
+pub(crate) fn switch(
+    ui: &mut Ui,
+    id: W,
+    r: Rect,
+    label: &str,
+    tip: &str,
+    on: bool,
+    color: Color,
+) -> bool {
     let t = ui.theme.clone();
     let resp = ui.interact_node(
         id,
@@ -596,7 +639,11 @@ pub(crate) fn switch(ui: &mut Ui, id: W, r: Rect, label: &str, tip: &str, on: bo
         r,
         label,
         t.label,
-        if on { crate::util::ink_on(color) } else { t.text_dim },
+        if on {
+            crate::util::ink_on(color)
+        } else {
+            t.text_dim
+        },
         Align::Center,
     );
     ui.focus_ring(id, r, t.radius_s);
@@ -620,7 +667,12 @@ fn rail_content(
     let content_h = 330.0 + 34.0 * mine.len() as f32 + 200.0;
     let mut off = vec2(0.0, ws.inst.rail_scroll);
     if content_h > rail.h {
-        ui.scroll_area(W::new("inst-rail"), *rail, vec2(rail.w, content_h), &mut off);
+        ui.scroll_area(
+            W::new("inst-rail"),
+            *rail,
+            vec2(rail.w, content_h),
+            &mut off,
+        );
     } else {
         off.y = 0.0;
     }
@@ -635,7 +687,13 @@ fn rail_content(
     rows.gap(6.0);
     // Velocity.
     let mut row = rows.row(28.0);
-    ui.text(row.cut_left(70.0), "Velocity", t.caption, t.text_faint, Align::Start);
+    ui.text(
+        row.cut_left(70.0),
+        "Velocity",
+        t.caption,
+        t.text_faint,
+        Align::Start,
+    );
     let val = row.cut_right(34.0);
     ui.text(
         val,
@@ -651,12 +709,36 @@ fn rail_content(
     rows.gap(4.0);
     // Octave.
     let mut row = rows.row(28.0);
-    ui.text(row.cut_left(70.0), "Octave", t.caption, t.text_faint, Align::Start);
-    let minus = ui.icon_button(W::new("inst-oct-down"), row.cut_left(30.0), icons::MINUS, false, None);
+    ui.text(
+        row.cut_left(70.0),
+        "Octave",
+        t.caption,
+        t.text_faint,
+        Align::Start,
+    );
+    let minus = ui.icon_button(
+        W::new("inst-oct-down"),
+        row.cut_left(30.0),
+        icons::MINUS,
+        false,
+        None,
+    );
     ui.name(&minus, "Octave down");
     let label = format!("C{}", ws.octave);
-    ui.text(row.cut_left(50.0), &label, t.readout_small, t.text, Align::Center);
-    let plus = ui.icon_button(W::new("inst-oct-up"), row.cut_left(30.0), icons::PLUS, false, None);
+    ui.text(
+        row.cut_left(50.0),
+        &label,
+        t.readout_small,
+        t.text,
+        Align::Center,
+    );
+    let plus = ui.icon_button(
+        W::new("inst-oct-up"),
+        row.cut_left(30.0),
+        icons::PLUS,
+        false,
+        None,
+    );
     ui.name(&plus, "Octave up");
     if minus.clicked {
         ws.octave = (ws.octave - 1).max(0);
@@ -713,16 +795,21 @@ fn mappings_for(s: &Session, ch: &peel_document::Channel) -> Vec<(usize, MidiMap
         .enumerate()
         .filter(|(_, m)| match &m.target {
             MidiControlTarget::DeviceParam { device, .. } => *device == ch.device.id,
-            MidiControlTarget::ChannelGain { channel } | MidiControlTarget::ChannelPan { channel } => {
-                *channel == ch.id
-            }
+            MidiControlTarget::ChannelGain { channel }
+            | MidiControlTarget::ChannelPan { channel } => *channel == ch.id,
             _ => false,
         })
         .map(|(i, m)| (i, m.clone()))
         .collect()
 }
 
-fn midi_status(ui: &mut Ui, rows: &mut Rows, s: &mut Session, ws: &mut Workspace, prefs: &mut Prefs) {
+fn midi_status(
+    ui: &mut Ui,
+    rows: &mut Rows,
+    s: &mut Session,
+    ws: &mut Workspace,
+    prefs: &mut Prefs,
+) {
     let t = ui.theme.clone();
     let _ = ws;
     // Activity light and what is listening.
@@ -741,8 +828,11 @@ fn midi_status(ui: &mut Ui, rows: &mut Rows, s: &mut Session, ws: &mut Workspace
     }
     let mut row = rows.row(24.0);
     let dot = row.cut_left(18.0);
-    ui.scene
-        .circle(dot.center(), 4.0, if lit { t.play } else { t.control_hover });
+    ui.scene.circle(
+        dot.center(),
+        4.0,
+        if lit { t.play } else { t.control_hover },
+    );
     let ports = s.midi_inputs();
     let text = if !s.midi_enabled() {
         "MIDI input off".to_string()
@@ -764,7 +854,13 @@ fn midi_status(ui: &mut Ui, rows: &mut Rows, s: &mut Session, ws: &mut Workspace
     rows.gap(4.0);
     // Channel filter.
     let mut row = rows.row(28.0);
-    ui.text(row.cut_left(70.0), "Channel", t.caption, t.text_faint, Align::Start);
+    ui.text(
+        row.cut_left(70.0),
+        "Channel",
+        t.caption,
+        t.text_faint,
+        Align::Start,
+    );
     let cur = s.midi_channel_filter();
     let label = cur.map_or("All".to_string(), |c| format!("Channel {}", c + 1));
     let id = W::new("inst-midi-channel");
@@ -773,7 +869,9 @@ fn midi_status(ui: &mut Ui, rows: &mut Rows, s: &mut Session, ws: &mut Workspace
         ui.open_popup(id.with("menu"), row);
     }
     let mut items = vec![MenuItem::new("All channels").checked(cur.is_none())];
-    items.extend((0..16u8).map(|c| MenuItem::new(format!("Channel {}", c + 1)).checked(cur == Some(c))));
+    items.extend(
+        (0..16u8).map(|c| MenuItem::new(format!("Channel {}", c + 1)).checked(cur == Some(c))),
+    );
     if let Some(i) = ui.menu(id.with("menu"), vec2(row.x, row.bottom() + 4.0), &items) {
         let pick = if i == 0 { None } else { Some((i - 1) as u8) };
         match s.set_midi_channel_filter(pick) {
@@ -785,14 +883,19 @@ fn midi_status(ui: &mut Ui, rows: &mut Rows, s: &mut Session, ws: &mut Workspace
         }
     }
     rows.gap(2.0);
-    let note = rows.row(32.0);
-    ui.text_wrapped(
-        note.min(),
-        note.w,
-        "Notes, sustain pedal and controller (CC) knobs. Pitch bend and aftertouch are not used.",
-        t.caption.size(10.5),
-        t.text_faint,
+    // What MIDI is used for, on request: notes, pedal and CC only.
+    let used = crate::util::hint(
+        ui,
+        W::new("inst-midi-hint"),
+        Rect {
+            x: rows.x,
+            y: rows.y,
+            w: rows.w,
+            h: 40.0,
+        },
+        "Notes, the sustain pedal and CC knobs. Pitch bend and aftertouch are not used.",
     );
+    rows.gap(used);
 }
 
 fn mapper(
@@ -811,7 +914,13 @@ fn mapper(
     // Existing mappings with live value feedback.
     if mine.is_empty() {
         let r = rows.row(20.0);
-        ui.text(r, "No controllers mapped", t.caption, t.text_faint, Align::Start);
+        ui.text(
+            r,
+            "No controllers mapped",
+            t.caption,
+            t.text_faint,
+            Align::Start,
+        );
     }
     let mut remove = None;
     for (index, m) in mine {
@@ -836,17 +945,34 @@ fn mapper(
                     (p.name.to_string(), s.param_text(ch.device.id, p, v))
                 })
                 .unwrap_or_else(|| (key.clone(), String::new())),
-            MidiControlTarget::ChannelGain { .. } => ("Volume".to_string(), crate::util::format_db(ch.gain_db)),
-            MidiControlTarget::ChannelPan { .. } => ("Pan".to_string(), crate::util::format_pan(ch.pan)),
+            MidiControlTarget::ChannelGain { .. } => {
+                ("Volume".to_string(), crate::util::format_db(ch.gain_db))
+            }
+            MidiControlTarget::ChannelPan { .. } => {
+                ("Pan".to_string(), crate::util::format_pan(ch.pan))
+            }
             _ => (String::new(), String::new()),
         };
         let cc = format!(
             "CC {}{}",
             m.controller,
-            m.channel.map_or(String::new(), |c| format!(" ch {}", c + 1))
+            m.channel
+                .map_or(String::new(), |c| format!(" ch {}", c + 1))
         );
-        ui.text(row.cut_left(64.0), &cc, t.readout_small, t.text, Align::Start);
-        ui.text(row.cut_right(54.0), &value, t.readout_small, t.text_dim, Align::End);
+        ui.text(
+            row.cut_left(64.0),
+            &cc,
+            t.readout_small,
+            t.text,
+            Align::Start,
+        );
+        ui.text(
+            row.cut_right(54.0),
+            &value,
+            t.readout_small,
+            t.text_dim,
+            Align::End,
+        );
         let shown = ui.fit_text(&name, t.caption, row.w);
         ui.text(row, &shown, t.caption, t.text_dim, Align::Start);
     }
@@ -886,26 +1012,78 @@ fn mapper(
         ws.inst.pick = Some(params[i].key.to_string());
     }
     let waiting = matches!(s.midi_learn_status(), MidiLearnStatus::Waiting { .. });
-    let target = ws.inst.pick.clone().map(|key| MidiControlTarget::DeviceParam {
-        device: ch.device.id,
-        key,
-    });
+    let target = ws
+        .inst
+        .pick
+        .clone()
+        .map(|key| MidiControlTarget::DeviceParam {
+            device: ch.device.id,
+            key,
+        });
     if waiting {
-        if ui.button(W::new("inst-learn-cancel"), learn_r, "Cancel").clicked {
+        if ui
+            .button(W::new("inst-learn-cancel"), learn_r, "Cancel")
+            .clicked
+        {
             s.cancel_midi_learn();
         }
     } else {
         let can = target.is_some();
-        let b = ui.button(W::new("inst-learn"), learn_r, "Learn");
+        let id = W::new("inst-learn");
+        // Without a parameter Learn is inert: drawn dim, out of the tab
+        // order and announced as disabled.
+        let resp = if can {
+            ui.interact_node(
+                id,
+                learn_r,
+                FocusKind::Activate,
+                Semantics::new(Role::Button).label("Learn"),
+            )
+        } else {
+            let r = ui.interact(id, learn_r);
+            ui.describe_node(
+                id,
+                Semantics::new(Role::Button)
+                    .label("Learn")
+                    .disabled(true)
+                    .rect(learn_r),
+            );
+            r
+        };
+        ui.scene.rect(
+            learn_r,
+            t.radius_m,
+            if !can {
+                t.control.alpha(0.4)
+            } else if resp.hovered {
+                t.control_hover
+            } else {
+                t.control
+            },
+        );
+        ui.text(
+            learn_r,
+            "Learn",
+            t.label,
+            if can { t.text } else { t.text_faint },
+            Align::Center,
+        );
+        if can {
+            ui.focus_ring(id, learn_r, t.radius_m);
+            if resp.hovered {
+                ui.set_cursor(CursorIcon::Pointer);
+            }
+        }
         ui.tooltip(
-            &b,
+            &resp,
             if can {
                 "Then move a knob or fader on your controller"
             } else {
                 "Choose a parameter first"
             },
         );
-        if b.clicked
+        if resp.clicked
+            && can
             && let Some(target) = target
             && let Err(e) = s.begin_midi_learn(target)
         {
@@ -920,13 +1098,21 @@ fn mapper(
         MidiLearnStatus::Learned { mapping } => format!(
             "Mapped CC {} on channel {}",
             mapping.controller,
-            mapping.channel.map_or("any".to_string(), |c| (c + 1).to_string())
+            mapping
+                .channel
+                .map_or("any".to_string(), |c| (c + 1).to_string())
         ),
         MidiLearnStatus::Error { message } => message.clone(),
     };
     let err = matches!(s.midi_learn_status(), MidiLearnStatus::Error { .. });
     if !text.is_empty() {
-        ui.text_wrapped(status.min(), status.w, &text, t.caption, if err { t.record } else { t.text_dim });
+        ui.text_wrapped(
+            status.min(),
+            status.w,
+            &text,
+            t.caption,
+            if err { t.record } else { t.text_dim },
+        );
     }
     if matches!(s.midi_learn_status(), MidiLearnStatus::Waiting { .. }) {
         ui.request_repaint();
@@ -946,7 +1132,9 @@ fn mapper(
 pub fn sync_prefs(s: &Session, prefs: &mut Prefs) {
     let p = s.project();
     let exists = |t: &MidiControlTarget| match t {
-        MidiControlTarget::DeviceParam { device, .. } => peel_session::find_device(p, *device).is_some(),
+        MidiControlTarget::DeviceParam { device, .. } => {
+            peel_session::find_device(p, *device).is_some()
+        }
         MidiControlTarget::TrackGain { track } | MidiControlTarget::TrackPan { track } => {
             p.mixer.track(*track).is_some()
         }
@@ -982,7 +1170,12 @@ mod tests {
     use super::*;
 
     fn area() -> Rect {
-        Rect { x: 0.0, y: 0.0, w: 840.0, h: 120.0 }
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 840.0,
+            h: 120.0,
+        }
     }
 
     #[test]
@@ -990,10 +1183,16 @@ mod tests {
         let keys = piano_layout(area(), 48, 4);
         assert_eq!(keys.iter().filter(|k| !k.black).count(), 29);
         assert_eq!(keys.iter().filter(|k| k.black).count(), 20);
-        assert_eq!(keys.iter().filter(|k| !k.black).map(|k| k.key).min(), Some(48));
+        assert_eq!(
+            keys.iter().filter(|k| !k.black).map(|k| k.key).min(),
+            Some(48)
+        );
         assert_eq!(keys.iter().map(|k| k.key).max(), Some(96));
         let first_black = keys.iter().position(|k| k.black).unwrap();
-        assert!(keys[first_black..].iter().all(|k| k.black), "black keys are drawn last");
+        assert!(
+            keys[first_black..].iter().all(|k| k.black),
+            "black keys are drawn last"
+        );
     }
 
     #[test]
@@ -1026,16 +1225,21 @@ mod tests {
         let m = |cc: u8, device: Id| MidiMapping {
             controller: cc,
             channel: None,
-            target: MidiControlTarget::DeviceParam { device, key: "x".into() },
+            target: MidiControlTarget::DeviceParam {
+                device,
+                key: "x".into(),
+            },
             min: 0.0,
             max: 1.0,
         };
         let (here, elsewhere) = (Id::new(), Id::new());
         let saved = vec![m(1, here), m(2, elsewhere)];
         let current = vec![m(1, here), m(3, here)];
-        let merged = merged_mappings(&saved, &current, |t| {
-            matches!(t, MidiControlTarget::DeviceParam { device, .. } if *device == here)
-        });
+        let merged = merged_mappings(
+            &saved,
+            &current,
+            |t| matches!(t, MidiControlTarget::DeviceParam { device, .. } if *device == here),
+        );
         let ccs: Vec<u8> = merged.iter().map(|m| m.controller).collect();
         assert_eq!(ccs, vec![2, 1, 3]);
     }

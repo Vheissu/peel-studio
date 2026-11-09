@@ -68,10 +68,15 @@ pub fn overlay(
             x,
             plot.r.y,
             plot.r.bottom(),
-            if previewed { t.text.alpha(0.7) } else { t.text_dim.alpha(0.35) },
+            if previewed {
+                t.text.alpha(0.7)
+            } else {
+                t.text_dim.alpha(0.35)
+            },
         );
         let tag = Rect::from_center(vec2(x, plot.r.y + 12.0), 16.0, 16.0);
-        ui.scene.rect(tag, 8.0, if previewed { t.text } else { t.raised });
+        ui.scene
+            .rect(tag, 8.0, if previewed { t.text } else { t.raised });
         ui.text(
             tag,
             &(i + 1).to_string(),
@@ -140,7 +145,10 @@ pub fn rail(
     let mut row = r.cut_top(30.0);
     match (ws.fx.eq.learn, held) {
         (Learn::Idle, false) => {
-            if ui.button_primary(W::new("eq-listen"), row.cut_left(110.0), "Listen").clicked {
+            if ui
+                .button_primary(W::new("eq-listen"), row.cut_left(110.0), "Listen")
+                .clicked
+            {
                 ws.fx.analysis.reset();
                 ws.fx.eq.learn = Learn::Listening;
                 ws.fx.eq.preview = None;
@@ -150,21 +158,29 @@ pub fn rail(
         (Learn::Listening, _) => {
             let can_hold = !list.is_empty();
             if can_hold
-                && ui.button_primary(W::new("eq-hold"), row.cut_left(120.0), "Hold results").clicked
+                && ui
+                    .button_primary(W::new("eq-hold"), row.cut_left(120.0), "Hold results")
+                    .clicked
             {
                 ws.fx.held.insert(dev.id, list.clone());
                 ws.fx.eq.learn = Learn::Idle;
                 ws.fx.eq.preview = None;
             }
             row.cut_left(8.0);
-            if ui.button(W::new("eq-stop"), row.cut_left(64.0), "Stop").clicked {
+            if ui
+                .button(W::new("eq-stop"), row.cut_left(64.0), "Stop")
+                .clicked
+            {
                 ws.fx.eq.learn = Learn::Idle;
                 ws.fx.eq.preview = None;
                 ws.fx.eq.confirm = None;
             }
         }
         (Learn::Idle, true) => {
-            if ui.button(W::new("eq-relearn"), row.cut_left(90.0), "Relearn").clicked {
+            if ui
+                .button(W::new("eq-relearn"), row.cut_left(90.0), "Relearn")
+                .clicked
+            {
                 ws.fx.held.remove(&dev.id);
                 ws.fx.analysis.reset();
                 ws.fx.eq.learn = Learn::Listening;
@@ -172,7 +188,10 @@ pub fn rail(
                 ws.fx.eq.confirm = None;
             }
             row.cut_left(8.0);
-            if ui.button(W::new("eq-clear"), row.cut_left(64.0), "Clear").clicked {
+            if ui
+                .button(W::new("eq-clear"), row.cut_left(64.0), "Clear")
+                .clicked
+            {
                 ws.fx.held.remove(&dev.id);
                 ws.fx.eq.preview = None;
                 ws.fx.eq.confirm = None;
@@ -185,7 +204,8 @@ pub fn rail(
     let an = &ws.fx.analysis;
     let status: String = match (ws.fx.eq.learn, held) {
         (Learn::Idle, false) => {
-            "Play the track, then Listen. Candidates are sustained narrow peaks to check by ear.".into()
+            "Play the track, then Listen. Candidates are sustained narrow peaks to check by ear."
+                .into()
         }
         (Learn::Idle, true) => format!(
             "Held: {} candidate{}. Not live; relearn after changes.",
@@ -198,7 +218,10 @@ pub fn rail(
         }
         (Learn::Listening, _) if an.input_peak_db < -70.0 => "Not enough signal.".into(),
         (Learn::Listening, _) if list.is_empty() => {
-            format!("Heard {:.1} s. Nothing stands out yet.", an.analyzed_seconds)
+            format!(
+                "Heard {:.1} s. Nothing stands out yet.",
+                an.analyzed_seconds
+            )
         }
         (Learn::Listening, _) => format!("Heard {:.1} s", an.analyzed_seconds),
     };
@@ -241,7 +264,13 @@ pub fn rail(
             t.text,
             Align::Start,
         );
-        ui.text(head, &format!("{gain:.1} dB  Q {q:.1}"), t.readout_small, t.text_dim, Align::End);
+        ui.text(
+            head,
+            &format!("{gain:.1} dB  Q {q:.1}"),
+            t.readout_small,
+            t.text_dim,
+            Align::End,
+        );
         let sub = r.cut_top(16.0);
         ui.text(
             sub,
@@ -253,14 +282,14 @@ pub fn rail(
         r.cut_top(6.0);
         let mut btns = r.cut_top(28.0);
         let prev_on = ws.fx.eq.preview == Some(i);
-        let pr = btns.cut_left(76.0);
+        let pr = btns.cut_left(92.0);
         let pid = W::new(("eq-preview", i));
         let resp = ui.interact_node(
             pid,
             pr,
             peel_ui::FocusKind::Activate,
             peel_ui::Semantics::new(peel_ui::Role::Button)
-                .label(format!("Preview candidate {}", i + 1))
+                .label(format!("Show curve for candidate {}", i + 1))
                 .toggled(prev_on),
         );
         ui.scene.rect(
@@ -274,9 +303,12 @@ pub fn rail(
                 t.control
             },
         );
-        ui.text(pr, "Preview", t.label, t.text, Align::Center);
+        ui.text(pr, "Show curve", t.label, t.text, Align::Center);
         ui.focus_ring(pid, pr, t.radius_s);
-        ui.tooltip(&resp, "Show the curve this cut would make. Audio does not change.");
+        ui.tooltip(
+            &resp,
+            "Draws the curve this cut would make. Audio does not change.",
+        );
         if resp.clicked {
             ws.fx.eq.preview = if prev_on { None } else { Some(i) };
         }
@@ -308,7 +340,11 @@ pub fn rail(
         r.cut_top(10.0);
     }
     if ws.fx.eq.confirm.is_some() && !list.is_empty() {
-        let cancel = ui.button(W::new("eq-cancel"), r.cut_top(28.0).cut_left_ret(90.0), "Cancel");
+        let cancel = ui.button(
+            W::new("eq-cancel"),
+            r.cut_top(28.0).cut_left_ret(90.0),
+            "Cancel",
+        );
         if cancel.clicked {
             ws.fx.eq.confirm = None;
         }

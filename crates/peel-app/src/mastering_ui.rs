@@ -72,15 +72,19 @@ pub fn draw(
     let mut c = body;
     top_bar(ui, c.cut_top(32.0), dev, desc, s, ws);
     c.cut_top(10.0);
-    chain(ui, c.cut_top(48.0), dev, desc, ws, gr);
-    c.cut_top(12.0);
+    // The chain strip is the Advanced view's map; Simple keeps to the
+    // handful of controls that finish a mix.
+    if ws.fx.mastering.advanced {
+        chain(ui, c.cut_top(48.0), dev, desc, ws);
+        c.cut_top(12.0);
+    }
     let rail = c.cut_right(264.0);
     c.cut_right(16.0);
     meters(ui, rail, dev, desc, ws, gr);
 
     // Controls.
     let advanced = ws.fx.mastering.advanced;
-    let controls_h = 128.0;
+    let controls_h = if advanced { 128.0 } else { 150.0 };
     let controls = c.cut_top(controls_h);
     c.cut_top(14.0);
     if advanced {
@@ -90,6 +94,14 @@ pub fn draw(
     }
     ui.scene.hline(c.x, c.right(), c.y - 7.0, t.line);
 
+    if !advanced {
+        let c = Rect {
+            h: c.h.min(190.0),
+            ..c
+        };
+        gr_history(ui, c, &ws.fx.mastering.gr_history, gr);
+        return;
+    }
     // Real transfer function of the tone stage and the reduction history.
     let half = (c.w - 16.0) * 0.5;
     let tone_r = Rect { w: half, ..c };
@@ -123,7 +135,9 @@ fn top_bar(
             id,
             r,
             FocusKind::Activate,
-            Semantics::new(Role::Button).label(format!("Preset {}", p.name)).toggled(on),
+            Semantics::new(Role::Button)
+                .label(format!("Preset {}", p.name))
+                .toggled(on),
         );
         ui.scene.rect(
             r,
@@ -152,14 +166,23 @@ fn top_bar(
         }
     }
     row.cut_left(8.0);
-    let reset = ui.button(W::new(("master-reset", dev.id)), row.cut_left(64.0), "Reset");
+    let reset = ui.button(
+        W::new(("master-reset", dev.id)),
+        row.cut_left(64.0),
+        "Reset",
+    );
     ui.tooltip(&reset, "Return every control to its default");
     if reset.clicked {
         reset_all(s, dev, desc);
     }
     let seg = row.cut_right(190.0);
     let mut sel = usize::from(ws.fx.mastering.advanced);
-    if ui.segmented(W::new("master-mode"), seg, &["Simple", "Advanced"], &mut sel) {
+    if ui.segmented(
+        W::new("master-mode"),
+        seg,
+        &["Simple", "Advanced"],
+        &mut sel,
+    ) {
         ws.fx.mastering.advanced = sel == 1;
     }
 }
@@ -172,7 +195,6 @@ fn chain(
     dev: &DeviceInstance,
     desc: &DeviceDescriptor,
     ws: &mut Workspace,
-    gr: f32,
 ) {
     let t = ui.theme.clone();
     let v = |k: &str| value(dev, desc, k);
@@ -229,20 +251,7 @@ fn chain(
             );
         }
         let mut inner = cell.shrink2(10.0, 6.0);
-        let mut head = inner.cut_top(18.0);
-        if i == 2 || i == 4 {
-            // Stages that reduce gain show it live.
-            let g = if i == 2 { None } else { Some(gr) };
-            if let Some(g) = g {
-                ui.text(
-                    head.cut_right(60.0),
-                    &format!("{g:.1} dB"),
-                    t.caption,
-                    if g > 0.05 { t.warn } else { t.text_faint },
-                    Align::End,
-                );
-            }
-        }
+        let head = inner.cut_top(18.0);
         ui.text(head, name, t.label, t.text, Align::Start);
         ui.text(inner, &summaries[i], t.caption, t.text_dim, Align::Start);
         ui.focus_ring(id, cell, t.radius_m);
@@ -291,7 +300,7 @@ fn knob(
     let text = s.param_text(dev.id, p, v);
     let mut c = cell;
     let kr = c.cut_top(cell.h - 36.0);
-    let d = kr.h.min(kr.w).min(72.0);
+    let d = kr.h.min(kr.w).min(84.0);
     let mut norm = p.to_normalized(v);
     let resp = ui.knob(
         W::new(("mknob", dev.id, p.id)),
@@ -303,15 +312,36 @@ fn knob(
     );
     ui.name(&resp, p.name);
     ui.value_text(&resp, &text);
-    ui.tooltip(&resp, &format!("{}: {text}. Double-click to reset.", p.name));
+    let extra = match key {
+        // The effect has no delay compensation in the engine yet: later
+        // gain can still push the signal past the ceiling.
+        "ceiling" => " Applies at this effect; faders and effects after it can exceed it.",
+        _ => "",
+    };
+    ui.tooltip(
+        &resp,
+        &format!("{}: {text}. Double-click to reset.{extra}", p.name),
+    );
     if resp.changed {
         s.set_param(dev.id, p.key, p.from_normalized(norm), resp.id.0);
     }
     if resp.released {
         s.doc.end_gesture();
     }
-    ui.text(c.cut_top(16.0), p.name, t.caption, t.text_dim, Align::Center);
-    ui.text(c.cut_top(18.0), &text, t.readout_small, t.text, Align::Center);
+    ui.text(
+        c.cut_top(16.0),
+        p.name,
+        t.caption,
+        t.text_dim,
+        Align::Center,
+    );
+    ui.text(
+        c.cut_top(18.0),
+        &text,
+        t.readout_small,
+        t.text,
+        Align::Center,
+    );
 }
 
 fn toggle(
@@ -337,17 +367,31 @@ fn toggle(
     );
     ui.scene.rect(r, 13.0, if on { color } else { t.control });
     let knob_x = if on { r.right() - 13.0 } else { r.x + 13.0 };
-    ui.scene
-        .circle(vec2(knob_x, r.center().y), 9.0, if on { t.text_on_accent } else { t.text_dim });
+    ui.scene.circle(
+        vec2(knob_x, r.center().y),
+        9.0,
+        if on { t.text_on_accent } else { t.text_dim },
+    );
     ui.focus_ring(id, r, 13.0);
     if resp.hovered {
         ui.set_cursor(CursorIcon::Pointer);
     }
     if resp.clicked {
-        s.set_param(dev.id, p.key, if on { 0.0 } else { 1.0 }, id.0 ^ u64::from(on));
+        s.set_param(
+            dev.id,
+            p.key,
+            if on { 0.0 } else { 1.0 },
+            id.0 ^ u64::from(on),
+        );
         s.doc.end_gesture();
     }
-    ui.text(c.cut_top(16.0), p.name, t.caption, t.text_dim, Align::Center);
+    ui.text(
+        c.cut_top(16.0),
+        p.name,
+        t.caption,
+        t.text_dim,
+        Align::Center,
+    );
     ui.text(
         c.cut_top(18.0),
         if on { "On" } else { "Off" },
@@ -369,7 +413,7 @@ fn group_row(
     let t = ui.theme.clone();
     let total: usize = groups.iter().map(|g| g.1.len()).sum();
     let gap = 18.0;
-    let knob_w = ((r.w - gap * (groups.len() as f32 - 1.0)) / total as f32).min(110.0);
+    let knob_w = ((r.w - gap * (groups.len() as f32 - 1.0)) / total as f32).min(130.0);
     let mut x = r.x;
     for (gi, (name, keys)) in groups.iter().enumerate() {
         let w = knob_w * keys.len() as f32;
@@ -410,8 +454,8 @@ fn simple_controls(
         r,
         &[
             ("Input", &["input"]),
-            ("Tone", &["low", "mid", "high"]),
-            ("Glue", &["threshold", "makeup"]),
+            ("Tone", &["low", "high"]),
+            ("Glue", &["threshold"]),
             ("Stereo", &["width"]),
             ("Limiter", &["ceiling"]),
         ],
@@ -458,7 +502,13 @@ fn compressor_curve(ui: &mut Ui, r: Rect, dev: &DeviceInstance, desc: &DeviceDes
     let ratio = value(dev, desc, "ratio").max(1.0);
     let makeup = value(dev, desc, "makeup");
     let mut c = r;
-    ui.text(c.cut_top(18.0), "Static curve", t.label, t.text_dim, Align::Start);
+    ui.text(
+        c.cut_top(18.0),
+        "Static curve",
+        t.label,
+        t.text_dim,
+        Align::Start,
+    );
     c.cut_top(4.0);
     let side = c.w.min(c.h);
     let plot = Rect {
@@ -475,7 +525,8 @@ fn compressor_curve(ui: &mut Ui, r: Rect, dev: &DeviceInstance, desc: &DeviceDes
         ui.scene.vline(x_of(db), plot.y, plot.bottom(), t.grid_beat);
         ui.scene.hline(plot.x, plot.right(), y_of(db), t.grid_beat);
     }
-    ui.scene.vline(x_of(thr), plot.y, plot.bottom(), t.accent.alpha(0.5));
+    ui.scene
+        .vline(x_of(thr), plot.y, plot.bottom(), t.accent.alpha(0.5));
     let out = |x: f32| {
         let over = x - thr;
         let y = if 2.0 * over < -KNEE {
@@ -494,8 +545,12 @@ fn compressor_curve(ui: &mut Ui, r: Rect, dev: &DeviceInstance, desc: &DeviceDes
         })
         .collect();
     ui.scene.push_clip(plot);
-    ui.scene
-        .line(vec2(plot.x, plot.bottom()), vec2(plot.right(), plot.y), 1.0, t.grid_bar);
+    ui.scene.line(
+        vec2(plot.x, plot.bottom()),
+        vec2(plot.right(), plot.y),
+        1.0,
+        t.grid_bar,
+    );
     ui.scene.polyline(&pts, 2.0, t.text);
     ui.scene.pop_clip();
 }
@@ -505,9 +560,7 @@ fn compressor_curve(ui: &mut Ui, r: Rect, dev: &DeviceInstance, desc: &DeviceDes
 fn level_bar(ui: &mut Ui, r: Rect, rms: f32, peak: f32, marker: Option<f32>) {
     let t = ui.theme.clone();
     ui.scene.rect(r, 3.0, t.well);
-    let x_of = |db: f32| {
-        r.x + r.w * ((db.clamp(METER_FLOOR, 0.0) - METER_FLOOR) / -METER_FLOOR)
-    };
+    let x_of = |db: f32| r.x + r.w * ((db.clamp(METER_FLOOR, 0.0) - METER_FLOOR) / -METER_FLOOR);
     if rms > METER_FLOOR {
         ui.scene.rect(
             Rect {
@@ -530,7 +583,8 @@ fn level_bar(ui: &mut Ui, r: Rect, rms: f32, peak: f32, marker: Option<f32>) {
         );
     }
     for db in [-48.0, -36.0, -24.0, -12.0, -6.0] {
-        ui.scene.vline(x_of(db), r.bottom() - 4.0, r.bottom(), t.line_strong);
+        ui.scene
+            .vline(x_of(db), r.bottom() - 4.0, r.bottom(), t.line_strong);
     }
     if let Some(m) = marker {
         ui.scene.rect(
@@ -557,7 +611,15 @@ fn meters(
     let t = ui.theme.clone();
     let an = &ws.fx.analysis;
     let mut r = rail;
-    ui.text(r.cut_top(20.0), "Levels", t.label, t.text_dim, Align::Start);
+    let mut head = r.cut_top(20.0);
+    ui.text(
+        head.cut_right(40.0),
+        "dBFS",
+        t.caption,
+        t.text_faint,
+        Align::End,
+    );
+    ui.text(head, "Levels", t.label, t.text_dim, Align::Start);
     ui.scene.hline(r.x, r.right(), r.y, t.line);
     r.cut_top(8.0);
     let ceiling = value(dev, desc, "ceiling");
@@ -586,15 +648,33 @@ fn meters(
         level_bar(ui, r.cut_top(12.0), rms, peak, marker);
         r.cut_top(12.0);
     }
-    let note = if live || an.output_peak_db > FLOOR_DB + 1.0 {
-        "dBFS. Peak is the sample peak; RMS is not LUFS. The amber mark is the ceiling."
+    if !live && an.output_peak_db <= FLOOR_DB + 1.0 {
+        ui.text(
+            r.cut_top(18.0),
+            "Play to meter",
+            t.caption,
+            t.text_faint,
+            Align::Start,
+        );
     } else {
-        "Play audio through Mastering to meter it."
-    };
-    let used = ui.text_wrapped(r.min(), r.w, note, t.caption, t.text_faint);
-    r.cut_top(used + 14.0);
+        // Peak is the sample peak and RMS is not LUFS; said once, on request.
+        let used = crate::util::hint(
+            ui,
+            W::new(("mlevels-hint", dev.id)),
+            r,
+            "Peak is the sample peak and RMS is not LUFS. The amber mark is the ceiling.",
+        );
+        r.cut_top(used);
+    }
+    r.cut_top(14.0);
     // Gain reduction, large.
-    ui.text(r.cut_top(20.0), "Gain reduction", t.label, t.text_dim, Align::Start);
+    ui.text(
+        r.cut_top(20.0),
+        "Gain reduction",
+        t.label,
+        t.text_dim,
+        Align::Start,
+    );
     ui.scene.hline(r.x, r.right(), r.y, t.line);
     r.cut_top(8.0);
     let figure = r.cut_top(34.0);
@@ -621,20 +701,24 @@ fn meters(
     }
     let resp = ui.interact(W::new(("mgr-hit", dev.id)), bar);
     ui.tooltip(&resp, "Compressor and limiter reduction together");
-    ui.describe_label(W::new(("mgr-label", dev.id)), bar, &format!("Gain reduction {gr:.1} dB"));
+    ui.describe_label(
+        W::new(("mgr-label", dev.id)),
+        bar,
+        &format!("Gain reduction {gr:.1} dB"),
+    );
 }
 
 /// Response of the three tone filters, from the EQ's own transfer function.
-fn tone_plot(
-    ui: &mut Ui,
-    r: Rect,
-    dev: &DeviceInstance,
-    desc: &DeviceDescriptor,
-    s: &Session,
-) {
+fn tone_plot(ui: &mut Ui, r: Rect, dev: &DeviceInstance, desc: &DeviceDescriptor, s: &Session) {
     let t = ui.theme.clone();
     let mut c = r;
-    ui.text(c.cut_top(18.0), "Tone response", t.label, t.text_dim, Align::Start);
+    ui.text(
+        c.cut_top(18.0),
+        "Tone response",
+        t.label,
+        t.text_dim,
+        Align::Start,
+    );
     c.cut_top(4.0);
     let Some(eq) = peel_devices::descriptor("peel.fx.eq") else {
         return;
@@ -669,8 +753,12 @@ fn tone_plot(
         ui.scene.vline(x_of(f), plot.y, plot.bottom(), t.grid_beat);
     }
     for db in [-6.0f32, -3.0, 0.0, 3.0, 6.0] {
-        ui.scene
-            .hline(plot.x, plot.right(), y_of(db), if db == 0.0 { t.grid_bar } else { t.grid_beat });
+        ui.scene.hline(
+            plot.x,
+            plot.right(),
+            y_of(db),
+            if db == 0.0 { t.grid_bar } else { t.grid_beat },
+        );
         ui.text(
             Rect {
                 x: c.x,
@@ -717,7 +805,13 @@ fn gr_history(ui: &mut Ui, r: Rect, history: &[f32], now: f32) {
     let t = ui.theme.clone();
     let mut c = r;
     let mut head = c.cut_top(18.0);
-    ui.text(head.cut_left(150.0), "Gain reduction history", t.label, t.text_dim, Align::Start);
+    ui.text(
+        head.cut_left(150.0),
+        "Gain reduction history",
+        t.label,
+        t.text_dim,
+        Align::Start,
+    );
     let max = history.iter().copied().fold(0.0f32, f32::max);
     ui.text(
         head,

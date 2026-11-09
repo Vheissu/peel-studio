@@ -91,9 +91,7 @@ pub fn draw(ui: &mut Ui, area: Rect, s: &mut Session, ws: &mut Workspace) {
         return;
     };
     let analysed = matches!(dev.type_id.as_str(), "peel.fx.eq" | "peel.fx.mastering");
-    ws.fx
-        .analysis
-        .sync(ui, s, analysed.then_some(dev.id));
+    ws.fx.analysis.sync(ui, s, analysed.then_some(dev.id));
     ws.fx.target = Some(FxTarget {
         track,
         device: dev.id,
@@ -102,7 +100,8 @@ pub fn draw(ui: &mut Ui, area: Rect, s: &mut Session, ws: &mut Workspace) {
     let sheet = sheet_rect(area);
     ui.with_layer(LayerId::ABOVE, |ui| {
         ui.scene.push_clip_absolute(area);
-        ui.scene.rect(area, 0.0, Color::rgba(0.03, 0.04, 0.06, 0.62));
+        ui.scene
+            .rect(area, 0.0, Color::rgba(0.03, 0.04, 0.06, 0.62));
         let scrim = ui.interact(W::new("fx-scrim"), area);
         ui.scene.shadow(sheet, t.radius_l, 18.0, t.shadow);
         ui.scene.rect(sheet, t.radius_l, t.panel);
@@ -167,7 +166,9 @@ fn header(
         W::new("fx-bypass"),
         bypass_r,
         FocusKind::Activate,
-        Semantics::new(Role::Button).label("Bypass").toggled(dev.bypass),
+        Semantics::new(Role::Button)
+            .label("Bypass")
+            .toggled(dev.bypass),
     );
     ui.scene.rect(
         bypass_r,
@@ -184,7 +185,11 @@ fn header(
         bypass_r,
         "Bypass",
         t.label,
-        if dev.bypass { t.text_on_accent } else { t.text_dim },
+        if dev.bypass {
+            t.text_on_accent
+        } else {
+            t.text_dim
+        },
         Align::Center,
     );
     ui.focus_ring(W::new("fx-bypass"), bypass_r, t.radius_s);
@@ -203,11 +208,8 @@ fn header(
     });
     let name = name.to_string();
     let swatch = row.cut_left(4.0);
-    ui.scene.rect(
-        swatch,
-        2.0,
-        if is_master { t.accent } else { color },
-    );
+    ui.scene
+        .rect(swatch, 2.0, if is_master { t.accent } else { color });
     row.cut_left(8.0);
     let title_w = (ui.measure(&name, t.heading).x + 12.0).min(row.w * 0.3);
     let title = row.cut_left(title_w);
@@ -351,7 +353,13 @@ fn generic(
     if peel_devices::shows_reduction(&dev.type_id) {
         crate::inspector::reduction_meter(ui, top.cut_right(140.0), s, dev.id);
         top.cut_right(8.0);
-        ui.text(top.cut_right(110.0), "Reduction", t.caption, t.text_faint, Align::End);
+        ui.text(
+            top.cut_right(110.0),
+            "Reduction",
+            t.caption,
+            t.text_faint,
+            Align::End,
+        );
     }
     ui.text(top, desc.name, t.heading, t.text, Align::Start);
     c.cut_top(8.0);

@@ -48,6 +48,9 @@ pub struct Prefs {
     pub output_routes: Vec<peel_session::OutputRoute>,
     /// Channels the main output uses on its device.
     pub primary_output: Option<peel_session::OutputChannels>,
+    /// Folder for new recordings (`None` keeps the default next to the
+    /// project).
+    pub recordings_dir: Option<PathBuf>,
 }
 
 impl Default for Prefs {
@@ -78,6 +81,7 @@ impl Default for Prefs {
             midi_channel: None,
             output_routes: Vec::new(),
             primary_output: None,
+            recordings_dir: None,
         }
     }
 }
