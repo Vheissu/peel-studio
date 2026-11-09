@@ -6,6 +6,7 @@
 
 use super::Engine;
 use crate::live::{LIVE_TARGET_NONE, LiveAction, LiveOp, MAX_EVENTS_PER_BLOCK};
+use peel_dsp::EventKind;
 
 impl Engine {
     /// Stages the live events that belong in a chunk of `frames`.
@@ -38,12 +39,23 @@ impl Engine {
             } => self.live_note(slot, key, velocity, true, offset),
             LiveOp::Off { slot, key } => self.live_note(slot, key, 0.0, false, offset),
             LiveOp::AllOff { slot } => self.release_live_slot(slot, offset),
+            LiveOp::Expression { slot, kind } => {
+                if self.slots.get(slot as usize).is_some_and(Option::is_some) {
+                    self.stage.push_on(slot as usize, offset, kind);
+                }
+            }
         }
     }
 
     /// Releases every live note on a slot (every slot for
     /// [`LIVE_TARGET_NONE`]) `offset` frames into the block.
     fn release_live_slot(&mut self, slot: u32, offset: u32) {
+        for (index, device) in self.slots.iter().enumerate() {
+            if device.is_some() && (slot == LIVE_TARGET_NONE || index == slot as usize) {
+                self.stage
+                    .push_on(index, offset, EventKind::ResetExpression);
+            }
+        }
         let mut i = 0;
         while i < self.active.len() {
             let n = self.active.get(i);

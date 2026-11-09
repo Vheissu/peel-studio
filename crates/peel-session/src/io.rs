@@ -32,6 +32,7 @@ pub use peel_engine::{LiveTiming, OutputDeviceInfo, list_output_devices};
 pub use peel_midi_io::{MidiEvent, MidiPortInfo, PortSelection};
 
 mod controls;
+mod expression;
 pub use controls::{MidiControlTarget, MidiLearnStatus, MidiMapping};
 
 use crate::{SampleLoader, Session};
@@ -75,15 +76,18 @@ pub(crate) struct MidiBridge {
     controls: controls::ControlMailbox,
     hardware_enabled: AtomicBool,
     messages: AtomicU64,
+    expression: expression::ExpressionState,
 }
 
 impl MidiBridge {
     pub(crate) fn set(&self, live: Option<LiveInput>) {
         *self.live.lock().unwrap_or_else(PoisonError::into_inner) = live;
+        self.expression.clear();
     }
 
-    fn release_all(&self) {
+    pub(crate) fn release_all(&self) {
         let guard = self.live.lock().unwrap_or_else(PoisonError::into_inner);
+        self.expression.clear();
         if let Some(live) = guard.as_ref() {
             live.sustain(false);
             live.all_notes_off(peel_engine::live::LIVE_TARGET_NONE);
@@ -139,7 +143,9 @@ impl MidiBridge {
                 live.note_to_target(key, 0.0, false);
             }
             MidiEvent::NoteOn { key, velocity, .. } => {
-                live.note_to_target(key, f32::from(velocity) / 127.0, true);
+                if live.note_to_target(key, f32::from(velocity) / 127.0, true) {
+                    self.clear_key_pressure(key);
+                }
             }
             MidiEvent::NoteOff { key, .. } => {
                 live.note_to_target(key, 0.0, false);
@@ -156,14 +162,41 @@ impl MidiBridge {
             }
             MidiEvent::AllNotesOff { .. } | MidiEvent::AllSoundOff { .. } => {
                 live.all_notes_off_target();
+                self.expression.clear();
             }
             MidiEvent::ControlChange {
                 controller: 120 | 123,
                 ..
             } => {
                 live.all_notes_off_target();
+                self.expression.clear();
             }
-            // Pitch bend is parsed but not mapped yet.
+            MidiEvent::PitchBend { value, .. } => {
+                let value = if value < 0 {
+                    f32::from(value) / 8192.0
+                } else {
+                    f32::from(value) / 8191.0
+                };
+                self.expression
+                    .push(live, peel_dsp::EventKind::PitchBend { semitones: value });
+            }
+            MidiEvent::ChannelPressure { value, .. } => {
+                self.expression.push(
+                    live,
+                    peel_dsp::EventKind::ChannelPressure {
+                        value: f32::from(value) / 127.0,
+                    },
+                );
+            }
+            MidiEvent::PolyPressure { key, value, .. } => {
+                self.expression.push(
+                    live,
+                    peel_dsp::EventKind::PolyPressure {
+                        key,
+                        value: f32::from(value) / 127.0,
+                    },
+                );
+            }
             _ => {}
         }
     }
@@ -179,7 +212,7 @@ pub(crate) struct IoState {
     midi: Option<MidiInput>,
     midi_enabled: bool,
     selection: PortSelection,
-    bridge: Arc<MidiBridge>,
+    pub(crate) bridge: Arc<MidiBridge>,
     controls: controls::MidiControls,
     timing: LiveTiming,
     live_channel: Option<Id>,
@@ -441,10 +474,7 @@ impl Session {
             .map(|d| d.slot);
         let target = self.engine.live_target();
         if target.get() != slot {
-            if target.get().is_some() {
-                self.io.bridge.release_all();
-            }
-            target.set(slot);
+            self.io.bridge.change_target(&target, slot);
         }
     }
 

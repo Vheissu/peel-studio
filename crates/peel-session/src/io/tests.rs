@@ -181,6 +181,7 @@ fn the_pedal_and_all_notes_off_reach_the_engine() {
     let mut s = session();
     let piano = channel(&s, "Piano");
     s.set_live_target(Some(piano));
+    let initial = s.engine.live_stats().events();
     s.io.bridge.handle(&MidiEvent::Sustain {
         channel: 0,
         down: true,
@@ -188,10 +189,10 @@ fn the_pedal_and_all_notes_off_reach_the_engine() {
     s.io.bridge.handle(&note_on(60, 100));
     s.io.bridge.handle(&note_off(60));
     wait_for(&mut s, "the piano to sound", |s| sounds(s, piano));
-    assert_eq!(s.engine.live_stats().events(), 3);
+    assert_eq!(s.engine.live_stats().events(), initial + 3);
 
     s.io.bridge.handle(&MidiEvent::AllNotesOff { channel: 0 });
-    assert_eq!(s.engine.live_stats().events(), 4);
+    assert_eq!(s.engine.live_stats().events(), initial + 4);
     let notes = s.take_recorded_midi();
     assert_eq!(notes.len(), 2);
     assert!(notes[1].sustain, "the release was recorded under the pedal");
@@ -340,4 +341,69 @@ fn a_midi_keyboard_plays_the_selected_channel_through_the_session() {
         s.poll_midi();
         !s.midi_inputs().iter().any(|n| n.contains(name))
     });
+}
+
+#[test]
+fn expression_accepts_hardware_and_software_with_one_filter_and_readback() {
+    let mut s = session();
+    assert!(!s.pitch_bend(1.0));
+    assert!(!s.channel_pressure(0.5));
+    assert!(!s.reset_expression());
+    s.set_pitch_bend_range(12.5).unwrap();
+    assert_eq!(s.pitch_bend_range(), 12.5);
+    let piano = channel(&s, "Piano");
+    s.set_live_target(Some(piano));
+    s.set_midi_channel_filter(Some(2)).unwrap();
+    s.handle_midi_event(MidiEvent::PitchBend {
+        channel: 1,
+        value: 8191,
+    });
+    assert_eq!(s.pitch_bend_value(), 0.0);
+    s.handle_midi_event(MidiEvent::PitchBend {
+        channel: 2,
+        value: -8192,
+    });
+    assert_eq!(s.pitch_bend_value(), -1.0);
+    s.io.bridge.hardware_enabled.store(true, Ordering::Release);
+    s.io.bridge.handle_hardware(&MidiEvent::PitchBend {
+        channel: 2,
+        value: 8191,
+    });
+    assert_eq!(s.pitch_bend_value(), 1.0);
+    s.io.bridge.handle_hardware(&MidiEvent::ChannelPressure {
+        channel: 2,
+        value: 127,
+    });
+    s.handle_midi_event(MidiEvent::PolyPressure {
+        channel: 2,
+        key: 60,
+        value: 64,
+    });
+    assert_eq!(s.channel_pressure_value(), 1.0);
+    assert_eq!(s.poly_pressure_value(60), 64.0 / 127.0);
+    assert!(!s.pitch_bend(f32::NAN));
+    assert!(!s.channel_pressure(f32::INFINITY));
+    assert!(!s.poly_pressure(128, 0.5));
+    assert!(s.set_pitch_bend_range(49.0).is_err());
+    assert!(s.set_pitch_bend_range(f32::NAN).is_err());
+    assert_eq!(s.pitch_bend_range(), 12.5);
+    assert!(s.reset_expression());
+    assert_eq!(s.pitch_bend_value(), 0.0);
+    assert_eq!(s.channel_pressure_value(), 0.0);
+    assert_eq!(s.poly_pressure_value(60), 0.0);
+    assert_eq!(s.pitch_bend_range(), 12.5);
+    assert!(s.pitch_bend(0.5));
+    s.set_midi_channel_filter(None).unwrap();
+    assert_eq!(s.pitch_bend_value(), 0.0);
+    assert!(s.channel_pressure(0.8));
+    s.panic();
+    assert_eq!(s.channel_pressure_value(), 0.0);
+    assert!(s.pitch_bend(-0.5));
+    s.set_live_target(None);
+    assert_eq!(s.pitch_bend_value(), 0.0);
+    s.set_live_target(Some(piano));
+    assert!(s.pitch_bend(0.4));
+    s.restart_audio(None, Some(128)).unwrap();
+    assert_eq!(s.pitch_bend_value(), 0.0);
+    assert_eq!(s.pitch_bend_range(), 12.5);
 }

@@ -78,6 +78,16 @@ pub enum EventKind {
     NoteOff { key: u8, velocity: f32, voice: u32 },
     /// Sample-accurate parameter change (plain value).
     Param { id: ParamId, value: f32 },
+    /// Live pitch displacement in semitones (finite, -48..=48).
+    PitchBend { semitones: f32 },
+    /// MIDI pitch-wheel sensitivity. Native DSP already receives actual semitones.
+    PitchBendRange { semitones: f32 },
+    /// Channel aftertouch, 0..=1. Does not rewrite a saved parameter.
+    ChannelPressure { value: f32 },
+    /// Polyphonic aftertouch for sounding voices of `key`, 0..=1.
+    PolyPressure { key: u8, value: f32 },
+    /// Clear transient pitch and pressure without ending sequence voices.
+    ResetExpression,
     /// Release every sounding voice normally (tails continue).
     AllNotesOff,
     /// Silence immediately and clear tails (panic).

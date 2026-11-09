@@ -36,6 +36,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
+use peel_dsp::EventKind;
 use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::plan::Slot;
@@ -243,6 +244,7 @@ pub(crate) enum LiveKind {
     NoteOff { key: u8 },
     Sustain { down: bool },
     AllNotesOff,
+    Expression { kind: EventKind },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -362,6 +364,72 @@ impl LiveInput {
         self.all_notes_off(self.inner.shared.target.raw())
     }
 
+    /// Queues transient expression to the selected instrument. Only expression
+    /// variants are accepted; note releases retain their reserved queue space.
+    pub fn expression(&self, kind: EventKind) -> bool {
+        self.expression_batch(&[kind])
+    }
+
+    /// Atomically queues a small expression transaction (range plus bend).
+    pub fn expression_batch(&self, kinds: &[EventKind]) -> bool {
+        if kinds.is_empty() || kinds.len() > 8 {
+            return false;
+        }
+        let mut cleaned = [EventKind::ResetExpression; 8];
+        for (output, &kind) in cleaned.iter_mut().zip(kinds) {
+            *output = match kind {
+                EventKind::PitchBend { semitones } if semitones.is_finite() => {
+                    EventKind::PitchBend {
+                        semitones: semitones.clamp(-48.0, 48.0),
+                    }
+                }
+                EventKind::PitchBendRange { semitones } if semitones.is_finite() => {
+                    EventKind::PitchBendRange {
+                        semitones: semitones.clamp(0.0, 48.0),
+                    }
+                }
+                EventKind::ChannelPressure { value } if value.is_finite() => {
+                    EventKind::ChannelPressure {
+                        value: value.clamp(0.0, 1.0),
+                    }
+                }
+                EventKind::PolyPressure { key, value } if key < 128 && value.is_finite() => {
+                    EventKind::PolyPressure {
+                        key,
+                        value: value.clamp(0.0, 1.0),
+                    }
+                }
+                EventKind::ResetExpression => kind,
+                _ => return false,
+            };
+        }
+        let shared = &self.inner.shared;
+        let slot = shared.target.raw();
+        if slot == LIVE_TARGET_NONE {
+            return false;
+        }
+        let mut tx = self.lock();
+        if tx.events.slots() < LIVE_QUEUE_RESERVE + kinds.len() {
+            shared.stats.dropped.fetch_add(1, Ordering::Relaxed);
+            return false;
+        }
+        let t_ns = shared.now_ns();
+        for &kind in &cleaned[..kinds.len()] {
+            // The capacity check and pushes share the producer lock.
+            let _ = push_event(
+                &mut tx,
+                shared,
+                LiveEvent {
+                    t_ns,
+                    slot,
+                    kind: LiveKind::Expression { kind },
+                },
+                false,
+            );
+        }
+        true
+    }
+
     /// The instrument live notes are played on.
     pub fn target(&self) -> &LiveTarget {
         &self.inner.shared.target
@@ -423,6 +491,10 @@ pub(crate) enum LiveOp {
     Off {
         slot: u32,
         key: u8,
+    },
+    Expression {
+        slot: u32,
+        kind: EventKind,
     },
     /// Release every live note on the slot ([`LIVE_TARGET_NONE`]: on all).
     AllOff {
@@ -634,6 +706,25 @@ impl LiveState {
                     self.sustained.clear();
                 }
             }
+            LiveKind::Expression { kind } => {
+                let slot = if let EventKind::PolyPressure { key, .. } = kind {
+                    let held = self.held[usize::from(key.min(127))];
+                    if held != LIVE_TARGET_NONE {
+                        held
+                    } else {
+                        self.sustained
+                            .iter()
+                            .rev()
+                            .find(|(_, k)| *k == key)
+                            .map_or(ev.slot, |(slot, _)| *slot)
+                    }
+                } else {
+                    ev.slot
+                };
+                if slot != LIVE_TARGET_NONE {
+                    emit(out, offset, LiveOp::Expression { slot, kind });
+                }
+            }
             LiveKind::AllNotesOff => {
                 // `LIVE_TARGET_NONE` matches every instrument.
                 let slot = ev.slot;
@@ -703,6 +794,59 @@ mod tests {
             all.extend(out.iter().map(|a| a.op));
         }
         all
+    }
+
+    #[test]
+    fn expression_follows_held_and_sustained_keys_without_releasing_them() {
+        let mut s = state();
+        run(
+            &mut s,
+            &[
+                on(3, 60),
+                ev(0, LiveKind::Sustain { down: true }),
+                off(5, 60),
+            ],
+        );
+        let kind = EventKind::PolyPressure {
+            key: 60,
+            value: 0.7,
+        };
+        let ops = run(&mut s, &[ev(5, LiveKind::Expression { kind })]);
+        assert_eq!(ops, vec![LiveOp::Expression { slot: 3, kind }]);
+        assert_eq!(s.sustained_len(), 1);
+        let ops = run(
+            &mut s,
+            &[ev(
+                3,
+                LiveKind::Expression {
+                    kind: EventKind::ResetExpression,
+                },
+            )],
+        );
+        assert_eq!(
+            ops,
+            vec![LiveOp::Expression {
+                slot: 3,
+                kind: EventKind::ResetExpression
+            }]
+        );
+        assert_eq!(s.sustained_len(), 1);
+    }
+
+    #[test]
+    fn expression_flood_preserves_the_release_reserve_and_atomic_batches() {
+        let mut s = state();
+        let live = s.take_input().unwrap();
+        live.target().set(Some(0));
+        while live.expression(EventKind::ChannelPressure { value: 0.7 }) {}
+        assert!(!live.expression_batch(&[
+            EventKind::PitchBendRange { semitones: 12.0 },
+            EventKind::PitchBend { semitones: 6.0 }
+        ]));
+        assert!(live.note_to_target(60, 0.0, false));
+        assert!(live.sustain(false));
+        assert!(live.all_notes_off_target());
+        assert!(s.pending() <= LIVE_QUEUE_CAPACITY);
     }
 
     #[test]

@@ -229,3 +229,47 @@ fn live_events_wait_for_the_next_block_when_the_per_block_limit_is_reached() {
     e.render(&mut l, &mut r);
     assert_eq!(e.live.pending(), 0);
 }
+
+#[test]
+fn expression_keeps_sample_offsets_and_reset_preserves_notes() {
+    let seen: Seen = Arc::default();
+    let mut e = engine(&seen);
+    e.set_live_timing(LiveTiming::Spread);
+    let live = e.take_live_input().unwrap();
+    live.target().set(Some(0));
+    let (mut l, mut r) = (vec![0.0f32; 256], vec![0.0f32; 256]);
+    e.live.begin_callback(T0, 256);
+    e.render(&mut l, &mut r);
+    e.live.begin_callback(T0 + PERIOD, 256);
+    live.push_at(T0 + 1_333_333, 0, on(60));
+    live.push_at(
+        T0 + 2_666_667,
+        0,
+        LiveKind::Expression {
+            kind: EventKind::PitchBend { semitones: 2.0 },
+        },
+    );
+    live.push_at(
+        T0 + 4_000_000,
+        0,
+        LiveKind::Expression {
+            kind: EventKind::ResetExpression,
+        },
+    );
+    e.render(&mut l, &mut r);
+    let seen = seen.lock().unwrap();
+    assert!(
+        seen.iter()
+            .any(|&(_, offset, kind)| offset == 128
+                && kind == EventKind::PitchBend { semitones: 2.0 })
+    );
+    assert!(
+        seen.iter()
+            .any(|&(_, offset, kind)| offset == 192 && kind == EventKind::ResetExpression)
+    );
+    assert!(
+        !seen
+            .iter()
+            .any(|&(_, _, kind)| matches!(kind, EventKind::NoteOff { .. }))
+    );
+}

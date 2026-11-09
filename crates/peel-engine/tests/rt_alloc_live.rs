@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use assert_no_alloc::{AllocDisabler, assert_no_alloc};
 use common::*;
+use peel_dsp::EventKind;
 use peel_engine::{Engine, EngineCommand, EngineConfig, LiveTiming, Retired, Telemetry};
 use peel_time::TempoMap;
 
@@ -84,6 +85,20 @@ fn live_input_never_allocates_on_the_audio_thread() {
             }
             30 if block == 390 => engine.handle_command(EngineCommand::Panic),
             _ => {}
+        }
+        live.target().set(Some(block % 3));
+        live.expression(EventKind::PitchBend {
+            semitones: (block % 24) as f32 - 12.0,
+        });
+        live.expression(EventKind::ChannelPressure {
+            value: (block % 10) as f32 / 10.0,
+        });
+        live.expression(EventKind::PolyPressure {
+            key: 60,
+            value: 0.5,
+        });
+        if block % 17 == 0 {
+            live.expression(EventKind::ResetExpression);
         }
         // The engine may be asked for callbacks of any size.
         let n = [256usize, 64, 100, 256][block as usize % 4];
