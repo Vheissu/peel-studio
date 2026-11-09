@@ -182,20 +182,7 @@ impl OutputStreams {
         requests: &[OutputRouteRequest],
         rate: f32,
     ) -> Result<(Self, Box<OutputTaps>), String> {
-        if requests.len() > MAX_OUTPUT_ROUTES {
-            return Err(format!(
-                "At most {MAX_OUTPUT_ROUTES} secondary outputs are supported"
-            ));
-        }
-        for r in requests {
-            if r.device.trim().is_empty() {
-                return Err("Choose a secondary output device".into());
-            }
-            if !r.gain_db.is_finite() || !(-90.0..=12.0).contains(&r.gain_db) {
-                return Err("Output route gain must be between -90 and +12 dB".into());
-            }
-            r.channels.validate(u16::MAX)?;
-        }
+        Self::validate_requests(requests)?;
         let mut routes = Vec::with_capacity(requests.len());
         let mut taps = Vec::with_capacity(requests.len());
         for request in requests {
@@ -224,6 +211,23 @@ impl OutputStreams {
             });
         }
         Ok((Self { routes }, Box::new(OutputTaps { taps })))
+    }
+    pub(crate) fn validate_requests(requests: &[OutputRouteRequest]) -> Result<(), String> {
+        if requests.len() > MAX_OUTPUT_ROUTES {
+            return Err(format!(
+                "At most {MAX_OUTPUT_ROUTES} secondary outputs are supported"
+            ));
+        }
+        for r in requests {
+            if r.device.trim().is_empty() {
+                return Err("Choose a secondary output device".into());
+            }
+            if !r.gain_db.is_finite() || !(-90.0..=12.0).contains(&r.gain_db) {
+                return Err("Output route gain must be between -90 and +12 dB".into());
+            }
+            r.channels.validate(u16::MAX)?;
+        }
+        Ok(())
     }
     pub(crate) fn set_source(&self, index: usize, source: Option<OutputSource>) {
         if let Some(route) = self.routes.get(index) {

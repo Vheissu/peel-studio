@@ -221,7 +221,7 @@ mod tests {
         assert!(
             s.configure_output_routes(vec![route()])
                 .unwrap_err()
-                .contains("not found")
+                .contains("running primary audio output")
         );
         assert!(s.output_routes().is_empty());
         assert_eq!(s.primary_output_channels(), OutputChannels::Stereo(0, 1));
