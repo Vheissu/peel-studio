@@ -131,6 +131,7 @@ enum Row {
     /// Index into the plugin list.
     Plugin(usize),
     Scanning,
+    NoPlugins,
 }
 
 /// An installed plugin as the browser lists it.
@@ -209,11 +210,13 @@ fn devices(
             vendor: p.vendor.clone(),
         })
         .collect();
-    if !plugins.is_empty() || (s.plugins_scanning() && query.is_empty()) {
+    if !plugins.is_empty() || query.is_empty() {
         rows.push(Row::Heading("Plugins"));
         rows.extend((0..plugins.len()).map(Row::Plugin));
         if s.plugins_scanning() {
             rows.push(Row::Scanning);
+        } else if plugins.is_empty() {
+            rows.push(Row::NoPlugins);
         }
     }
     if rows.is_empty() {
@@ -345,6 +348,11 @@ fn devices(
                     t.text_faint,
                     Align::Start,
                 );
+            }
+            Row::NoPlugins => {
+                let mut cells = row.shrink2(4.0, 0.0);
+                cells.cut_left(16.0 + 22.0 + 8.0);
+                ui.text(cells, "None installed", t.body, t.text_faint, Align::Start);
             }
             Row::Plugin(i) => {
                 let p = &plugins[i];
