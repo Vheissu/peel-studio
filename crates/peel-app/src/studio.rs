@@ -1186,6 +1186,22 @@ impl App for Studio {
 
 impl Studio {
     fn update_inner(&mut self, ui: &mut Ui, win: &WindowControl) {
+        // Screenshot hook: `PEEL_BEND` (-1..1) and `PEEL_PRESSURE` (0..1) move
+        // the real session expression a few frames in, once the instrument
+        // is the live target, just as a hardware wheel would.
+        if !cfg!(test) && self.ws.inst.is_open() && std::env::var_os("PEEL_BEND").is_some() {
+            let n = ui.state::<u32>(W::new("shot-expression"));
+            *n += 1;
+            if *n == 6 {
+                let get = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<f32>().ok());
+                if let Some(v) = get("PEEL_BEND") {
+                    self.session.pitch_bend(v);
+                }
+                if let Some(v) = get("PEEL_PRESSURE") {
+                    self.session.channel_pressure(v);
+                }
+            }
+        }
         if let Some(bridge) = &mut self.mcp {
             let project = self.session.project().id;
             let recording = self.session.is_recording();
