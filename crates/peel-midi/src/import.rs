@@ -27,6 +27,9 @@ use peel_document::{
 use crate::error::{MidiError, Result};
 use crate::gm;
 
+#[path = "import_expression.rs"]
+mod expression;
+
 /// How notes are distributed over patterns.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PatternLayout {
@@ -111,11 +114,13 @@ pub enum SmfFormat {
 /// Where an imported channel came from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChannelSource {
-    /// Source track; `None` for percussion channels, which are shared by
-    /// every track that plays the key.
+    /// Source track; the first source track for an MPE zone shared by
+    /// parallel tracks, or `None` for percussion shared by key.
     pub track: Option<usize>,
     /// Zero-based MIDI channel.
     pub midi_channel: u8,
+    /// MIDI Port meta-event value, or zero when no port was specified.
+    pub midi_port: u8,
     /// Percussion key when the channel was split by key.
     pub drum_key: Option<u8>,
     /// First GM program in effect when the channel starts playing.
@@ -350,6 +355,8 @@ impl TickClock {
 
 struct PendingNote {
     start: u64,
+    order: usize,
+    port: u8,
     vel: u8,
     program: Option<u8>,
     bank: Option<u16>,
@@ -357,6 +364,11 @@ struct PendingNote {
 
 struct RawNote {
     chan: u8,
+    port: u8,
+    start_order: usize,
+    end_order: usize,
+    manager: Option<u8>,
+    expression: expression::RawExpression,
     key: u8,
     start: u64,
     end: u64,
@@ -366,19 +378,13 @@ struct RawNote {
     bank: Option<u16>,
 }
 
-struct HeldNote {
-    chan: u8,
-    key: u8,
-    note: PendingNote,
-    release: u8,
-}
-
 #[derive(Default)]
 struct TrackScan {
     name: Option<String>,
     events: usize,
     end_tick: u64,
     notes: Vec<RawNote>,
+    expression_events: Vec<expression::Control>,
 }
 
 #[derive(Default)]
@@ -394,6 +400,7 @@ struct Collected {
     repairs: Repairs,
     warnings: Vec<String>,
     total_notes: usize,
+    expression_events: usize,
 }
 
 impl Collected {
@@ -451,9 +458,8 @@ fn controller_name(cc: u8) -> String {
 }
 
 struct TrackState {
-    pending: HashMap<(u8, u8), VecDeque<PendingNote>>,
-    held: Vec<HeldNote>,
-    pedal: [bool; 16],
+    pending: HashMap<(u8, u8, u8), VecDeque<PendingNote>>,
+    port: u8,
     program: [Option<u8>; 16],
     bank_msb: [Option<u8>; 16],
     bank_lsb: [Option<u8>; 16],
@@ -483,6 +489,11 @@ fn finish_note(
     };
     scan.notes.push(RawNote {
         chan,
+        port: note.port,
+        start_order: note.order,
+        end_order: scan.events,
+        manager: None,
+        expression: expression::RawExpression::default(),
         key,
         start: note.start,
         end,
@@ -504,8 +515,7 @@ fn scan_track(
     let mut scan = TrackScan::default();
     let mut st = TrackState {
         pending: HashMap::new(),
-        held: Vec::new(),
-        pedal: [false; 16],
+        port: 0,
         program: [None; 16],
         bank_msb: [None; 16],
         bank_lsb: [None; 16],
@@ -565,33 +575,15 @@ fn scan_track(
                                 opts.max_notes
                             )));
                         }
-                        if opts.sustain == SustainPolicy::ExtendNotes {
-                            // Striking a key again ends its pedal-held copy.
-                            let mut i = 0;
-                            while i < st.held.len() {
-                                if st.held[i].chan == chan && st.held[i].key == key {
-                                    let h = st.held.remove(i);
-                                    finish_note(
-                                        &mut scan,
-                                        &mut ctx.repairs,
-                                        h.chan,
-                                        h.key,
-                                        h.note,
-                                        tick,
-                                        Some(h.release),
-                                    );
-                                } else {
-                                    i += 1;
-                                }
-                            }
-                        }
                         let pending = PendingNote {
                             start: tick,
+                            order: scan.events,
+                            port: st.port,
                             vel: vel.as_int(),
                             program: st.program[ci],
                             bank: st.bank(chan),
                         };
-                        let queue = st.pending.entry((chan, key)).or_default();
+                        let queue = st.pending.entry((st.port, chan, key)).or_default();
                         if !queue.is_empty() {
                             ctx.repairs.overlapping_same_pitch += 1;
                         }
@@ -630,28 +622,8 @@ fn scan_track(
                             32 => st.bank_lsb[ci] = Some(value),
                             _ => {}
                         }
-                        if cc == 64 && opts.sustain == SustainPolicy::ExtendNotes {
-                            let down = value >= 64;
-                            st.pedal[ci] = down;
-                            if !down {
-                                let mut i = 0;
-                                while i < st.held.len() {
-                                    if st.held[i].chan == chan {
-                                        let h = st.held.remove(i);
-                                        finish_note(
-                                            &mut scan,
-                                            &mut ctx.repairs,
-                                            h.chan,
-                                            h.key,
-                                            h.note,
-                                            tick,
-                                            Some(h.release),
-                                        );
-                                    } else {
-                                        i += 1;
-                                    }
-                                }
-                            }
+                        if expression::is_controller(cc, opts.sustain) {
+                            expression::collect(&mut scan, ctx, tick, st.port, chan, message)?;
                         } else {
                             ctx.skip(controller_name(cc));
                         }
@@ -660,9 +632,11 @@ fn scan_track(
                         st.program[ci] = Some(program.as_int());
                         ctx.skip("Program Change (reported per channel, not applied)");
                     }
-                    MidiMessage::Aftertouch { .. } => ctx.skip("Polyphonic Aftertouch"),
-                    MidiMessage::ChannelAftertouch { .. } => ctx.skip("Channel Aftertouch"),
-                    MidiMessage::PitchBend { .. } => ctx.skip("Pitch Bend"),
+                    MidiMessage::Aftertouch { .. }
+                    | MidiMessage::ChannelAftertouch { .. }
+                    | MidiMessage::PitchBend { .. } => {
+                        expression::collect(&mut scan, ctx, tick, st.port, chan, message)?;
+                    }
                 }
             }
             TrackEventKind::SysEx(_) => ctx.skip("System Exclusive"),
@@ -697,7 +671,7 @@ fn scan_track(
                 MetaMessage::DeviceName(b) => ctx.text(index, tick, "Device Name", b),
                 MetaMessage::TrackNumber(_) => ctx.skip("Sequence Number"),
                 MetaMessage::MidiChannel(_) => ctx.skip("MIDI Channel Prefix"),
-                MetaMessage::MidiPort(_) => ctx.skip("MIDI Port Prefix"),
+                MetaMessage::MidiPort(port) => st.port = port.as_int(),
                 MetaMessage::SmpteOffset(_) => ctx.skip("SMPTE Offset"),
                 MetaMessage::SequencerSpecific(_) => ctx.skip("Sequencer-Specific Meta Event"),
                 MetaMessage::Unknown(id, _) => ctx.skip(format!("Unknown Meta Event 0x{id:02X}")),
@@ -708,7 +682,7 @@ fn scan_track(
     // Notes still sounding when the track ends.
     let end = scan.end_tick;
     let mut dangling: Vec<(u8, u8, PendingNote)> = Vec::new();
-    for ((chan, key), queue) in st.pending.drain() {
+    for ((_, chan, key), queue) in st.pending.drain() {
         for note in queue {
             dangling.push((chan, key, note));
         }
@@ -718,17 +692,6 @@ fn scan_track(
         ctx.repairs.unterminated_notes += 1;
         finish_note(&mut scan, &mut ctx.repairs, chan, key, note, end, None);
     }
-    for h in std::mem::take(&mut st.held) {
-        finish_note(
-            &mut scan,
-            &mut ctx.repairs,
-            h.chan,
-            h.key,
-            h.note,
-            end,
-            Some(h.release),
-        );
-    }
     Ok(scan)
 }
 
@@ -737,34 +700,29 @@ fn note_off(
     st: &mut TrackState,
     scan: &mut TrackScan,
     ctx: &mut Collected,
-    opts: &ImportOptions,
+    _opts: &ImportOptions,
     chan: u8,
     key: u8,
     release: Option<u8>,
     tick: u64,
 ) {
-    let Some(note) = st.pending.get_mut(&(chan, key)).and_then(|q| q.pop_front()) else {
+    let Some(note) = st
+        .pending
+        .get_mut(&(st.port, chan, key))
+        .and_then(|q| q.pop_front())
+    else {
         ctx.repairs.orphan_note_offs += 1;
         return;
     };
-    if opts.sustain == SustainPolicy::ExtendNotes && st.pedal[usize::from(chan)] {
-        st.held.push(HeldNote {
-            chan,
-            key,
-            note,
-            release: release.unwrap_or(64),
-        });
-    } else {
-        finish_note(scan, &mut ctx.repairs, chan, key, note, tick, release);
-    }
+    finish_note(scan, &mut ctx.repairs, chan, key, note, tick, release);
 }
 
 // ------------------------------------------------------------ public API
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 enum GroupKey {
-    Melodic { track: usize, chan: u8 },
-    Drum { key: u8 },
+    Melodic { track: usize, port: u8, chan: u8 },
+    Drum { port: u8, key: u8 },
 }
 
 /// Parses a Standard MIDI File (types 0, 1 and 2, and RIFF-wrapped `.rmi`)
@@ -880,6 +838,8 @@ pub fn import_smf(bytes: &[u8], opts: &ImportOptions) -> Result<MidiImport> {
         ctx.warnings
             .push("type 2 sequences are independent; imported one pattern per sequence".into());
     }
+
+    expression::apply(&mut scans, format, opts, &mut ctx)?;
 
     // Tempo and meter. Type 2 sequences each have their own timeline; only
     // the first sequence's tempo and meter are adopted and the rest counted.
@@ -1089,13 +1049,32 @@ struct Builder<'a> {
 impl Builder<'_> {
     fn assemble(&self, scans: &[TrackScan], ctx: &mut Collected) -> Result<MidiImport> {
         let opts = self.opts;
+        // A MIDI port carries one instrument per MPE zone even when its
+        // members were written into separate parallel SMF tracks.
+        let mut zone_tracks = BTreeMap::new();
+        if self.format != SmfFormat::Type2 {
+            for (track, scan) in scans.iter().enumerate() {
+                for note in &scan.notes {
+                    if let Some(manager) = note.manager {
+                        zone_tracks.entry((note.port, manager)).or_insert(track);
+                    }
+                }
+            }
+        }
         let group_of = |track: usize, n: &RawNote| {
-            if opts.split_drums && n.chan == opts.drum_channel {
-                GroupKey::Drum { key: n.key }
+            if opts.split_drums && n.chan == opts.drum_channel && n.manager.is_none() {
+                GroupKey::Drum {
+                    port: n.port,
+                    key: n.key,
+                }
             } else {
                 GroupKey::Melodic {
-                    track,
-                    chan: n.chan,
+                    track: n
+                        .manager
+                        .and_then(|manager| zone_tracks.get(&(n.port, manager)).copied())
+                        .unwrap_or(track),
+                    port: n.port,
+                    chan: n.manager.unwrap_or(n.chan),
                 }
             }
         };
@@ -1110,7 +1089,7 @@ impl Builder<'_> {
         let melodic_per_track: BTreeMap<usize, BTreeSet<u8>> = {
             let mut m: BTreeMap<usize, BTreeSet<u8>> = BTreeMap::new();
             for k in groups.keys() {
-                if let GroupKey::Melodic { track, chan } = k {
+                if let GroupKey::Melodic { track, chan, .. } = k {
                     m.entry(*track).or_default().insert(*chan);
                 }
             }
@@ -1125,7 +1104,10 @@ impl Builder<'_> {
             let first_program = by_start.iter().find_map(|(_, n)| n.program);
             let first_bank = by_start.iter().find_map(|(_, n)| n.bank);
             let (name, device, source, root_key) = match *key {
-                GroupKey::Drum { key: drum_key } => {
+                GroupKey::Drum {
+                    port,
+                    key: drum_key,
+                } => {
                     let (type_id, version, name) = (opts.drum_device_for_key)(drum_key);
                     (
                         name,
@@ -1133,6 +1115,7 @@ impl Builder<'_> {
                         ChannelSource {
                             track: None,
                             midi_channel: opts.drum_channel,
+                            midi_port: port,
                             drum_key: Some(drum_key),
                             program: first_program,
                             bank: first_bank,
@@ -1141,7 +1124,7 @@ impl Builder<'_> {
                         drum_key,
                     )
                 }
-                GroupKey::Melodic { track, chan } => {
+                GroupKey::Melodic { track, port, chan } => {
                     let track_name = scans[track].name.clone();
                     let program_name = first_program.map(|p| gm::program_name(p).to_string());
                     let multi = melodic_per_track.get(&track).is_some_and(|s| s.len() > 1);
@@ -1164,6 +1147,7 @@ impl Builder<'_> {
                         ChannelSource {
                             track: Some(track),
                             midi_channel: chan,
+                            midi_port: port,
                             drum_key: None,
                             program: first_program,
                             bank: first_bank,
@@ -1208,7 +1192,7 @@ impl Builder<'_> {
             for n in &scan.notes {
                 let key = match layout {
                     PatternLayout::PerTrack => PatKey::Track(ti),
-                    PatternLayout::PerMidiChannel => PatKey::Channel(n.chan),
+                    PatternLayout::PerMidiChannel => PatKey::Channel(n.manager.unwrap_or(n.chan)),
                     PatternLayout::Combined => PatKey::All,
                 };
                 buckets.entry(key).or_default().push((ti, n));
@@ -1237,6 +1221,8 @@ impl Builder<'_> {
                 content_end = content_end.max(self.clock.time(scans[*t].end_tick)?);
             }
             let mut out_notes: Vec<Note> = Vec::with_capacity(notes.len());
+            let mut out_expression = Vec::new();
+            let mut expression_points = 0usize;
             for (ti, n) in notes {
                 let channel = channel_of[&group_of(*ti, n)];
                 let (start, length, moved) = self.note_times(n)?;
@@ -1246,6 +1232,19 @@ impl Builder<'_> {
                 let mut note = Note::new(channel, start, length, n.key, f32::from(n.vel) / 127.0);
                 note.release = release_from_midi(n.release);
                 content_end = content_end.max(start + length);
+                let expr = n
+                    .expression
+                    .to_document(note.id, self.clock, n.start, length)?;
+                let points = expr.pitch.len() + expr.pressure.len() + expr.timbre.len();
+                expression_points += points;
+                if expression_points > 1_000_000 {
+                    return Err(MidiError::TooLarge(
+                        "more than 1000000 expression points in one pattern".into(),
+                    ));
+                }
+                if points != 0 {
+                    out_expression.push(expr);
+                }
                 out_notes.push(note);
             }
             let bars = content_end.ceil_to(self.bar);
@@ -1256,7 +1255,7 @@ impl Builder<'_> {
                 color: PALETTE[patterns.len() % PALETTE.len()],
                 length,
                 notes: out_notes,
-                expression: Vec::new(),
+                expression: out_expression,
             };
             pattern.sort_notes();
             patterns.push(pattern);
@@ -1282,7 +1281,8 @@ impl Builder<'_> {
                     let vels = notes.iter().map(|n| n.vel);
                     ChannelReport {
                         midi_channel: chan,
-                        is_drum: chan == opts.drum_channel,
+                        is_drum: chan == opts.drum_channel
+                            && notes.iter().all(|n| n.manager.is_none()),
                         notes: notes.len(),
                         key_range: (keys.clone().min().unwrap_or(0), keys.max().unwrap_or(0)),
                         velocity_range: (vels.clone().min().unwrap_or(0), vels.max().unwrap_or(0)),

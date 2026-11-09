@@ -49,9 +49,8 @@ effects. There is no web view.
 - Exact rational musical time, sample-accurate playback that cannot drift,
   and a realtime audio path verified to make no allocations.
 - Open project files with atomic saves, autosave and crash recovery,
-  Standard MIDI File import and export, WAV, MP3, FLAC and AIFF export of
-  the mix or stems,
-  undo history.
+  Standard MIDI File import and export with MPE expression, WAV, MP3, FLAC
+  and AIFF export of the mix or stems, undo history.
 - Screen reader support through AccessKit and keyboard focus traversal.
 
 | Piano Roll with a scale | Mixer with a sidechain duck |
@@ -76,6 +75,16 @@ separate **Grid** and **Note length** controls, with quarter notes, eighths,
 sixteenths, finer divisions and triplets. Note length also offers dotted
 values. Changing the grid leaves existing notes untouched. Cmd/Ctrl+wheel
 zooms the Piano Roll; Shift+wheel scrolls a long step grid sideways.
+
+## Clip editing
+
+Right-click an arrangement clip for Duplicate, Copy or Cut. Use the Select
+tool or Shift-click to work with a group. Cmd/Ctrl+D repeats the selection
+with its timing and lane spacing intact.
+
+Right-click an empty lane to paste at that grid position, or point at the
+destination and press Cmd/Ctrl+V. Cmd/Ctrl+A selects every arrangement clip.
+Copies share their source pattern; use Make unique to edit one independently.
 
 ## Build
 

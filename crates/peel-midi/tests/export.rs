@@ -290,7 +290,7 @@ fn fractional_ticks_are_rounded_and_counted() {
 }
 
 #[test]
-fn per_note_expression_and_audio_are_reported_as_lost() {
+fn expression_and_fine_pitch_are_preserved_but_pan_and_audio_are_reported() {
     let mut p = Project::empty("Lossy");
     let ch = channel(&mut p, "Lead", "peel.synth.poly");
     let mut n = Note::new(ch, Time::ZERO, Time::BEAT, 60, 0.5);
@@ -309,12 +309,13 @@ fn per_note_expression_and_audio_are_reported_as_lost() {
             ..Default::default()
         });
     let pattern_export = export_pattern(&p, pat, &ExportOptions::default()).unwrap();
+    assert_eq!(pattern_export.report.mpe_notes, 1);
     assert!(
         pattern_export
             .report
             .warnings
             .iter()
-            .any(|w| w.contains("Note expression"))
+            .any(|w| w.contains("MPE"))
     );
     let lane = p.arrangement().tracks[0].id;
     let master = p.mixer.tracks[0].id;
@@ -354,12 +355,7 @@ fn per_note_expression_and_audio_are_reported_as_lost() {
     assert_eq!(out.report.audio_clips_omitted, 1);
     assert!(out.report.warnings.iter().any(|w| w.contains("pan")));
     assert!(out.report.warnings.iter().any(|w| w.contains("audio")));
-    assert!(
-        out.report
-            .warnings
-            .iter()
-            .any(|w| w.contains("Note expression"))
-    );
+    assert!(out.report.warnings.iter().any(|w| w.contains("MPE")));
     assert_eq!(out.report.notes, 1);
     // The song still ends where the arrangement does (8 beats).
     let (_, tracks) = parse(&out.bytes);
@@ -812,4 +808,103 @@ fn damaged_files_never_panic() {
     for len in 0..original.len() {
         let _ = import_smf(&original[..len], &ImportOptions::default());
     }
+}
+
+fn expressive_pattern(notes: usize) -> (Project, Id) {
+    let mut p = Project::empty("MPE");
+    let ch = channel(&mut p, "Lead", "peel.synth.poly");
+    let notes: Vec<_> = (0..notes)
+        .map(|i| Note::new(ch, Time::ZERO, Time::BEAT, 48 + i as u8, 0.8))
+        .collect();
+    let first = notes[0].id;
+    let pat = add_pattern(&mut p, "MPE", Time::beats(4), notes);
+    p.pattern_mut(pat)
+        .unwrap()
+        .expression
+        .push(peel_document::NoteExpression {
+            note: first,
+            pitch: vec![peel_document::ExpressionPoint {
+                offset: Time::ZERO,
+                value: 120.0,
+            }],
+            ..Default::default()
+        });
+    (p, pat)
+}
+
+#[test]
+fn mpe_sets_up_members_limits_pitch_and_rejects_excess_polyphony() {
+    let (p, pat) = expressive_pattern(15);
+    let out = export_pattern(&p, pat, &ExportOptions::default()).unwrap();
+    assert_eq!(out.report.mpe_notes, 15);
+    let imported = import_smf(&out.bytes, &ImportOptions::default()).unwrap();
+    assert!(
+        imported.report.unsupported.is_empty(),
+        "{:?}",
+        imported.report.unsupported
+    );
+    assert_eq!(out.report.pitch_values_clamped, 1);
+    assert!(
+        out.report
+            .warnings
+            .iter()
+            .any(|w| w.contains("96 semitones"))
+    );
+    let (_, tracks) = parse(&out.bytes);
+    let members: std::collections::BTreeSet<_> = note_ons(&tracks[1]).iter().map(|n| n.1).collect();
+    assert_eq!(members, (1..=15).collect());
+    let track = &tracks[1];
+    let first_on = track
+        .iter()
+        .position(|(_, k)| {
+            matches!(
+                k,
+                TrackEventKind::Midi {
+                    message: MidiMessage::NoteOn { .. },
+                    ..
+                }
+            )
+        })
+        .unwrap();
+    let before = &track[..first_on];
+    assert!(before.iter().any(|(_, k)| matches!(k, TrackEventKind::Midi {channel, message: MidiMessage::Controller {controller, value}} if channel.as_int()==0 && controller.as_int()==6 && value.as_int()==15)));
+    for member in 1..=15 {
+        assert!(before.iter().any(|(_, k)| matches!(k, TrackEventKind::Midi {channel, message: MidiMessage::Controller {controller, value}} if channel.as_int()==member && controller.as_int()==6 && value.as_int()==96)));
+    }
+    let (p, pat) = expressive_pattern(16);
+    let err = export_pattern(&p, pat, &ExportOptions::default()).unwrap_err();
+    assert!(err.to_string().contains("15 simultaneous"));
+}
+
+#[test]
+fn mpe_reuses_members_only_after_off_and_resets_neutral_onset() {
+    let (mut p, pat) = expressive_pattern(15);
+    let ch = p.pattern(pat).unwrap().notes[0].channel;
+    let second = Note::new(ch, Time::BEAT, Time::BEAT, 60, 0.5);
+    p.pattern_mut(pat).unwrap().notes.push(second);
+    let out = export_pattern(&p, pat, &ExportOptions::default()).unwrap();
+    let (_, tracks) = parse(&out.bytes);
+    let at: Vec<_> = tracks[1]
+        .iter()
+        .filter(|(tick, kind)| {
+            *tick == 960
+                && matches!(kind, TrackEventKind::Midi {channel, ..} if channel.as_int()==1)
+        })
+        .map(|(_, kind)| *kind)
+        .collect();
+    assert!(
+        matches!(at[0], TrackEventKind::Midi {channel, message: MidiMessage::NoteOff {..}} if channel.as_int()==1)
+    );
+    assert!(
+        matches!(at[1], TrackEventKind::Midi {channel, message: MidiMessage::PitchBend {bend}} if channel.as_int()==1 && bend.0.as_int()==8192)
+    );
+    assert!(
+        matches!(at[2], TrackEventKind::Midi {channel, message: MidiMessage::ChannelAftertouch {vel}} if channel.as_int()==1 && vel.as_int()==0)
+    );
+    assert!(
+        matches!(at[3], TrackEventKind::Midi {channel, message: MidiMessage::Controller {controller, value}} if channel.as_int()==1 && controller.as_int()==74 && value.as_int()==64)
+    );
+    assert!(
+        matches!(at[4], TrackEventKind::Midi {channel, message: MidiMessage::NoteOn {key, ..}} if channel.as_int()==1 && key.as_int()==60)
+    );
 }

@@ -198,9 +198,33 @@ tail keeps the final recorded state.
 
 Projects containing note expression require the updated project reader.
 Their manifest uses schema 2 so older Peel versions refuse to open or
-overwrite them instead of losing the curves. Standard MIDI file import and
-export still handle notes rather than these curves; export reports the
-omission. Save a Peel project or export audio to preserve expression.
+overwrite them instead of losing the curves.
+
+## MIDI files
+
+MIDI import reads pitch bend, channel and polyphonic aftertouch, and CC74
+slide into each note's expression curves. Bend sensitivity follows RPN 0;
+ordinary MIDI defaults to two semitones. MPE files use RPN 6 to declare
+Lower or Upper zones, with member controls kept separate and manager
+controls combined across the zone. Imported curves can be edited in the
+Piano Roll and played without an MPE controller.
+
+The import API's `SustainPolicy::ExtendNotes` extends note gates through
+the pedal release. The default policy reports pedal events without
+changing note lengths.
+
+Export writes expressive notes as MPE, including initial controller values
+and release velocity. Type 1 files give each expressive instrument its own
+MIDI port; the receiving app must support MPE and honor those ports when
+several instruments are present.
+Note-only instruments keep their usual MIDI channels. Type 0 expressive
+export supports one instrument. An expressive instrument can use up to
+15 simultaneous notes; export fails if it needs more independent channels.
+
+MIDI stores bend in 14 bits and pressure and slide in 7 bits, so values
+are rounded. The export report lists timing rounding and pitch values
+limited to MPE's 96-semitone bend range. Keep a Peel project for the exact
+curves, instrument settings and routing.
 
 ## Scripts
 
