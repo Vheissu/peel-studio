@@ -103,6 +103,7 @@ pub fn rich_project(managed_asset: Option<peel_document::AudioAsset>) -> Project
         color: PALETTE[3],
         length: Time::new(7, 2),
         notes: vec![],
+        expression: Vec::new(),
     };
     for i in 0..9 {
         let mut n = Note::new(
@@ -137,6 +138,7 @@ pub fn rich_project(managed_asset: Option<peel_document::AudioAsset>) -> Project
         color: PALETTE[0],
         length: Time::beats(4),
         notes: vec![],
+        expression: Vec::new(),
     };
     for beat in 0..4 {
         steps.notes.push(Note::new(

@@ -149,6 +149,7 @@ pub fn beat_and_melody() -> Project {
         color: PALETTE[0],
         length: Time::beats(4),
         notes: beat_notes,
+        expression: Vec::new(),
     };
 
     // Chords: Am - F - C - G, one bar each.
@@ -181,6 +182,7 @@ pub fn beat_and_melody() -> Project {
         color: PALETTE[4],
         length: Time::beats(16),
         notes: chord_notes,
+        expression: Vec::new(),
     };
 
     // Bass: off-beat eighths on the chord roots.
@@ -198,6 +200,7 @@ pub fn beat_and_melody() -> Project {
         color: PALETTE[6],
         length: Time::beats(16),
         notes: bass_notes,
+        expression: Vec::new(),
     };
 
     let (beat_id, chords_id, bass_id) = (beat.id, chords_pat.id, bass_pat.id);
@@ -237,6 +240,7 @@ fn pattern(name: &str, color: usize, beats: i64, notes: Vec<Note>) -> Pattern {
         color: PALETTE[color % PALETTE.len()],
         length: Time::beats(beats),
         notes,
+        expression: Vec::new(),
     }
 }
 

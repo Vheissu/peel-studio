@@ -147,6 +147,64 @@ pub fn validate(p: &Project) -> Vec<Issue> {
                 )));
             }
         }
+        let mut expressed = HashSet::new();
+        let mut pattern_points = 0usize;
+        for expression in &pt.expression {
+            let Some(note) = pt.notes.iter().find(|n| n.id == expression.note) else {
+                issues.push(Issue::error(format!(
+                    "pattern {} has expression for a missing note",
+                    pt.name
+                )));
+                continue;
+            };
+            if !expressed.insert(expression.note) {
+                issues.push(Issue::error(format!(
+                    "pattern {} has duplicate note expression",
+                    pt.name
+                )));
+            }
+            let count = expression
+                .pitch
+                .len()
+                .saturating_add(expression.pressure.len())
+                .saturating_add(expression.timbre.len());
+            pattern_points = pattern_points.saturating_add(count);
+            if count > crate::MAX_EXPRESSION_POINTS {
+                issues.push(Issue::error(format!(
+                    "pattern {} has too many expression points for one note",
+                    pt.name
+                )));
+            }
+            for (points, min, max) in [
+                (&expression.pitch, -120.0, 120.0),
+                (&expression.pressure, 0.0, 1.0),
+                (&expression.timbre, 0.0, 1.0),
+            ] {
+                if points.iter().any(|p| {
+                    p.offset.is_negative()
+                        || p.offset > note.length
+                        || !p.value.is_finite()
+                        || !(min..=max).contains(&p.value)
+                }) {
+                    issues.push(Issue::error(format!(
+                        "pattern {} has an expression point out of range",
+                        pt.name
+                    )));
+                }
+                if points.windows(2).any(|w| w[0].offset >= w[1].offset) {
+                    issues.push(Issue::error(format!(
+                        "pattern {} has unsorted or duplicate expression offsets",
+                        pt.name
+                    )));
+                }
+            }
+        }
+        if pattern_points > 1_000_000 {
+            issues.push(Issue::error(format!(
+                "pattern {} has too many expression points",
+                pt.name
+            )));
+        }
     }
 
     if p.arrangements.is_empty() {

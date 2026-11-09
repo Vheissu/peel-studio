@@ -600,3 +600,51 @@ fn notes_with_awkward_times_round_trip() {
     save(&project, &root).unwrap();
     assert_eq!(load(&root).unwrap().project, project);
 }
+
+#[test]
+fn recorded_note_expression_survives_sharded_save_load_and_undo() {
+    use peel_document::{Document, ExpressionPoint, NoteExpression};
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("Expression.peelproj");
+    let mut p = rich_project(None);
+    let pid = p.patterns[0].id;
+    let note = p.patterns[0].notes[0];
+    let curve = NoteExpression {
+        note: note.id,
+        pitch: vec![
+            ExpressionPoint {
+                offset: Time::ZERO,
+                value: 0.0,
+            },
+            ExpressionPoint {
+                offset: note.length.checked_div(Time::beats(2)).unwrap(),
+                value: 7.25,
+            },
+        ],
+        pressure: vec![ExpressionPoint {
+            offset: Time::ZERO,
+            value: 0.4,
+        }],
+        timbre: vec![ExpressionPoint {
+            offset: Time::ZERO,
+            value: 0.75,
+        }],
+    };
+    p.pattern_mut(pid).unwrap().expression.push(curve);
+    save(&p, &path).unwrap();
+    let mut doc = Document::new(load(&path).unwrap().project);
+    assert_eq!(
+        doc.project().patterns[0].expression,
+        p.patterns[0].expression
+    );
+    doc.edit("Remove recorded expression", |p| {
+        p.pattern_mut(pid).unwrap().expression.clear()
+    });
+    assert!(doc.undo().is_some());
+    assert_eq!(
+        doc.project().patterns[0].expression,
+        p.patterns[0].expression
+    );
+    assert!(doc.redo().is_some());
+    assert!(doc.project().patterns[0].expression.is_empty());
+}

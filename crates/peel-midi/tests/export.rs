@@ -51,6 +51,7 @@ fn add_pattern(project: &mut Project, name: &str, length: Time, notes: Vec<Note>
         color: PALETTE[1],
         length,
         notes,
+        expression: Vec::new(),
     };
     p.sort_notes();
     let id = p.id;

@@ -10,7 +10,7 @@
 
 use std::collections::BTreeMap;
 
-use peel_document::{Id, Note};
+use peel_document::{Id, Note, NoteExpression};
 use peel_time::Time;
 
 /// Shortest note any tool produces.
@@ -111,14 +111,14 @@ pub fn apply(notes: &[Note], tool: &Tool) -> Vec<Note> {
                 ..*n
             })
             .collect(),
-        Tool::Chop { division, gate } => chop(notes, *division, *gate),
+        Tool::Chop { division, gate } => chop(notes, *division, *gate, None),
         Tool::Arpeggiate {
             step,
             order,
             octaves,
             gate,
             seed,
-        } => arpeggiate(notes, *step, *order, *octaves, *gate, *seed),
+        } => arpeggiate(notes, *step, *order, *octaves, *gate, *seed, None),
         Tool::Strum {
             spread,
             direction,
@@ -128,7 +128,7 @@ pub fn apply(notes: &[Note], tool: &Tool) -> Vec<Note> {
             count,
             spacing,
             velocity,
-        } => flam(notes, *count, *spacing, *velocity),
+        } => flam(notes, *count, *spacing, *velocity, None),
         Tool::Humanize {
             timing,
             velocity,
@@ -148,6 +148,61 @@ pub fn apply(notes: &[Note], tool: &Tool) -> Vec<Note> {
     out.sort_by(|a, b| a.start.cmp(&b.start).then(a.key.cmp(&b.key)));
     out
 }
+
+/// Applies a tool while keeping expression attached to its source note.
+/// Generated articulations receive the matching window of their source curve.
+/// One-for-one edits keep note-relative timing; shortening trims the curve.
+pub fn apply_with_expression(
+    notes: &[Note],
+    expression: &[NoteExpression],
+    tool: &Tool,
+) -> (Vec<Note>, Vec<NoteExpression>) {
+    if expression.is_empty() {
+        return (apply(notes, tool), Vec::new());
+    }
+    let mut lineage = Vec::new();
+    let mut out = match tool {
+        Tool::Chop { division, gate } => chop(notes, *division, *gate, Some(&mut lineage)),
+        Tool::Arpeggiate {
+            step,
+            order,
+            octaves,
+            gate,
+            seed,
+        } => arpeggiate(
+            notes,
+            *step,
+            *order,
+            *octaves,
+            *gate,
+            *seed,
+            Some(&mut lineage),
+        ),
+        Tool::Flam {
+            count,
+            spacing,
+            velocity,
+        } => flam(notes, *count, *spacing, *velocity, Some(&mut lineage)),
+        _ => apply(notes, tool),
+    };
+    out.sort_by(|a, b| a.start.cmp(&b.start).then(a.key.cmp(&b.key)));
+    let curves = out
+        .iter()
+        .filter_map(|note| {
+            let (source, from) = lineage
+                .iter()
+                .find(|(id, _, _)| *id == note.id)
+                .map_or((note.id, Time::ZERO), |(_, source, from)| (*source, *from));
+            expression
+                .iter()
+                .find(|e| e.note == source)
+                .map(|e| e.slice(note.id, from, note.length))
+        })
+        .collect();
+    (out, curves)
+}
+
+type Lineage = Vec<(Id, Id, Time)>;
 
 fn scale_len(len: Time, amount: f32) -> Time {
     Time::from_f64(len.as_f64() * f64::from(amount.max(0.0)), 960).max(MIN_LENGTH)
@@ -220,7 +275,7 @@ fn legato(notes: &[Note], gap: Time) -> Vec<Note> {
     out
 }
 
-fn chop(notes: &[Note], division: Time, gate: f32) -> Vec<Note> {
+fn chop(notes: &[Note], division: Time, gate: f32, mut lineage: Option<&mut Lineage>) -> Vec<Note> {
     let division = division.max(MIN_LENGTH);
     let piece = scale_len(division, gate.clamp(0.05, 1.0));
     let mut out = Vec::new();
@@ -230,6 +285,9 @@ fn chop(notes: &[Note], division: Time, gate: f32) -> Vec<Note> {
         while at < n.end() {
             let length = piece.min(n.end() - at).max(MIN_LENGTH);
             let id = if first { n.id } else { Id::new() };
+            if let Some(lineage) = lineage.as_deref_mut() {
+                lineage.push((id, n.id, at - n.start));
+            }
             out.push(Note {
                 id,
                 start: at,
@@ -250,6 +308,7 @@ fn arpeggiate(
     octaves: u8,
     gate: f32,
     seed: u64,
+    mut lineage: Option<&mut Lineage>,
 ) -> Vec<Note> {
     let step = step.max(MIN_LENGTH);
     let length = scale_len(step, gate.clamp(0.05, 1.0));
@@ -287,8 +346,12 @@ fn arpeggiate(
                 ArpOrder::Random => seq[(rng.next() % seq.len() as u64) as usize],
                 _ => seq[i % seq.len()],
             };
+            let id = Id::new();
+            if let Some(lineage) = lineage.as_deref_mut() {
+                lineage.push((id, src.id, (at - src.start).max(Time::ZERO)));
+            }
             out.push(Note {
-                id: Id::new(),
+                id,
                 key,
                 start: at,
                 length: length.min(end - at).max(MIN_LENGTH),
@@ -334,7 +397,13 @@ fn strum(notes: &[Note], spread: Time, direction: StrumDirection, velocity: f32)
     out
 }
 
-fn flam(notes: &[Note], count: u8, spacing: Time, velocity: f32) -> Vec<Note> {
+fn flam(
+    notes: &[Note],
+    count: u8,
+    spacing: Time,
+    velocity: f32,
+    mut lineage: Option<&mut Lineage>,
+) -> Vec<Note> {
     let spacing = spacing.max(MIN_LENGTH);
     let grace_len = scale_len(spacing, 0.9);
     let mut out = Vec::with_capacity(notes.len() * (count as usize + 1));
@@ -346,8 +415,12 @@ fn flam(notes: &[Note], count: u8, spacing: Time, velocity: f32) -> Vec<Note> {
                 break;
             }
             let v = (n.velocity * velocity.clamp(0.0, 1.0)).clamp(0.0, 1.0);
+            let id = Id::new();
+            if let Some(lineage) = lineage.as_deref_mut() {
+                lineage.push((id, n.id, Time::ZERO));
+            }
             out.push(Note {
-                id: Id::new(),
+                id,
                 start: n.start - back,
                 length: grace_len,
                 velocity: v,

@@ -56,6 +56,7 @@ impl Project {
             color: PALETTE[6],
             length: Time::beats(4),
             notes: Vec::new(),
+            expression: Vec::new(),
         };
         Project {
             format: FORMAT.to_string(),
@@ -170,6 +171,7 @@ mod tests {
             color: PALETTE[1],
             length: Time::beats(4),
             notes: vec![],
+            expression: vec![],
         }));
         let a = p.patterns[0].id;
         let mut doc = Document::new(p);
@@ -303,3 +305,6 @@ mod tests {
         assert!(validate(&p).iter().any(Issue::is_error));
     }
 }
+
+#[cfg(test)]
+mod expression_tests;

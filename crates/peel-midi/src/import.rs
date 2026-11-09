@@ -1256,6 +1256,7 @@ impl Builder<'_> {
                 color: PALETTE[patterns.len() % PALETTE.len()],
                 length,
                 notes: out_notes,
+                expression: Vec::new(),
             };
             pattern.sort_notes();
             patterns.push(pattern);

@@ -346,3 +346,92 @@ fn every_tool_handles_an_empty_selection() {
         assert!(apply(&[], t).is_empty(), "{}", t.name());
     }
 }
+
+fn curve(note: Id, initial: f32, later: f32) -> NoteExpression {
+    NoteExpression {
+        note,
+        pitch: vec![
+            peel_document::ExpressionPoint {
+                offset: Time::ZERO,
+                value: initial,
+            },
+            peel_document::ExpressionPoint {
+                offset: Time::new(1, 2),
+                value: later,
+            },
+        ],
+        ..Default::default()
+    }
+}
+
+#[test]
+fn chop_and_arpeggio_remap_expression_to_their_exact_source_notes() {
+    let mut a = note((0, 1), (1, 1), 60);
+    let b = note((0, 1), (1, 1), 60);
+    a.id = Id::from_u128(42);
+    let expression = [curve(a.id, 1.0, 5.0), curve(b.id, -1.0, -5.0)];
+    let (out, curves) = apply_with_expression(
+        &[a, b],
+        &expression,
+        &Tool::Chop {
+            division: Time::new(1, 2),
+            gate: 1.0,
+        },
+    );
+    assert_eq!(out.len(), 4);
+    assert_eq!(curves.len(), 4);
+    for source in [a, b] {
+        let inherited = curves.iter().find(|e| e.note == source.id).unwrap();
+        assert_eq!(
+            inherited.pitch[0].value,
+            if source.id == a.id { 1.0 } else { -1.0 }
+        );
+    }
+    let tails: Vec<_> = out
+        .iter()
+        .filter(|n| n.start == Time::new(1, 2))
+        .map(|n| curves.iter().find(|e| e.note == n.id).unwrap().pitch[0].value)
+        .collect();
+    assert!(
+        tails.contains(&5.0) && tails.contains(&-5.0),
+        "same-key voices keep separate curves: {tails:?}"
+    );
+    let (arp, curves) = apply_with_expression(
+        &[a],
+        &expression,
+        &Tool::Arpeggiate {
+            step: Time::new(1, 2),
+            order: ArpOrder::Up,
+            octaves: 1,
+            gate: 1.0,
+            seed: 3,
+        },
+    );
+    assert_eq!(curves[0].note, arp[0].id);
+    assert_eq!(curves[1].note, arp[1].id);
+    assert_eq!(curves[1].pitch[0].value, 5.0);
+}
+
+#[test]
+fn shortened_and_deleted_notes_do_not_leave_dangling_expression() {
+    let a = note((1, 1), (1, 1), 60);
+    let b = note((1, 1), (1, 1), 60);
+    let expression = [curve(a.id, 1.0, 5.0), curve(b.id, -1.0, -5.0)];
+    let (_, short) = apply_with_expression(&[a], &expression, &Tool::Gate { amount: 0.25 });
+    assert_eq!(short[0].pitch.len(), 1);
+    let (out, curves) = apply_with_expression(&[a, b], &expression, &Tool::Tidy);
+    assert_eq!(out.len(), 1);
+    assert_eq!(curves.len(), 1);
+    assert_eq!(curves[0].note, out[0].id);
+    let (out, curves) = apply_with_expression(
+        &[a],
+        &expression,
+        &Tool::Flam {
+            count: 2,
+            spacing: Time::new(1, 8),
+            velocity: 0.5,
+        },
+    );
+    assert_eq!(curves.len(), out.len());
+    assert!(out.iter().all(|n| curves.iter().any(|e| e.note == n.id)));
+}

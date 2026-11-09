@@ -124,9 +124,127 @@ pub struct Pattern {
     pub length: Time,
     /// All notes, for every channel. Kept sorted by (start, key).
     pub notes: Vec<Note>,
+    /// Per-note performance events, addressed by the note's stable identity.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub expression: Vec<NoteExpression>,
+}
+
+/// Maximum stored control points across the three curves of one note.
+pub const MAX_EXPRESSION_POINTS: usize = 65_536;
+
+/// One recorded control value at a note-relative quarter-note position.
+/// Values hold until the next point; the instrument supplies its usual smoothing.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ExpressionPoint {
+    pub offset: Time,
+    pub value: f32,
+}
+
+/// Recorded performance curves belonging to one note in a pattern.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct NoteExpression {
+    pub note: Id,
+    /// Pitch displacement in semitones, including any MPE manager bend.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pitch: Vec<ExpressionPoint>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pressure: Vec<ExpressionPoint>,
+    /// Brightness/slide, 0..1 with neutral at 0.5.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub timbre: Vec<ExpressionPoint>,
+}
+
+/// Complete expression at a point in a note.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ExpressionValue {
+    pub pitch: f32,
+    pub pressure: f32,
+    pub timbre: f32,
+}
+
+impl Default for ExpressionValue {
+    fn default() -> Self {
+        Self {
+            pitch: 0.0,
+            pressure: 0.0,
+            timbre: 0.5,
+        }
+    }
+}
+
+impl NoteExpression {
+    pub fn at(&self, offset: Time) -> ExpressionValue {
+        fn held(points: &[ExpressionPoint], offset: Time, neutral: f32) -> f32 {
+            let end = points.partition_point(|p| p.offset <= offset);
+            end.checked_sub(1).map_or(neutral, |i| points[i].value)
+        }
+        ExpressionValue {
+            pitch: held(&self.pitch, offset, 0.0),
+            pressure: held(&self.pressure, offset, 0.0),
+            timbre: held(&self.timbre, offset, 0.5),
+        }
+    }
+
+    /// Keeps the source interval, chasing its starting values to offset zero.
+    pub fn slice(&self, note: Id, from: Time, length: Time) -> Self {
+        fn slice_curve(
+            points: &[ExpressionPoint],
+            from: Time,
+            length: Time,
+            neutral: f32,
+        ) -> Vec<ExpressionPoint> {
+            if points.is_empty() {
+                return Vec::new();
+            }
+            let mut out = Vec::new();
+            let end = points.partition_point(|p| p.offset <= from);
+            let value = end.checked_sub(1).map_or(neutral, |i| points[i].value);
+            out.push(ExpressionPoint {
+                offset: Time::ZERO,
+                value,
+            });
+            out.extend(
+                points[end..]
+                    .iter()
+                    .filter(|p| p.offset < from + length)
+                    .map(|p| ExpressionPoint {
+                        offset: p.offset - from,
+                        value: p.value,
+                    }),
+            );
+            out
+        }
+        Self {
+            note,
+            pitch: slice_curve(&self.pitch, from, length, 0.0),
+            pressure: slice_curve(&self.pressure, from, length, 0.0),
+            timbre: slice_curve(&self.timbre, from, length, 0.5),
+        }
+    }
 }
 
 impl Pattern {
+    /// Removes expression for deleted notes and points beyond shortened notes.
+    pub fn retain_expression(&mut self) {
+        self.expression.retain_mut(|expression| {
+            let Some(note) = self.notes.iter().find(|n| n.id == expression.note) else {
+                return false;
+            };
+            for points in [
+                &mut expression.pitch,
+                &mut expression.pressure,
+                &mut expression.timbre,
+            ] {
+                points.retain(|p| p.offset >= Time::ZERO && p.offset <= note.length);
+            }
+            true
+        });
+    }
+
+    pub fn expression_for(&self, note: Id) -> Option<&NoteExpression> {
+        self.expression.iter().find(|e| e.note == note)
+    }
+
     pub fn notes_for(&self, channel: Id) -> impl Iterator<Item = &Note> {
         self.notes.iter().filter(move |n| n.channel == channel)
     }
