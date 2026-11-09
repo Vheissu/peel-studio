@@ -30,6 +30,8 @@ pub struct InstState {
     pub mouse_key: Option<u8>,
     /// Parameter picked in the controller mapper.
     pub pick: Option<String>,
+    /// Pitch and Pressure held by the mouse.
+    pub expr: crate::expression::ExprState,
     chain_scroll: f32,
     rail_scroll: f32,
 }
@@ -42,6 +44,7 @@ impl Default for InstState {
             sustain: false,
             mouse_key: None,
             pick: None,
+            expr: Default::default(),
             chain_scroll: 0.0,
             rail_scroll: 0.0,
         }
@@ -60,8 +63,9 @@ pub fn play_channel(s: &Session) -> u8 {
     s.midi_channel_filter().unwrap_or(0)
 }
 
-/// Ends every note and the sustain switch the editor holds.
+/// Ends every note, the sustain switch and any held bend or pressure.
 pub fn release_all(s: &mut Session, ws: &mut Workspace) {
+    crate::expression::release(s, &mut ws.inst.expr);
     let ch = play_channel(s);
     if let Some(k) = ws.inst.mouse_key.take() {
         s.handle_midi_event(MidiEvent::NoteOff {
@@ -664,7 +668,7 @@ fn rail_content(
 ) {
     let t = ui.theme.clone();
     let mine = mappings_for(s, ch);
-    let content_h = 330.0 + 34.0 * mine.len() as f32 + 200.0;
+    let content_h = 430.0 + 34.0 * mine.len() as f32 + 200.0;
     let mut off = vec2(0.0, ws.inst.rail_scroll);
     if content_h > rail.h {
         ui.scroll_area(
@@ -747,6 +751,7 @@ fn rail_content(
         ws.octave = (ws.octave + 1).min(8);
     }
     rows.gap(4.0);
+    crate::expression::rows(ui, &mut rows, s, ws, col(ch.color));
     // Computer keyboard and sustain.
     let mut row = rows.row(28.0);
     let half = (row.w - 6.0) * 0.5;
@@ -882,8 +887,39 @@ fn midi_status(
             Err(e) => s.notify(e, true),
         }
     }
+    rows.gap(4.0);
+    // Pitch wheel sensitivity, shared by hardware and the Pitch control.
+    let mut row = rows.row(28.0);
+    ui.text(
+        row.cut_left(70.0),
+        "Bend",
+        t.caption,
+        t.text_faint,
+        Align::Start,
+    );
+    let range = s.pitch_bend_range();
+    let id = W::new("inst-bend-range");
+    let resp = ui.dropdown(id, row, &crate::expression::range_text(range), "Pitch bend range");
+    if resp.clicked {
+        ui.open_popup(id.with("menu"), row);
+    }
+    let mut choices = vec![0.0f32];
+    choices.extend(crate::expression::RANGES);
+    let items: Vec<MenuItem> = choices
+        .iter()
+        .map(|c| MenuItem::new(crate::expression::range_text(*c)).checked((c - range).abs() < 0.01))
+        .collect();
+    if let Some(i) = ui.menu(id.with("menu"), vec2(row.x, row.bottom() + 4.0), &items) {
+        match s.set_pitch_bend_range(choices[i]) {
+            Ok(()) => {
+                prefs.pitch_bend_range = choices[i];
+                prefs.save();
+            }
+            Err(e) => s.notify(e, true),
+        }
+    }
     rows.gap(2.0);
-    // What MIDI is used for, on request: notes, pedal and CC only.
+    // What MIDI is used for, on request.
     let used = crate::util::hint(
         ui,
         W::new("inst-midi-hint"),
@@ -893,7 +929,7 @@ fn midi_status(
             w: rows.w,
             h: 40.0,
         },
-        "Notes, the sustain pedal and CC knobs. Pitch bend and aftertouch are not used.",
+        "Notes, sustain, pitch bend, aftertouch and CC knobs reach this instrument.",
     );
     rows.gap(used);
 }

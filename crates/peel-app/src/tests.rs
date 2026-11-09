@@ -3152,3 +3152,109 @@ fn the_recordings_folder_shows_its_name_and_a_choose_button() {
     assert_eq!(h.session().recordings_dir(), before);
     assert!(h.studio.prefs.recordings_dir.is_none());
 }
+
+fn held_at(h: &mut Harness, id: &str, frac: f32) {
+    let r = h.rect(W::new(id));
+    let p = vec2(r.x + 5.0 + (r.w - 10.0) * frac, r.center().y);
+    h.move_to(p);
+    h.move_to(p);
+    h.press(0);
+    h.frame();
+}
+
+#[test]
+fn the_pitch_control_bends_the_instrument_and_springs_back() {
+    let mut h = Harness::new();
+    open_instrument(&mut h);
+    let revision = h.session().doc.revision();
+    held_at(&mut h, "inst-pitch", 1.0);
+    assert!(h.studio.ws.inst.expr.bend_held);
+    assert!(
+        h.session().pitch_bend_value() > 0.95,
+        "full right is a full bend up"
+    );
+    h.release(0);
+    h.frame();
+    assert_eq!(h.session().pitch_bend_value(), 0.0, "release centres it");
+    assert!(!h.studio.ws.inst.expr.bend_held);
+    assert_eq!(
+        h.session().doc.revision(),
+        revision,
+        "expression is never an edit"
+    );
+}
+
+#[test]
+fn pressure_follows_the_mouse_and_losing_focus_releases_everything() {
+    let mut h = Harness::new();
+    open_instrument(&mut h);
+    held_at(&mut h, "inst-pressure", 0.5);
+    let v = h.session().channel_pressure_value();
+    assert!((v - 0.5).abs() < 0.1, "pressure {v}");
+    h.release(0);
+    h.frame();
+    assert_eq!(h.session().channel_pressure_value(), 0.0);
+    // Held pitch and pressure, then the window loses focus mid-drag.
+    held_at(&mut h, "inst-pitch", 0.0);
+    assert!(h.session().pitch_bend_value() < -0.9);
+    h.ui.input.down[0] = false;
+    h.ui.input.focus_lost = true;
+    h.frames(2);
+    assert_eq!(h.session().pitch_bend_value(), 0.0);
+    assert!(!h.studio.ws.inst.expr.bend_held);
+}
+
+#[test]
+fn closing_or_switching_the_editor_centres_held_expression() {
+    let mut h = Harness::new();
+    let ch = open_instrument(&mut h);
+    held_at(&mut h, "inst-pitch", 1.0);
+    held_at(&mut h, "inst-pressure", 1.0);
+    assert!(h.session().pitch_bend_value() > 0.9);
+    let other = h
+        .session()
+        .project()
+        .channels
+        .iter()
+        .find(|c| c.id != ch)
+        .unwrap()
+        .id;
+    crate::instrument_editor::open(&mut h.studio.session, &mut h.studio.ws, other);
+    assert_eq!(h.session().pitch_bend_value(), 0.0);
+    assert_eq!(h.session().channel_pressure_value(), 0.0);
+    held_at(&mut h, "inst-pitch", 1.0);
+    crate::instrument_editor::close(&mut h.studio.session, &mut h.studio.ws);
+    assert_eq!(h.session().pitch_bend_value(), 0.0);
+}
+
+#[test]
+fn hardware_expression_shows_and_is_not_overwritten_by_an_idle_control() {
+    let mut h = Harness::new();
+    open_instrument(&mut h);
+    assert!(h.studio.session.pitch_bend(0.5));
+    assert!(h.studio.session.channel_pressure(0.25));
+    h.frames(4);
+    assert!(
+        (h.session().pitch_bend_value() - 0.5).abs() < 1.0e-6,
+        "the open editor must not send a stale centre"
+    );
+    assert!((h.session().channel_pressure_value() - 0.25).abs() < 1.0e-6);
+    assert!(!h.studio.ws.inst.expr.bend_held);
+}
+
+#[test]
+fn the_bend_range_picker_reaches_the_session_and_preferences() {
+    let mut h = Harness::new();
+    open_instrument(&mut h);
+    assert_eq!(h.session().pitch_bend_range(), 2.0);
+    h.click(W::new("inst-bend-range"));
+    h.frames(2);
+    // Off, ±1, ±2, ±3, ±5, ±7, ±12 ...: item 5 is ±7.
+    h.click(W::new("inst-bend-range").with("menu").with(("item", 5usize)));
+    assert_eq!(h.session().pitch_bend_range(), 7.0);
+    assert_eq!(h.studio.prefs.pitch_bend_range, 7.0);
+    // A new session picks the saved range up again.
+    h.studio.session.set_pitch_bend_range(2.0).unwrap();
+    h.studio.apply_io_prefs();
+    assert_eq!(h.session().pitch_bend_range(), 7.0);
+}

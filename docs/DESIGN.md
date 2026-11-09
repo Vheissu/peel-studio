@@ -189,17 +189,26 @@ does not embed native plugin windows, and the sheet says so). Below it
 sits a piano of three or four octaves from the current octave's C. The
 computer keyboard letters are printed on the keys they play. Click plays,
 dragging across keys glides, release stops. The rail holds Velocity,
-Octave, a Keyboard switch for the computer keys, a Sustain switch, MIDI
-status (an activity light, port summary, channel filter) and the controller
-mapper: pick a parameter, Learn, move a control; each mapping lists its CC
-and the parameter's live value, with Unmap. Labels say what is supported:
-notes, the sustain pedal and CC knobs. Pitch bend and aftertouch are not
-used.
+Octave, Pitch and Pressure, a Keyboard switch for the computer keys, a
+Sustain switch, MIDI status (an activity light, port summary, channel
+filter, bend range) and the controller mapper: pick a parameter, Learn,
+move a control; each mapping lists its CC and the parameter's live value,
+with Unmap. Labels say what is supported: notes, sustain, pitch bend,
+aftertouch and CC knobs, all for the one selected instrument.
+
+Pitch and Pressure are horizontal springs in the Play section. Pitch draws
+from a centre tick and reads in semitones of the chosen Bend range; Pressure
+draws from the left and reads in percent. Holding the mouse drives the
+instrument, and letting go returns each to rest. When the mouse is not on a
+control it shows the value the session last accepted, so a hardware wheel
+moves it too and the editor never sends a stale centre over the top. Neither
+is saved in the project. The Bend range picker (Off to 48 st) is a machine
+setting kept in preferences and applied at startup and project reset.
 
 Notes never hang. Mouse notes end on release, when the pointer leaves the
 window with the button up, when the editor closes, when the target changes
 and when the window loses focus; the same focus loss ends held computer
-keys, and Panic silences every channel.
+keys and centres a held Pitch or Pressure, and Panic silences every channel.
 
 ## Audio sheet
 

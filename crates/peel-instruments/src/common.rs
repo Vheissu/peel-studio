@@ -562,16 +562,6 @@ impl Expression {
     pub(crate) fn octaves(&self, key: u8) -> f32 {
         PRESSURE_OCTAVES * self.pressure(key)
     }
-
-    /// True when nothing is bent or pressed.
-    #[cfg(test)]
-    pub(crate) fn is_neutral(&self) -> bool {
-        self.bend == 0.0
-            && self.bend_t == 0.0
-            && self.chan == 0.0
-            && self.chan_t == 0.0
-            && self.live == 0
-    }
 }
 
 #[inline]

@@ -688,6 +688,20 @@ fn output_column(ui: &mut Ui, r: Rect, s: &mut Session, prefs: &mut Prefs) {
             Err(e) => s.notify(e, true),
         }
     }
+    // Plugin delay the engine is already lining up, when there is any.
+    let pdc = s.compensation_latency_samples();
+    if pdc > 0 {
+        rows.gap(4.0);
+        let row = labelled(ui, &mut rows, 22.0, "Delay");
+        let ms = pdc as f32 * 1000.0 / s.sample_rate().max(1.0);
+        ui.text(
+            row,
+            &format!("{ms:.1} ms compensated"),
+            t.caption,
+            t.text_faint,
+            Align::Start,
+        );
+    }
     rows.gap(14.0);
 
     section(ui, &mut rows, "Extra outputs");

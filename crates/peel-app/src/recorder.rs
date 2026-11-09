@@ -24,9 +24,12 @@ pub struct Recorder {
 }
 
 impl Recorder {
-    /// Seconds between the engine's position and what the listener hears.
+    /// Beats between the engine's position and what the listener hears:
+    /// the output buffers plus the graph's delay compensation.
     fn latency_beats(s: &Session) -> f64 {
-        let secs = s.buffer_frames() as f64 * 2.0 / s.sample_rate().max(1.0) as f64;
+        let rate = s.sample_rate().max(1.0) as f64;
+        let secs = s.buffer_frames() as f64 * 2.0 / rate
+            + s.compensation_latency_samples() as f64 / rate;
         secs * s.project().bpm() / 60.0
     }
 

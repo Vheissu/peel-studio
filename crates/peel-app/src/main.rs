@@ -6,6 +6,7 @@ mod browser;
 mod dialogs;
 mod eq_editor;
 mod eq_resonance;
+mod expression;
 mod fx_editor;
 mod harmony;
 mod inspector;

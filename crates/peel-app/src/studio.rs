@@ -147,6 +147,16 @@ impl Studio {
         {
             self.session.notify(e, true);
         }
+        let range = if prefs.pitch_bend_range.is_finite() {
+            prefs.pitch_bend_range.clamp(0.0, 48.0)
+        } else {
+            2.0
+        };
+        if (self.session.pitch_bend_range() - range).abs() > 1.0e-6
+            && let Err(e) = self.session.set_pitch_bend_range(range)
+        {
+            self.session.notify(e, true);
+        }
         if !prefs.midi_mappings.is_empty() || !self.session.midi_control_mappings().is_empty() {
             let _ = self.session.set_midi_control_mappings(Vec::new());
             let skipped = prefs
