@@ -46,9 +46,13 @@ effects. There is no web view.
   undo history.
 - Screen reader support through AccessKit and keyboard focus traversal.
 
-| Piano Roll with a scale | Mixer and EQ |
+| Piano Roll with a scale | Mixer with a sidechain duck |
 | --- | --- |
 | ![Piano Roll](docs/images/piano-roll.png) | ![Mixer](docs/images/mixer.png) |
+
+| Performance with tempo changes |
+| --- |
+| ![Performance view](docs/images/perform.png) |
 
 ## Build
 
