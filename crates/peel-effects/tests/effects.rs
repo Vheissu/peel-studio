@@ -7,7 +7,7 @@ mod common;
 use common::*;
 use peel_dsp::{DeviceKind, EventKind, ParamDescriptor};
 
-const TYPE_IDS: [&str; 13] = [
+const TYPE_IDS: [&str; 14] = [
     "peel.fx.eq",
     "peel.fx.compressor",
     "peel.fx.limiter",
@@ -21,6 +21,7 @@ const TYPE_IDS: [&str; 13] = [
     "peel.fx.vintage_chorus",
     "peel.fx.flanger",
     "peel.fx.phaser",
+    "peel.fx.glitch",
 ];
 
 #[test]
@@ -126,7 +127,7 @@ fn presets_are_valid_and_the_first_equals_defaults() {
     for id in TYPE_IDS {
         let presets = peel_effects::presets(id);
         assert!(
-            (3..=6).contains(&presets.len()),
+            (3..=8).contains(&presets.len()),
             "{id}: {} presets",
             presets.len()
         );

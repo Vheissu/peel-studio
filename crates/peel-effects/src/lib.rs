@@ -17,6 +17,7 @@
 //! | `peel.fx.vintage_chorus` | Vintage Chorus | Modulation |
 //! | `peel.fx.flanger`    | Flanger | Modulation |
 //! | `peel.fx.phaser`     | Phaser  | Modulation |
+//! | `peel.fx.glitch`     | Glitch  | Creative   |
 //!
 //! Every effect processes the left and right buffers in place, ignores note
 //! events, splits blocks at parameter events so changes land on the exact
@@ -38,6 +39,7 @@ pub mod drive;
 pub mod eq;
 pub mod filter;
 pub mod flanger;
+pub mod glitch;
 pub mod limiter;
 pub mod phaser;
 pub mod reverb;
@@ -46,7 +48,7 @@ pub mod vintage_chorus;
 
 /// Every effect descriptor, in browser order.
 pub fn descriptors() -> &'static [&'static DeviceDescriptor] {
-    static ALL: [&DeviceDescriptor; 13] = [
+    static ALL: [&DeviceDescriptor; 14] = [
         &eq::DESCRIPTOR,
         &compressor::DESCRIPTOR,
         &limiter::DESCRIPTOR,
@@ -60,6 +62,7 @@ pub fn descriptors() -> &'static [&'static DeviceDescriptor] {
         &vintage_chorus::DESCRIPTOR,
         &flanger::DESCRIPTOR,
         &phaser::DESCRIPTOR,
+        &glitch::DESCRIPTOR,
     ];
     &ALL
 }
@@ -83,6 +86,7 @@ pub fn create(type_id: &str) -> Option<Box<dyn Device>> {
         "peel.fx.vintage_chorus" => Box::new(vintage_chorus::VintageChorus::new()),
         "peel.fx.flanger" => Box::new(flanger::Flanger::new()),
         "peel.fx.phaser" => Box::new(phaser::Phaser::new()),
+        "peel.fx.glitch" => Box::new(glitch::Glitch::new()),
         _ => return None,
     })
 }
@@ -104,6 +108,7 @@ pub fn presets(type_id: &str) -> &'static [Preset] {
         "peel.fx.vintage_chorus" => &vintage_chorus::PRESETS,
         "peel.fx.flanger" => &flanger::PRESETS,
         "peel.fx.phaser" => &phaser::PRESETS,
+        "peel.fx.glitch" => &glitch::PRESETS,
         _ => &[],
     }
 }
