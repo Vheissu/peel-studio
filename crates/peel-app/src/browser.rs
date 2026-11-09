@@ -49,6 +49,7 @@ fn category_color(cat: &str) -> Color {
         "Delay" | "Reverb" => peel_document::PALETTE[7],
         "Distortion" => peel_document::PALETTE[9],
         "Filter" | "Modulation" => peel_document::PALETTE[3],
+        "Creative" => peel_document::PALETTE[8],
         _ => peel_document::PALETTE[11],
     };
     col(c)
@@ -67,6 +68,7 @@ fn category_icon(cat: &str) -> &'static str {
         "Distortion" => icons::LIGHTNING,
         "Filter" => icons::WAVE_SINE,
         "Modulation" => icons::WAVE_TRIANGLE,
+        "Creative" => icons::WAVE_SQUARE,
         _ => icons::SLIDERS,
     }
 }

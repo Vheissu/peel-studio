@@ -13,6 +13,7 @@
 //! | `peel.fx.filter`     | Filter  | Filter     |
 //! | `peel.fx.chorus`     | Chorus  | Modulation |
 //! | `peel.fx.utility`    | Utility | Utility    |
+//! | `peel.fx.glitch`     | Glitch  | Creative   |
 //!
 //! Every effect processes the left and right buffers in place, ignores note
 //! events, splits blocks at parameter events so changes land on the exact
@@ -32,13 +33,14 @@ pub mod delay;
 pub mod drive;
 pub mod eq;
 pub mod filter;
+pub mod glitch;
 pub mod limiter;
 pub mod reverb;
 pub mod utility;
 
 /// Every effect descriptor, in browser order.
 pub fn descriptors() -> &'static [&'static DeviceDescriptor] {
-    static ALL: [&DeviceDescriptor; 9] = [
+    static ALL: [&DeviceDescriptor; 10] = [
         &eq::DESCRIPTOR,
         &compressor::DESCRIPTOR,
         &limiter::DESCRIPTOR,
@@ -48,6 +50,7 @@ pub fn descriptors() -> &'static [&'static DeviceDescriptor] {
         &filter::DESCRIPTOR,
         &chorus::DESCRIPTOR,
         &utility::DESCRIPTOR,
+        &glitch::DESCRIPTOR,
     ];
     &ALL
 }
@@ -67,6 +70,7 @@ pub fn create(type_id: &str) -> Option<Box<dyn Device>> {
         "peel.fx.filter" => Box::new(filter::Filter::new()),
         "peel.fx.chorus" => Box::new(chorus::Chorus::new()),
         "peel.fx.utility" => Box::new(utility::Utility::new()),
+        "peel.fx.glitch" => Box::new(glitch::Glitch::new()),
         _ => return None,
     })
 }
@@ -84,6 +88,7 @@ pub fn presets(type_id: &str) -> &'static [Preset] {
         "peel.fx.filter" => &filter::PRESETS,
         "peel.fx.chorus" => &chorus::PRESETS,
         "peel.fx.utility" => &utility::PRESETS,
+        "peel.fx.glitch" => &glitch::PRESETS,
         _ => &[],
     }
 }
