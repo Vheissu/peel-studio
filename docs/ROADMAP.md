@@ -16,7 +16,7 @@ processing, persistence and tests all exist.
 | Native effects | EQ, compressor, multiband, limiter, Bass Lift, delay, reverb, drive, filter, chorus, Vintage Chorus, flanger, phaser, Glitch, utility | Done |
 | Media | Decode WAV/AIFF/FLAC/MP3/OGG, resample, WAV/MP3/FLAC/AIFF export with quality controls, peaks | Done |
 | Project files | `.peelproj` manifest, content-addressed shards, atomic save, history recovery, bundles, autosave, lock | Done |
-| MIDI files | SMF import (types 0/1/2) and export with reports | Done |
+| MIDI files | SMF import (types 0/1/2) and export, including MPE, pitch bend and aftertouch, with reports | Done |
 | UI toolkit | SDF shape renderer, text, input, widgets, theme, popups, drag and drop | Done |
 | Editors | Transport, Channel Rack, Piano Roll, Playlist, Mixer, Browser, Inspector | Done |
 | Arrangement | Linked pattern clips, Make unique, loop range, audio clips with waveforms | Done |

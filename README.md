@@ -49,9 +49,8 @@ effects. There is no web view.
 - Exact rational musical time, sample-accurate playback that cannot drift,
   and a realtime audio path verified to make no allocations.
 - Open project files with atomic saves, autosave and crash recovery,
-  Standard MIDI File import and export, WAV, MP3, FLAC and AIFF export of
-  the mix or stems,
-  undo history.
+  Standard MIDI File import and export with MPE expression, WAV, MP3, FLAC
+  and AIFF export of the mix or stems, undo history.
 - Screen reader support through AccessKit and keyboard focus traversal.
 
 | Piano Roll with a scale | Mixer with a sidechain duck |
