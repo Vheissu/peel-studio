@@ -12,6 +12,38 @@ use crate::{FocusKind, MenuItem, Semantics, vec2};
 
 struct NoHandler;
 
+#[test]
+fn idle_text_fields_schedule_blinks_without_continuous_redraws() {
+    let mut h = Harness::new();
+    let id = Id::new("idle-editor");
+    let mut text = "Template name".to_string();
+    h.ui.focus_text_edit(id, true);
+    h.frame(|ui| {
+        ui.text_edit(id, rect(10.0, 10.0, 300.0, 30.0), &mut text, "Name");
+    });
+    assert!(h.ui.has_focus(id));
+    assert!(
+        !h.ui.wants_repaint(),
+        "an idle editor must let the event loop sleep"
+    );
+    let blink = h.ui.next_repaint_at().expect("a future caret transition");
+    assert!(blink > h.time && blink - h.time < 0.625);
+    h.time = blink;
+    h.frame(|ui| {
+        ui.text_edit(id, rect(10.0, 10.0, 300.0, 30.0), &mut text, "Name");
+    });
+    assert!(!h.ui.wants_repaint());
+    assert!(h.ui.next_repaint_at().unwrap() > blink);
+    h.ui.clear_focus();
+    h.frame(|ui| {
+        ui.text_edit(id, rect(10.0, 10.0, 300.0, 30.0), &mut text, "Name");
+    });
+    assert!(
+        h.ui.next_repaint_at().is_none(),
+        "blur cancels the caret timer"
+    );
+}
+
 impl TreeChangeHandler for NoHandler {
     fn node_added(&mut self, _: &accesskit_consumer::NodeRef) {}
     fn node_updated(&mut self, _: &accesskit_consumer::NodeRef, _: &accesskit_consumer::NodeRef) {}

@@ -28,11 +28,11 @@
 //! [`WindowControl::has_native_menu`] is false and the app draws its own.
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::WindowEvent;
+use winit::event::{StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::window::{Window, WindowId};
 
@@ -336,6 +336,14 @@ impl<A: App, F: FnOnce(&mut Ui) -> A> ApplicationHandler<UserEvent> for Runner<A
         window.request_redraw();
     }
 
+    fn new_events(&mut self, _event_loop: &ActiveEventLoop, cause: StartCause) {
+        if matches!(cause, StartCause::ResumeTimeReached { .. })
+            && let Some(run) = &self.running
+        {
+            run.window.request_redraw();
+        }
+    }
+
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
         let event = match event {
             UserEvent::AccessKit(event) => event,
@@ -478,7 +486,15 @@ impl<A: App, F: FnOnce(&mut Ui) -> A> Runner<A, F> {
             return;
         }
         if !ok || self.ui.wants_repaint() || self.screenshot.is_some() {
+            event_loop.set_control_flow(ControlFlow::Wait);
             run.window.request_redraw();
+        } else {
+            let wake = self
+                .ui
+                .next_repaint_at()
+                .and_then(|at| Duration::try_from_secs_f64(at).ok())
+                .and_then(|after| self.start.checked_add(after));
+            event_loop.set_control_flow(wake.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
         }
     }
 }

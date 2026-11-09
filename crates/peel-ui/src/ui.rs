@@ -128,6 +128,7 @@ pub struct Ui {
     anims: HashMap<Id, Anim>,
     cursor: CursorIcon,
     repaint: bool,
+    repaint_at: Option<f64>,
     tooltip: Option<(Id, String)>,
     hover_since: (Option<Id>, f64),
     pub(crate) popup: Option<(Id, Rect)>,
@@ -171,6 +172,7 @@ impl Ui {
             anims: HashMap::new(),
             cursor: CursorIcon::Default,
             repaint: false,
+            repaint_at: None,
             tooltip: None,
             hover_since: (None, 0.0),
             popup: None,
@@ -213,6 +215,7 @@ impl Ui {
         self.a11y.begin_frame();
         self.cursor = CursorIcon::Default;
         self.repaint = false;
+        self.repaint_at = None;
         self.tooltip = None;
         self.popup_opened_this_frame = false;
         self.dnd_dropped = false;
@@ -311,6 +314,23 @@ impl Ui {
     /// Asks the runner to draw another frame (animation, playback).
     pub fn request_repaint(&mut self) {
         self.repaint = true;
+    }
+
+    /// Requests a frame at `time`, using the same clock as [`Ui::time`].
+    /// Later requests coalesce behind the earliest deadline.
+    pub fn request_repaint_at(&mut self, time: f64) {
+        if !time.is_finite() {
+            return;
+        }
+        if time <= self.time {
+            self.request_repaint();
+        } else {
+            self.repaint_at = Some(self.repaint_at.map_or(time, |at| at.min(time)));
+        }
+    }
+
+    pub fn next_repaint_at(&self) -> Option<f64> {
+        self.repaint_at
     }
 
     pub fn wants_repaint(&self) -> bool {

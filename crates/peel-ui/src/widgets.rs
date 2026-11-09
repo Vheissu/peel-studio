@@ -1043,7 +1043,9 @@ impl Ui {
                 };
                 self.scene.rect(sr, 2.0, t.focus.alpha(0.3));
             }
-            let blink = ((self.time() * 1.6).fract() < 0.6) as i32 as f32;
+            let phase = self.time() * 1.6;
+            let visible = phase.fract() < 0.6;
+            let blink = visible as i32 as f32;
             let cx = r.x + w;
             self.scene.rect(
                 Rect {
@@ -1055,7 +1057,8 @@ impl Ui {
                 0.0,
                 t.focus.alpha(blink),
             );
-            self.request_repaint();
+            let next_phase = phase.floor() + if visible { 0.6 } else { 1.0 };
+            self.request_repaint_at(next_phase / 1.6 + 0.000_001);
             // An outside click ends editing.
             if self.input.pressed(Button::Left) && !resp.hovered {
                 resp.changed = true;
