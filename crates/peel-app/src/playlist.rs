@@ -999,6 +999,9 @@ fn track_heads(ui: &mut Ui, r: Rect, v: &View, tracks: &[Track], s: &mut Session
     ui.scene.pop_clip();
 }
 
+/// Corner radius of a clip.
+const CLIP_RADIUS: f32 = 3.0;
+
 fn clip_rect(v: &View, lane: usize, c: &Clip) -> Rect {
     let x0 = v.x(c.start.as_f64());
     let x1 = v.x(c.end().as_f64());
@@ -2042,11 +2045,13 @@ fn clips(
         let sel = ws.playlist.selection.contains(&c.id);
         let hovered = hit.as_ref().is_some_and(|(h, _)| h.id == c.id);
         let lane_muted = tracks.get(lane).is_some_and(|t| t.muted) || c.muted;
-        let body = t.panel.mix(pc, if lane_muted { 0.12 } else { 0.36 });
+        // A dark body tinted with the pattern color under a full-color
+        // name strip, so the notes inside are the brightest part.
+        let body = t.bg.mix(pc, if lane_muted { 0.12 } else { 0.32 });
         ui.scene.rect(
             cr,
-            t.radius_s,
-            if hovered { body.lighten(0.04) } else { body },
+            CLIP_RADIUS,
+            if hovered { body.lighten(0.05) } else { body },
         );
         let header = Rect {
             h: 16.0f32.min(cr.h * 0.4),
@@ -2054,8 +2059,8 @@ fn clips(
         };
         ui.scene.rect_ex(
             header,
-            [t.radius_s, t.radius_s, 0.0, 0.0],
-            pc.alpha(if lane_muted { 0.35 } else { 0.85 }),
+            [CLIP_RADIUS, CLIP_RADIUS, 0.0, 0.0],
+            if lane_muted { t.bg.mix(pc, 0.4) } else { pc },
             0.0,
             Color::TRANSPARENT,
         );
@@ -2147,7 +2152,7 @@ fn clips(
                             h: nh,
                         },
                         1.0,
-                        pc.lighten(0.3).alpha(alpha),
+                        pc.lighten(0.4).alpha(alpha),
                     );
                 }
                 k += 1;
@@ -2155,12 +2160,11 @@ fn clips(
             ui.scene.pop_clip();
         }
         if sel {
-            ui.scene
-                .outline(cr, t.radius_s, 1.5, Color::WHITE.alpha(0.85));
+            ui.scene.outline(cr, CLIP_RADIUS, 1.5, t.text);
         }
         if hovered && !sel {
             ui.scene
-                .outline(cr, t.radius_s, 1.0, pc.lighten(0.3).alpha(0.6));
+                .outline(cr, CLIP_RADIUS, 1.0, pc.lighten(0.3).alpha(0.6));
         }
     }
     ui.scene.pop_clip();
@@ -2252,12 +2256,12 @@ fn draw_audio_clip(
     s: &Session,
 ) {
     let t = ui.theme.clone();
-    let wave = Color::hex(0x56B3C2);
-    let body = t.panel.mix(wave, if muted { 0.10 } else { 0.22 });
+    let wave = col(peel_document::PALETTE[5]);
+    let body = t.bg.mix(wave, if muted { 0.10 } else { 0.24 });
     ui.scene.rect(
         cr,
-        t.radius_s,
-        if hovered { body.lighten(0.04) } else { body },
+        CLIP_RADIUS,
+        if hovered { body.lighten(0.05) } else { body },
     );
     let header = Rect {
         h: 16.0f32.min(cr.h * 0.4),
@@ -2265,8 +2269,8 @@ fn draw_audio_clip(
     };
     ui.scene.rect_ex(
         header,
-        [t.radius_s, t.radius_s, 0.0, 0.0],
-        wave.alpha(if muted { 0.35 } else { 0.8 }),
+        [CLIP_RADIUS, CLIP_RADIUS, 0.0, 0.0],
+        if muted { t.bg.mix(wave, 0.4) } else { wave },
         0.0,
         Color::TRANSPARENT,
     );
@@ -2501,7 +2505,7 @@ pub fn automation_label(s: &Session, target: &peel_document::AutomationTarget) -
                     .map_or("", |d| d.name);
                 return (format!("{} {dev} · {pname}", t.name), col(t.color));
             }
-            (format!("Missing · {pname}"), Color::hex(0x8E9AAB))
+            (format!("Missing · {pname}"), Color::hex(0x95A2B0))
         }
         T::TrackGain { track } | T::TrackPan { track } => {
             let what = if matches!(target, T::TrackGain { .. }) {
@@ -2511,7 +2515,7 @@ pub fn automation_label(s: &Session, target: &peel_document::AutomationTarget) -
             };
             match p.mixer.track(*track) {
                 Some(t) => (format!("{} · {what}", t.name), col(t.color)),
-                None => (format!("Missing · {what}"), Color::hex(0x8E9AAB)),
+                None => (format!("Missing · {what}"), Color::hex(0x95A2B0)),
             }
         }
     }
@@ -2534,8 +2538,8 @@ fn draw_automation_clip(
     let (label, color) = automation_label(s, target);
     ui.scene.rect(
         cr,
-        t.radius_s,
-        t.panel.mix(color, if muted { 0.06 } else { 0.12 }),
+        CLIP_RADIUS,
+        t.bg.mix(color, if muted { 0.06 } else { 0.14 }),
     );
     let header = Rect {
         h: 16.0f32.min(cr.h * 0.4),
@@ -2543,8 +2547,8 @@ fn draw_automation_clip(
     };
     ui.scene.rect_ex(
         header,
-        [t.radius_s, t.radius_s, 0.0, 0.0],
-        color.alpha(if muted { 0.3 } else { 0.55 }),
+        [CLIP_RADIUS, CLIP_RADIUS, 0.0, 0.0],
+        t.bg.mix(color, if muted { 0.25 } else { 0.5 }),
         0.0,
         Color::TRANSPARENT,
     );

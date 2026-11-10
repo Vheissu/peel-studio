@@ -341,38 +341,26 @@ fn strip(
     }
 
     let mut col_r = r.shrink2(6.0, 6.0);
-    // Cap and name.
-    // The channel color runs edge to edge across the top of the strip.
-    col_r.cut_top(3.0);
-    let cap = Rect {
-        x: r.x,
-        y: r.y,
-        w: r.w,
-        h: 3.0,
+    // The name sits on a plate in the channel color, like the scribble
+    // strip of a console.
+    col_r.cut_top(1.0);
+    let name_r = col_r.cut_top(22.0);
+    let plate = if is_master { t.accent } else { c };
+    let plate = if selected {
+        plate
+    } else {
+        t.panel_alt.mix(plate, 0.82)
     };
-    ui.scene
-        .rect(cap, 0.0, if is_master { t.accent } else { c });
-    col_r.cut_top(2.0);
-    let name_r = col_r.cut_top(20.0);
-    let name = ui.fit_text(&tr.name, t.label, name_r.w);
-    ui.text(
-        name_r,
-        &name,
-        t.label,
-        if selected {
-            t.text
-        } else {
-            t.text.mix(t.text_dim, 0.3)
-        },
-        Align::Center,
-    );
+    ui.scene.rect(name_r, t.radius_s, plate);
+    let name = ui.fit_text(&tr.name, t.label, name_r.w - 8.0);
+    ui.text(name_r, &name, t.label, ink_on(plate), Align::Center);
     if !is_master {
         strip_menu(ui, name_r, tr, s, ws);
     } else {
         let hit = ui.interact(W::new(("strip-name", tr.id)), name_r);
         ui.tooltip(&hit, "Master");
     }
-    col_r.cut_top(4.0);
+    col_r.cut_top(6.0);
 
     inserts(ui, &mut col_r, tr, plan, s, ws);
     col_r.cut_top(4.0);
