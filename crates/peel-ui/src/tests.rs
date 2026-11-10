@@ -169,6 +169,35 @@ fn cell(i: usize) -> Rect {
 }
 
 #[test]
+fn transport_keys_are_named_toggles_you_can_focus() {
+    let mut h = Harness::new();
+    let (play, rec) = (Id::new("play"), Id::new("rec"));
+    let mut clicked = false;
+    for armed in [false, true] {
+        h.frame(|ui| {
+            let t = ui.theme.clone();
+            ui.key_button(play, cell(0), icons::PLAY, false, t.play, 16.0);
+            clicked |= ui
+                .key_button(rec, cell(1), icons::RECORD, armed, t.record, 14.0)
+                .clicked;
+        });
+    }
+    assert!(!clicked);
+    let n = h.ui.accessibility_node(play).unwrap();
+    assert_eq!(n.role(), Role::Button);
+    assert_eq!(n.label(), Some("Play"));
+    assert_eq!(
+        n.toggled(),
+        None,
+        "a key that was never on is a plain button"
+    );
+    assert!(n.supports_action(Action::Focus));
+    let n = h.ui.accessibility_node(rec).unwrap();
+    assert_eq!(n.label(), Some("Record"));
+    assert_eq!(n.toggled(), Some(Toggled::True));
+}
+
+#[test]
 fn standard_widgets_describe_themselves() {
     let mut h = Harness::new();
     h.scale = 2.0;

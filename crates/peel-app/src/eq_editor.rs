@@ -25,7 +25,7 @@ pub const GAIN_DB: f32 = 18.0;
 /// Spectrum axis: dBFS at the top and bottom of the plot.
 pub const SPEC_TOP: f32 = 0.0;
 pub const SPEC_BOTTOM: f32 = -90.0;
-pub const BAND_COLORS: [u32; 4] = [0xE8735A, 0xF2B66D, 0x5FBF9A, 0x6E9FE0];
+pub const BAND_COLORS: [u32; 4] = [0xEC5E48, 0xF5943A, 0x55C48E, 0x5E9FEE];
 /// A resonance cut never goes deeper than this.
 pub const MAX_CUT_DB: f32 = 6.0;
 /// Bands in the rail: four bands, then high-pass and low-pass.

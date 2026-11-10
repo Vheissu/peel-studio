@@ -15,7 +15,7 @@ use crate::workspace::{Focus, Workspace};
 /// inspector lays out three 90 px columns: wide enough for names such as
 /// "Hammer Noise" without truncation. Longer names still fit-and-tooltip.
 pub(crate) const CELL_W: f32 = 76.0;
-pub(crate) const CELL_H: f32 = 54.0;
+pub(crate) const CELL_H: f32 = 60.0;
 
 #[derive(Default)]
 struct WaveCache {
@@ -818,8 +818,8 @@ pub(crate) fn knob_cell(
 ) -> peel_ui::Response {
     let t = ui.theme.clone();
     let mut c = cell;
-    let kr = c.cut_top(36.0);
-    let knob = Rect::from_center(kr.center(), 32.0, 32.0);
+    let kr = c.cut_top(40.0);
+    let knob = Rect::from_center(kr.center(), 34.0, 34.0);
     let resp = ui.knob(id, knob, norm, default, color, bipolar);
     ui.name(&resp, name);
     ui.value_text(&resp, value);
@@ -982,7 +982,7 @@ fn sample_view(ui: &mut Ui, body: &mut Rect, dev: &DeviceInstance, s: &mut Sessi
 }
 
 const EQ_DB: f32 = 18.0;
-const BAND_COLORS: [u32; 4] = [0xE8735A, 0xF2B66D, 0x5FBF9A, 0x6E9FE0];
+const BAND_COLORS: [u32; 4] = [0xEC5E48, 0xF5943A, 0x55C48E, 0x5E9FEE];
 
 /// Interactive EQ curve: drag a band's handle to set its frequency and
 /// gain, scroll over it to change Q, double-click to switch it on or off.

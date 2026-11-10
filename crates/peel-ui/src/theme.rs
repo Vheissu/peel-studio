@@ -1,11 +1,15 @@
 //! Design tokens.
 //!
-//! Reference: a pattern-and-playlist DAW workspace. Neutral graphite
-//! chrome, square continuous editor canvases, warm amber for actions and
-//! the playhead, lime for signal, and channel colors only on musical
-//! content. Panes meet at thin dark seams instead of floating as cards;
-//! hierarchy comes from value steps and 1 px separators. Notes, clips,
-//! waveforms and the playhead stay the brightest things on screen.
+//! Reference: the front panel of a Roland TR-808 and the drum machines
+//! that followed it. A warm black panel, cream legends, one orange stripe,
+//! and step keys in red, orange, yellow and cream, four to a beat. Peel
+//! Studio borrows that palette and its sense of hardware (controls with
+//! weight, displays that sit in the panel), not its artwork.
+//!
+//! Panes meet at thin dark seams instead of floating as cards; hierarchy
+//! comes from value steps and 1 px separators. Channel colors appear only
+//! on musical content, so notes, clips, waveforms and the playhead stay
+//! the brightest things on screen.
 
 use crate::geom::Color;
 use crate::text::{FontWeight, TextStyle};
@@ -46,6 +50,10 @@ pub struct Theme {
     pub grid_step: Color,
     pub key_white: Color,
     pub key_black: Color,
+    /// Step keys by beat of the bar: red, orange, yellow, cream.
+    pub step_keys: [Color; 4],
+    /// Lit readouts inside a display window (position, tempo).
+    pub display: Color,
 
     // Metrics.
     pub radius_s: f32,
@@ -70,38 +78,45 @@ pub struct Theme {
 impl Theme {
     pub fn dark() -> Theme {
         Theme {
-            bg: Color::hex(0x0F1011),
-            panel: Color::hex(0x1C1E21),
-            panel_alt: Color::hex(0x23262A),
-            raised: Color::hex(0x2A2D32),
-            control: Color::hex(0x31353B),
-            control_hover: Color::hex(0x3B4047),
-            control_active: Color::hex(0x464C54),
-            line: Color::hex(0x2B2E33),
-            line_strong: Color::hex(0x3A3E44),
-            well: Color::hex(0x151719),
+            bg: Color::hex(0x0C0B0A),
+            panel: Color::hex(0x1A1917),
+            panel_alt: Color::hex(0x211F1D),
+            raised: Color::hex(0x2B2926),
+            control: Color::hex(0x35322E),
+            control_hover: Color::hex(0x423E39),
+            control_active: Color::hex(0x504B45),
+            line: Color::hex(0x2D2B28),
+            line_strong: Color::hex(0x403C37),
+            well: Color::hex(0x121110),
 
-            text: Color::hex(0xEEEFF0),
-            text_dim: Color::hex(0xADB1B7),
-            text_faint: Color::hex(0x8C9199),
-            text_on_accent: Color::hex(0x1E1406),
+            text: Color::hex(0xF3EEE4),
+            text_dim: Color::hex(0xB9B2A6),
+            text_faint: Color::hex(0x8F887C),
+            text_on_accent: Color::hex(0x1F1305),
 
-            accent: Color::hex(0xF0A443),
-            focus: Color::hex(0x6EC4E6),
-            record: Color::hex(0xEE5F5B),
+            accent: Color::hex(0xF7992B),
+            focus: Color::hex(0x7FC8EA),
+            record: Color::hex(0xF2553F),
             play: Color::hex(0x9FD65B),
-            warn: Color::hex(0xE8C45C),
-            shadow: Color::rgba(0.0, 0.0, 0.0, 0.5),
+            warn: Color::hex(0xEFC53F),
+            shadow: Color::rgba(0.0, 0.0, 0.0, 0.55),
 
-            grid_bar: Color::rgba(1.0, 1.0, 1.0, 0.12),
-            grid_beat: Color::rgba(1.0, 1.0, 1.0, 0.06),
-            grid_step: Color::rgba(1.0, 1.0, 1.0, 0.028),
-            key_white: Color::hex(0xD6D8DB),
-            key_black: Color::hex(0x26282C),
+            grid_bar: Color::rgba(1.0, 0.96, 0.9, 0.13),
+            grid_beat: Color::rgba(1.0, 0.96, 0.9, 0.065),
+            grid_step: Color::rgba(1.0, 0.96, 0.9, 0.03),
+            key_white: Color::hex(0xE6DFD0),
+            key_black: Color::hex(0x252320),
+            step_keys: [
+                Color::hex(0xE8503C),
+                Color::hex(0xF28A2E),
+                Color::hex(0xF0C63E),
+                Color::hex(0xEFE7D6),
+            ],
+            display: Color::hex(0xFFB454),
 
             radius_s: 2.0,
-            radius_m: 3.0,
-            radius_l: 3.0,
+            radius_m: 4.0,
+            radius_l: 6.0,
             control_h: 24.0,
             control_h_compact: 20.0,
             rail_w: 36.0,

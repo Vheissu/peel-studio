@@ -383,25 +383,25 @@ fn playback(ui: &mut Ui, r: Rect, studio: &mut Studio, fit: Fit) {
             studio.session.nudge(-bar);
         }
     }
-    let play = ui.icon_button_fill(
+    let play = ui.key_button(
         W::new("play"),
         row.cut_left(34.0),
         if playing { icons::PAUSE } else { icons::PLAY },
         playing,
         t.play,
-        17.0,
+        16.0,
     );
     ui.tooltip(&play, "Play (Space)");
     if play.clicked {
         studio.session.toggle_play();
     }
-    let stop = ui.icon_button_fill(
+    let stop = ui.key_button(
         W::new("stop"),
         row.cut_left(34.0),
         icons::STOP,
         false,
         t.text,
-        15.0,
+        14.0,
     );
     ui.tooltip(&stop, "Stop and return");
     if stop.clicked {
@@ -416,13 +416,13 @@ fn playback(ui: &mut Ui, r: Rect, studio: &mut Studio, fit: Fit) {
         }
     }
     let armed = studio.recorder.armed;
-    let rec = ui.icon_button_fill(
+    let rec = ui.key_button(
         W::new("rec"),
         row.cut_left(34.0),
         icons::RECORD,
         armed,
         t.record,
-        15.0,
+        14.0,
     );
     let song = studio.session.mode() == peel_session::PlayMode::Song;
     ui.tooltip(
@@ -490,7 +490,9 @@ fn playback(ui: &mut Ui, r: Rect, studio: &mut Studio, fit: Fit) {
 /// Position, tempo, time signature and metronome, in one well.
 fn time(ui: &mut Ui, r: Rect, studio: &mut Studio, fit: Fit) {
     let t = ui.theme.clone();
-    ui.well(r);
+    // A display window set into the bar: lit figures on black.
+    ui.scene
+        .rect_stroke(r, t.radius_m, t.bg, 1.0, t.line.alpha(0.9));
     let mut row = r.shrink2(4.0, 2.0);
 
     // Position readout.
@@ -510,7 +512,7 @@ fn time(ui: &mut Ui, r: Rect, studio: &mut Studio, fit: Fit) {
         pr.cut_left(68.0),
         &pos,
         t.readout.size(18.0),
-        t.text,
+        t.display,
         Align::Start,
     );
     if fit.clock {
@@ -550,7 +552,7 @@ fn time(ui: &mut Ui, r: Rect, studio: &mut Studio, fit: Fit) {
         400.0,
         0.2,
         t.readout.size(18.0),
-        t.accent,
+        t.display,
         |v| format!("{v:.1}"),
     );
     // Tap tempo: click the BPM label in time with the music.
@@ -677,25 +679,8 @@ fn time(ui: &mut Ui, r: Rect, studio: &mut Studio, fit: Fit) {
 }
 
 fn logo(ui: &mut Ui, r: Rect) {
-    // A cut orange with a curl of peel lifting away.
-    let t = ui.theme.clone();
-    let c = r.center();
-    ui.scene.circle(c, 12.0, t.accent);
-    ui.scene.circle(c, 9.2, t.accent.darken(0.18));
-    for k in 0..4 {
-        let a = k as f32 * std::f32::consts::FRAC_PI_4;
-        let d = vec2(a.sin(), -a.cos()) * 8.6;
-        ui.scene.line(c - d, c + d, 1.2, t.accent);
-    }
-    ui.scene.arc(c, 12.0, 2.8, 0.35, 1.25, t.bg);
-    ui.scene.arc(
-        c + vec2(9.4, -8.8),
-        3.8,
-        2.0,
-        3.5,
-        2.5,
-        t.accent.lighten(0.15),
-    );
+    let ground = ui.theme.panel;
+    crate::util::logo(ui, r.center(), 12.0, ground);
 }
 
 fn horizontal_meter(ui: &mut Ui, id: W, r: Rect, peaks: (f32, f32)) {

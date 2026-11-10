@@ -1,15 +1,15 @@
 //! Small helpers shared by the editors.
 
 use peel_document::{Color as DocColor, Time, TimeSignature};
-use peel_ui::{Color, Id as W, Rect, Ui, icons};
+use peel_ui::{Color, Id as W, Rect, Ui, Vec2, icons, vec2};
 
 /// Thickness of the timeline scrollbars.
 pub const SCROLLBAR: f32 = 8.0;
 
 /// Names for the twelve palette colors, in palette order.
 pub const COLOR_NAMES: [&str; 12] = [
-    "Tomato", "Amber", "Mustard", "Olive", "Jade", "Teal", "Blue", "Lavender", "Rose", "Salmon",
-    "Beige", "Steel",
+    "Red", "Orange", "Yellow", "Lime", "Jade", "Teal", "Blue", "Violet", "Pink", "Coral", "Sand",
+    "Slate",
 ];
 
 /// Document color to UI color.
@@ -19,10 +19,10 @@ pub fn col(c: DocColor) -> Color {
 
 /// Text color that reads on top of a fill.
 pub fn ink_on(fill: Color) -> Color {
-    if fill.luminance() > 0.55 {
-        Color::hex(0x161A20)
+    if fill.luminance() > 0.38 {
+        Color::hex(0x1A1410)
     } else {
-        Color::hex(0xF7F9FB)
+        Color::hex(0xFBF7EF)
     }
 }
 
@@ -230,4 +230,28 @@ mod audio_tests {
         assert_eq!(peak_text(1.0), "+0.0");
         assert_eq!(peak_text(0.5), "-6.0");
     }
+}
+
+/// The mark: a cut orange with a curl of peel lifting away. `radius` is
+/// the fruit's; `ground` is the color behind it, which cuts the gap
+/// between fruit and peel.
+pub fn logo(ui: &mut Ui, c: Vec2, radius: f32, ground: Color) {
+    let t = ui.theme.clone();
+    let k = radius / 12.0;
+    ui.scene.circle(c, radius, t.accent);
+    ui.scene.circle(c, 9.2 * k, t.accent.darken(0.18));
+    for i in 0..4 {
+        let a = i as f32 * std::f32::consts::FRAC_PI_4;
+        let d = vec2(a.sin(), -a.cos()) * (8.6 * k);
+        ui.scene.line(c - d, c + d, 1.2 * k, t.accent);
+    }
+    ui.scene.arc(c, radius, 2.8 * k, 0.35, 1.25, ground);
+    ui.scene.arc(
+        c + vec2(9.4, -8.8) * k,
+        3.8 * k,
+        2.0 * k,
+        3.5,
+        2.5,
+        t.accent.lighten(0.15),
+    );
 }

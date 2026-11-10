@@ -28,22 +28,22 @@ impl Color {
 
 /// Default palette for channels, patterns and tracks.
 ///
-/// Derived from the colored knob caps and patch cables of an analog
-/// console: saturated enough to tell lanes apart at a glance, muted enough
-/// that notes and waveforms stay the brightest thing on screen.
+/// It starts on the red, orange and yellow of a TR-808's step keys and
+/// carries on round the wheel at the same weight: saturated enough to tell
+/// lanes apart at a glance, and all light enough to take dark text.
 pub const PALETTE: [Color; 12] = [
-    Color::hex(0xE8735A), // tomato cap
-    Color::hex(0xF2B66D), // amber (VU backlight)
-    Color::hex(0xD9C35C), // mustard
-    Color::hex(0x9CC46B), // olive green
-    Color::hex(0x5FBF9A), // jade
-    Color::hex(0x56B3C2), // patch-cable teal
-    Color::hex(0x6E9FE0), // console blue
-    Color::hex(0xA58BE0), // lavender
-    Color::hex(0xD982B5), // rose
-    Color::hex(0xE58C8C), // salmon
-    Color::hex(0xB8A48C), // tape beige
-    Color::hex(0x8E9AAB), // steel
+    Color::hex(0xEC5E48), // 808 red
+    Color::hex(0xF5943A), // 808 orange
+    Color::hex(0xEFC644), // 808 yellow
+    Color::hex(0xA6CE55), // lime
+    Color::hex(0x55C48E), // jade
+    Color::hex(0x44B9C9), // teal
+    Color::hex(0x5E9FEE), // blue
+    Color::hex(0x9E88EC), // violet
+    Color::hex(0xE07CBB), // pink
+    Color::hex(0xF08878), // coral
+    Color::hex(0xC9B291), // sand
+    Color::hex(0x95A2B0), // slate
 ];
 
 impl fmt::Debug for Color {

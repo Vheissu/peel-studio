@@ -951,7 +951,7 @@ fn keyboard(ui: &mut Ui, r: Rect, v: &View, ch: &Channel, s: &mut Session, memo_
                 },
                 &note_name(k as u8),
                 t.caption.size(10.5),
-                Color::hex(0x4C4F54),
+                Color::hex(0x514B42),
                 Align::End,
             );
         }
@@ -1309,11 +1309,7 @@ fn edit_canvas(
             1.5,
             fill,
             1.0,
-            if sel {
-                Color::WHITE.alpha(0.9)
-            } else {
-                color.darken(0.35)
-            },
+            if sel { t.text } else { color.darken(0.45) },
         );
         // Velocity tick on the left edge.
         ui.scene.rect(

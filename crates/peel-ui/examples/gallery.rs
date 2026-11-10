@@ -68,10 +68,10 @@ impl App for Gallery {
         panel.cut_top(16.0);
         let mut knobs = panel.cut_top(64.0);
         let colors = [
-            peel_ui::Color::hex(0xE8735A),
+            peel_ui::Color::hex(0xEC5E48),
             t.accent,
-            peel_ui::Color::hex(0x5FBF9A),
-            peel_ui::Color::hex(0x6E9FE0),
+            peel_ui::Color::hex(0x55C48E),
+            peel_ui::Color::hex(0x5E9FEE),
         ];
         for i in 0..4 {
             let mut k = knobs.cut_left(56.0);

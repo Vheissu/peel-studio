@@ -191,7 +191,7 @@ impl Ui {
         } else {
             t.control.mix(t.control_hover, hot)
         };
-        self.scene.rect(r, t.radius_m, fill);
+        self.keycap(r, t.radius_m, fill, resp.active);
         self.text(r, label, t.label, t.text, Align::Center);
         if resp.hovered {
             self.set_cursor(CursorIcon::Pointer);
@@ -214,13 +214,24 @@ impl Ui {
         } else {
             t.accent.lighten(hot * 0.08)
         };
-        self.scene.rect(r, t.radius_m, fill);
+        self.keycap(r, t.radius_m, fill, resp.active);
         self.text(r, label, t.label, t.text_on_accent, Align::Center);
         if resp.hovered {
             self.set_cursor(CursorIcon::Pointer);
         }
         self.focus_ring(id, r, t.radius_m);
         resp
+    }
+
+    /// A raised control surface: `fill` lit slightly from above, so a
+    /// button reads as something to press. Pressed, the light goes flat.
+    pub fn keycap(&mut self, r: Rect, radius: f32, fill: Color, pressed: bool) {
+        if pressed {
+            self.scene.rect(r, radius, fill);
+        } else {
+            self.scene
+                .rect_gradient_v(r, radius, fill.lighten(0.06), fill.darken(0.08));
+        }
     }
 
     /// Square icon button; `on` shows the toggled state in `on_color`.
@@ -294,6 +305,35 @@ impl Ui {
         resp
     }
 
+    /// A transport key: a raised cap with a filled icon, which takes
+    /// `on_color` when the function it starts is running.
+    pub fn key_button(
+        &mut self,
+        id: Id,
+        r: Rect,
+        icon: &str,
+        on: bool,
+        on_color: Color,
+        size: f32,
+    ) -> Response {
+        let resp = self.interact(id, r);
+        self.focusable(id, r, FocusKind::Activate);
+        self.describe_icon_button(id, r, icon, on);
+        let t = self.theme.clone();
+        let hot = self.animate_bool(id, resp.hovered);
+        let k = self.animate_bool(id.with("on"), on);
+        let cap = r.shrink2(1.0, 0.0);
+        let fill = t.control.mix(t.control_hover, hot).mix(on_color, k);
+        self.keycap(cap, t.radius_s + 1.0, fill, resp.active);
+        let ink = t.text_dim.mix(t.text, hot).mix(t.bg, k);
+        self.icon_fill(r, icon, size, ink);
+        if resp.hovered {
+            self.set_cursor(CursorIcon::Pointer);
+        }
+        self.focus_ring(id, cap, t.radius_m);
+        resp
+    }
+
     /// An icon button is named after its icon until a tooltip or an explicit
     /// name says better. A button that has been `on` is a toggle from then
     /// on; one that never was cannot be told from a plain button (say
@@ -328,14 +368,27 @@ impl Ui {
         let c = r.center();
         let rad = (r.w.min(r.h) * 0.5 - 1.0).clamp(3.0, 5.0);
         let k = self.animate_bool(id.with("led"), on);
-        // No halo: lit LEDs are a flat, slightly muted dot.
-        let fill = t.control_hover.mix(color, k * 0.82);
+        // A lamp set into the panel: dark when off, and when lit a small
+        // spill of its own color onto the surface around it.
+        if k > 0.01 {
+            let halo = Rect::from_center(c, rad * 2.0, rad * 2.0);
+            self.scene
+                .shadow(halo, rad, rad * 0.9, color.with_alpha(0.3 * k));
+        }
+        let fill = t.well.mix(color, k);
         let stroke = if resp.hovered {
             t.text_dim
         } else {
-            t.line_strong.mix(color.lighten(0.2), k)
+            t.line_strong.mix(color.lighten(0.25), k)
         };
         self.scene.circle_stroke(c, rad, fill, 1.0, stroke);
+        if k > 0.01 {
+            self.scene.circle(
+                vec2(c.x - rad * 0.25, c.y - rad * 0.3),
+                rad * 0.3,
+                Color::WHITE.with_alpha(0.45 * k),
+            );
+        }
         if resp.hovered {
             self.set_cursor(CursorIcon::Pointer);
         }
@@ -407,7 +460,7 @@ impl Ui {
                     ..*first
                 }
             };
-            self.scene.rect(sr, t.radius_s, t.control_hover);
+            self.keycap(sr, t.radius_s, t.control_hover, false);
         }
         for (i, (cell, label)) in cells.iter().zip(options).enumerate() {
             let seg = id.with(i);
@@ -537,13 +590,13 @@ impl Ui {
         let t = self.theme.clone();
         let size = r.w.min(r.h);
         let c = r.center();
-        // A thin value arc around a flat cap with a pointer: the arc and
-        // pointer carry the value, the cap only gives it something to sit on.
-        let thick = (size * 0.07).clamp(1.5, 2.5);
+        // A value arc in a dark groove around a cap you could take hold
+        // of: the arc and the cream pointer carry the value, the cap is
+        // lit from above so it sits proud of the panel.
+        let thick = (size * 0.1).clamp(2.0, 3.5);
         let ring = size * 0.5 - thick * 0.5 - 0.5;
         let h = self.animate_bool(id.with("hot"), hot);
-        self.scene
-            .arc(c, ring, thick, KNOB_START, KNOB_SWEEP, t.line_strong);
+        self.scene.arc(c, ring, thick, KNOB_START, KNOB_SWEEP, t.bg);
         let v = norm.clamp(0.0, 1.0);
         let col = color.lighten(h * 0.12);
         if bipolar {
@@ -555,15 +608,21 @@ impl Ui {
             self.scene
                 .arc(c, ring, thick, KNOB_START, KNOB_SWEEP * v, col);
         }
-        let body = ring - thick * 0.5 - 1.5;
-        self.scene
-            .circle(c, body, t.control.mix(t.control_hover, h * 0.7));
+        let body = (ring - thick * 0.5 - 1.5).max(2.0);
+        let cap = t.control_hover.mix(t.control_active, h * 0.7);
+        self.scene.circle(c, body + 1.0, t.bg);
+        self.scene.rect_gradient_v(
+            Rect::from_center(c, body * 2.0, body * 2.0),
+            body,
+            cap.lighten(0.1),
+            cap.darken(0.22),
+        );
         let a = KNOB_START + KNOB_SWEEP * v;
         let dir = vec2(a.sin(), -a.cos());
         self.scene.line(
-            c + dir * (body * 0.2),
-            c + dir * (body - 0.5),
-            (size * 0.06).clamp(1.5, 2.0),
+            c + dir * (body * 0.3),
+            c + dir * (body - 1.0),
+            (size * 0.07).clamp(1.5, 2.5),
             t.text,
         );
     }
@@ -609,7 +668,13 @@ impl Ui {
             w: 3.0,
             h: travel,
         };
-        self.scene.rect(track, 0.0, t.bg);
+        let groove = Rect {
+            x: cx - 2.5,
+            y: track.y - 2.0,
+            w: 5.0,
+            h: travel + 4.0,
+        };
+        self.scene.rect(groove, 2.5, t.bg);
         // Scale ticks on the left only, longer at the ends and the middle.
         for i in 0..=10 {
             let y = track.y + travel * i as f32 / 10.0;
@@ -633,28 +698,25 @@ impl Ui {
             w: track.w,
             h: track.bottom() - (cap_y + cap_h * 0.5),
         };
-        self.scene.rect(fill, 0.0, color.with_alpha(0.8));
+        self.scene.rect(fill, 0.0, color);
         let hot = self.animate_bool(id.with("hot"), resp.hovered || resp.active);
         let cap = Rect {
-            x: cx - 11.0,
+            x: cx - 12.0,
             y: cap_y,
-            w: 22.0,
+            w: 24.0,
             h: cap_h,
         };
-        // Flat cap with a dark rim so it reads over the fill; the index
-        // line marks the exact position.
-        self.scene.rect_stroke(
-            cap,
-            t.radius_s,
-            t.control_active.lighten(hot * 0.08),
-            1.0,
-            t.bg,
-        );
+        // A fader cap: a dark rim so it reads over the fill, lit from
+        // above, with a cream index line at the exact position.
+        let body = t.control_active.lighten(0.1 + hot * 0.08);
+        self.scene.rect(cap.expand(1.0), t.radius_s + 1.0, t.bg);
+        self.scene
+            .rect_gradient_v(cap, t.radius_s, body.lighten(0.14), body.darken(0.2));
         self.scene.rect(
             Rect {
-                x: cap.x + 3.0,
+                x: cap.x + 2.0,
                 y: cap.center().y - 1.0,
-                w: cap.w - 6.0,
+                w: cap.w - 4.0,
                 h: 2.0,
             },
             0.0,
@@ -699,9 +761,14 @@ impl Ui {
             w: r.w - 10.0,
             h: 3.0,
         };
-        self.scene.rect(track, 1.5, t.control_hover);
+        let track = Rect {
+            y: track.y - 0.5,
+            h: 4.0,
+            ..track
+        };
+        self.scene.rect(track, 2.0, t.bg);
         let v = norm.clamp(0.0, 1.0);
-        self.scene.rect(track.with_w(track.w * v), 1.5, color);
+        self.scene.rect(track.with_w(track.w * v), 2.0, color);
         let hot = self.animate_bool(id.with("hot"), resp.hovered || resp.active);
         self.scene.circle(
             vec2(track.x + track.w * v, track.center().y),
@@ -1108,9 +1175,18 @@ impl Ui {
             self.describe_meter(id, r, peaks.0.max(peaks.1), now);
         }
         let bars = r.columns(2, 1.0);
+        // Tall meters are LED ladders: one lamp every `pitch` points.
+        let pitch = 3.0;
+        let ladder = r.h >= 48.0 && r.w >= 5.0;
         for (i, b) in bars.iter().enumerate() {
             self.scene.rect(*b, 0.0, t.bg);
-            let h = b.h * level[i];
+            let lit = if ladder {
+                // Whole lamps only, so the top edge never shows a sliver.
+                (b.h * level[i] / pitch).round() * pitch
+            } else {
+                b.h * level[i]
+            };
+            let h = lit.min(b.h);
             if h > 0.5 {
                 let fill = Rect {
                     y: b.bottom() - h,
@@ -1130,6 +1206,22 @@ impl Ui {
                 self.scene.rect(seg(amber_from, red_from), 0.0, t.accent);
                 self.scene.rect(seg(red_from, 1.0), 0.0, t.record);
                 self.scene.pop_clip();
+            }
+            if ladder {
+                let px = 1.0 / self.scale();
+                let mut y = b.bottom() - pitch;
+                while y > b.y {
+                    self.scene.rect(
+                        Rect {
+                            y,
+                            h: px.max(0.75),
+                            ..*b
+                        },
+                        0.0,
+                        t.bg,
+                    );
+                    y -= pitch;
+                }
             }
             if hold[i] > 0.01 {
                 let y = b.bottom() - b.h * hold[i];

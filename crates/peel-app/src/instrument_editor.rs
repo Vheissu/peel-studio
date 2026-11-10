@@ -517,7 +517,7 @@ fn piano(ui: &mut Ui, r: Rect, ch: &peel_document::Channel, s: &mut Session, ws:
                 if on {
                     crate::util::ink_on(accent)
                 } else {
-                    Color::hex(0x6B7584)
+                    Color::hex(0x7A7264)
                 },
                 Align::Center,
             );
@@ -534,7 +534,7 @@ fn piano(ui: &mut Ui, r: Rect, ch: &peel_document::Channel, s: &mut Session, ws:
                 if on {
                     crate::util::ink_on(accent)
                 } else {
-                    Color::hex(0x4A5362)
+                    Color::hex(0x524B40)
                 },
                 Align::Center,
             );
@@ -568,7 +568,7 @@ fn piano(ui: &mut Ui, r: Rect, ch: &peel_document::Channel, s: &mut Session, ws:
                 if on {
                     crate::util::ink_on(accent)
                 } else {
-                    Color::hex(0x8B95A5)
+                    Color::hex(0x9A9284)
                 },
                 Align::Center,
             );
