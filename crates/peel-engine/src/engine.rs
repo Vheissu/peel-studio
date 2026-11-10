@@ -622,7 +622,8 @@ impl Engine {
             EngineCommand::Play => {
                 if !self.transport.playing {
                     self.transport.playing = true;
-                    let pos = self.transport.position;
+                    let pos = self.start_beat(self.transport.position, true);
+                    self.transport.position = pos;
                     self.anchor(pos);
                     self.transport.next_click = ceil_beat(pos);
                 }
@@ -809,7 +810,10 @@ impl Engine {
             .plan_revision
             .store(self.plan.revision, Ordering::Relaxed);
         if self.transport.playing {
-            let pos = self.transport.position;
+            // A loop that now ends behind the playhead (a shorter or another
+            // pattern) is rejoined at its start.
+            let pos = self.start_beat(self.transport.position, false);
+            self.transport.position = pos;
             self.anchor(pos);
             self.reconcile_notes();
         }
@@ -963,6 +967,17 @@ impl Engine {
     // ------------------------------------------------------------------
     // Transport
     // ------------------------------------------------------------------
+
+    /// Where playback from `beat` begins. Past the end of the loop it is the
+    /// loop start, since the wrap is only taken from inside the loop; with
+    /// `restart`, a plan that has already played to its end starts again.
+    fn start_beat(&self, beat: f64, restart: bool) -> f64 {
+        match valid_loop(&self.plan, self.sr64) {
+            Some((start, end)) if beat >= end => start,
+            None if restart && beat >= self.plan.length_beats => 0.0,
+            _ => beat,
+        }
+    }
 
     /// Anchors the running transport so that `beat` is the current engine
     /// sample, and positions the event cursor and boundary flags.

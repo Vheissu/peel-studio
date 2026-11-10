@@ -21,6 +21,7 @@ pub mod template;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use peel_document::{AudioAsset, DeviceInstance, Document, Id, Project};
@@ -121,6 +122,8 @@ pub struct Session {
     selected_pattern: Id,
     playing: bool,
     pattern_recording_active: bool,
+    /// The engine has been seen running since the last Play.
+    engine_started: bool,
     play_start: f64,
     metronome: bool,
     /// Song playback wraps at the loop range (or the arrangement end).
@@ -221,6 +224,7 @@ impl Session {
             },
             playing: false,
             pattern_recording_active: false,
+            engine_started: false,
             play_start: 0.0,
             metronome: false,
             looping: true,
@@ -249,6 +253,13 @@ impl Session {
     /// loaded samples and syncs the engine with the document.
     pub fn tick(&mut self) {
         self.engine.collect_garbage();
+        // A song without a loop stops itself at its end.
+        let running = self.engine.telemetry().playing.load(Ordering::Relaxed);
+        if self.playing && self.engine_started && !running {
+            self.io.bridge.release_all();
+            self.playing = false;
+        }
+        self.engine_started = self.playing && running;
         if self.plugins.poll() {
             // Plugins referenced by the project can now be created.
             self.synced = None;
@@ -753,10 +764,11 @@ impl Session {
             self.io.bridge.release_all();
             let was_song = self.mode == PlayMode::Song;
             self.mode = mode;
-            if was_song != (mode == PlayMode::Song) && self.playing {
-                // Switching between pattern and song restarts from the top.
+            if was_song != (mode == PlayMode::Song) {
+                // A song position means nothing inside a pattern, and the
+                // other way round: both start from the top.
                 self.sync();
-                let _ = self.engine.send(EngineCommand::Seek { beat: 0.0 });
+                self.seek(0.0);
             }
         }
     }
@@ -777,7 +789,18 @@ impl Session {
 
     pub fn play(&mut self) {
         self.sync();
-        self.play_start = self.position();
+        let at = self.position();
+        // A playhead left at or past the end (a finished song, or a pattern
+        // shorter than the last one) plays from the top.
+        let ended = self
+            .plan
+            .as_ref()
+            .is_some_and(|p| p.length_beats.is_finite() && at >= p.length_beats);
+        if ended {
+            self.seek(0.0);
+        } else {
+            self.play_start = at;
+        }
         let _ = self.engine.send(EngineCommand::Play);
         self.playing = true;
     }

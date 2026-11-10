@@ -1178,3 +1178,38 @@ fn channel_routes_with_bad_indices_are_ignored() {
     let (l, _) = render_blocks(&mut off, 300, 100);
     assert_eq!(l[299], 1.0);
 }
+
+#[test]
+fn play_past_the_loop_end_starts_at_the_loop_start() {
+    // 240 BPM: a beat is 12000 samples. The playhead sits beyond a two-beat
+    // loop, as it does after a longer pattern or a song.
+    let mut off = rig(
+        plan(
+            constant(240.0),
+            &[note(0.5, 0.25, 1)],
+            1,
+            Some((0.0, 2.0)),
+            2.0,
+        ),
+        None,
+    );
+    off.send(EngineCommand::Seek { beat: 9.0 });
+    off.send(EngineCommand::Play);
+    let (l, _) = render_blocks(&mut off, 48_000, 256);
+    assert_eq!(rising_edges(&l), vec![6_000, 30_000]);
+}
+
+#[test]
+fn play_after_the_end_starts_over() {
+    let mut off = rig(
+        plan(constant(240.0), &[note(0.5, 0.25, 1)], 1, None, 2.0),
+        None,
+    );
+    off.send(EngineCommand::Play);
+    let (l, _) = render_blocks(&mut off, 30_000, 256);
+    assert_eq!(rising_edges(&l), vec![6_000]);
+    assert!(!off.engine().is_playing());
+    off.send(EngineCommand::Play);
+    let (l, _) = render_blocks(&mut off, 12_000, 256);
+    assert_eq!(rising_edges(&l), vec![6_000]);
+}
