@@ -536,25 +536,45 @@ pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspa
             .outline(body.expand(2.0), t.radius_m, 2.0, t.focus.alpha(0.6));
     }
 
-    let instruments: Vec<(&'static str, &'static str)> = peel_devices::instruments()
-        .map(|d| (d.type_id, d.name))
-        .collect();
-    let mut items: Vec<MenuItem> = instruments.iter().map(|(_, n)| MenuItem::new(*n)).collect();
+    // Add: a whole kit in one step, a single instrument, or a sample.
+    enum Add {
+        Kit(usize),
+        Instrument(&'static str),
+        Sample,
+    }
+    let mut items = vec![MenuItem::Heading("Kits".into())];
+    let mut actions: Vec<Option<Add>> = vec![None];
+    for (i, kit) in KITS.iter().enumerate() {
+        items.push(MenuItem::new(kit.name));
+        actions.push(Some(Add::Kit(i)));
+    }
     items.push(MenuItem::Separator);
+    actions.push(None);
+    items.push(MenuItem::Heading("Instruments".into()));
+    actions.push(None);
+    for d in peel_devices::instruments() {
+        items.push(MenuItem::new(d.name));
+        actions.push(Some(Add::Instrument(d.type_id)));
+    }
+    items.push(MenuItem::Separator);
+    actions.push(None);
     items.push(MenuItem::new("Sampler from file…"));
+    actions.push(Some(Add::Sample));
     if let Some(i) = ui.menu(
         W::new("rack-add-menu"),
         vec2(add_r.x, add_r.bottom() + 4.0),
         &items,
     ) {
-        if i < instruments.len() {
-            if let Some(id) = add_instrument(s, instruments[i].0) {
-                select(ws, id);
+        let added = match actions.get(i).and_then(Option::as_ref) {
+            Some(Add::Kit(k)) => add_kit(s, &KITS[*k]),
+            Some(Add::Instrument(type_id)) => add_instrument(s, type_id),
+            Some(Add::Sample) => {
+                crate::dialogs::open(&[("Audio", &["wav", "aif", "aiff", "flac", "mp3", "ogg"])])
+                    .and_then(|path| add_sample_channel(s, &path))
             }
-        } else if let Some(path) =
-            crate::dialogs::open(&[("Audio", &["wav", "aif", "aiff", "flac", "mp3", "ogg"])])
-            && let Some(id) = add_sample_channel(s, &path)
-        {
+            None => None,
+        };
+        if let Some(id) = added {
             select(ws, id);
         }
     }
@@ -1205,6 +1225,100 @@ pub fn add_instrument_preset(s: &mut Session, type_id: &str, preset: Option<&str
     new_id
 }
 
+/// One channel of a [`Kit`].
+pub(crate) struct KitPart {
+    pub name: &'static str,
+    pub type_id: &'static str,
+    pub preset: &'static str,
+    /// The key its steps play.
+    pub root: u8,
+    /// Index into the channel palette.
+    pub color: usize,
+    pub gain_db: f32,
+}
+
+/// A set of channels the Add menu creates in one undo step.
+pub(crate) struct Kit {
+    pub name: &'static str,
+    pub parts: &'static [KitPart],
+}
+
+const fn part(
+    name: &'static str,
+    type_id: &'static str,
+    preset: &'static str,
+    root: u8,
+    color: usize,
+    gain_db: f32,
+) -> KitPart {
+    KitPart {
+        name,
+        type_id,
+        preset,
+        root,
+        color,
+        gain_db,
+    }
+}
+
+/// Kits offered by the Add menu: a trap kit around the 808, and the
+/// recorded acoustic kit one piece per row.
+pub(crate) const KITS: [Kit; 2] = [
+    Kit {
+        name: "Trap kit",
+        parts: &[
+            part("Kick", "peel.drum.kick", "Trap Kick", 60, 0, -4.0),
+            part("Snare", "peel.drum.snare", "Trap", 60, 1, -7.0),
+            part("Clap", "peel.drum.clap", "Trap", 60, 9, -9.0),
+            part("Hat", "peel.drum.hat", "Trap Tight", 60, 2, -12.0),
+            part("Open Hat", "peel.drum.hat", "Trap Open", 60, 3, -14.0),
+            // Slide glides between overlapping notes out of the box.
+            part("808", "peel.bass.808", "Slide", 36, 6, -6.0),
+        ],
+    },
+    Kit {
+        name: "Acoustic kit",
+        parts: &[
+            part("Kick", "peel.drum.acoustic", "Kick", 60, 0, -3.0),
+            part("Snare", "peel.drum.acoustic", "Snare", 60, 1, -5.0),
+            part("Hat", "peel.drum.acoustic", "Closed Hat", 60, 2, -10.0),
+            part("Open Hat", "peel.drum.acoustic", "Open Hat", 60, 3, -12.0),
+            part("Crash", "peel.drum.acoustic", "Crash", 60, 10, -12.0),
+            part("Tom", "peel.drum.acoustic", "Floor Tom", 60, 8, -6.0),
+        ],
+    },
+];
+
+/// Adds every channel of `kit`, each on its own mixer track, as one undo
+/// step. Returns the first channel, or `None` when the mixer has no room
+/// for the whole kit.
+pub(crate) fn add_kit(s: &mut Session, kit: &Kit) -> Option<Id> {
+    let room = peel_engine::MAX_TRACKS.saturating_sub(s.project().mixer.tracks.len());
+    if room < kit.parts.len() {
+        s.notify(
+            format!(
+                "The {} needs {} mixer tracks and {room} are free",
+                kit.name,
+                kit.parts.len()
+            ),
+            true,
+        );
+        return None;
+    }
+    let mut first = None;
+    s.doc.edit(format!("Add {}", kit.name), |p| {
+        for part in kit.parts {
+            let dev = template::device(part.type_id, Some(part.preset));
+            let id = template::add_channel(p, part.name, part.color, dev, part.root);
+            if let Some(c) = p.channel_mut(id) {
+                c.gain_db = part.gain_db;
+            }
+            first.get_or_insert(id);
+        }
+    });
+    first
+}
+
 /// Adds a channel playing an installed plugin instrument.
 pub fn add_plugin_channel(s: &mut Session, type_id: &str, name: &str) -> Option<Id> {
     if crate::util::mixer_full(s) {
@@ -1405,6 +1519,86 @@ pub(crate) mod tests {
         let kick = &session.project().channel(id).unwrap().device;
         assert_eq!(kick.preset.as_deref(), Some("Punch"));
         assert_eq!(kick.params.get("body.acoustic"), Some(&0.0));
+    }
+
+    #[test]
+    fn kits_name_real_devices_and_presets() {
+        for kit in &super::KITS {
+            for part in kit.parts {
+                let presets = peel_devices::presets(part.type_id);
+                assert!(
+                    peel_devices::descriptor(part.type_id).is_some(),
+                    "{}: no device {}",
+                    kit.name,
+                    part.type_id
+                );
+                assert!(
+                    presets.iter().any(|p| p.name == part.preset),
+                    "{}: {} has no preset {}",
+                    kit.name,
+                    part.type_id,
+                    part.preset
+                );
+                assert!(part.color < peel_document::PALETTE.len());
+            }
+        }
+    }
+
+    #[test]
+    fn a_kit_arrives_as_one_undo_step_with_a_track_per_piece() {
+        for kit in &super::KITS {
+            let mut s = Session::new_silent(template::empty());
+            let tracks = s.project().mixer.tracks.len();
+            let first = super::add_kit(&mut s, kit).expect("room for a kit");
+            let p = s.project();
+            assert_eq!(p.channels.len(), kit.parts.len());
+            assert_eq!(p.mixer.tracks.len(), tracks + kit.parts.len());
+            assert_eq!(p.channels[0].id, first);
+            for (ch, part) in p.channels.iter().zip(kit.parts) {
+                assert_eq!(ch.name, part.name);
+                assert_eq!(ch.device.type_id, part.type_id);
+                assert_eq!(ch.device.preset.as_deref(), Some(part.preset));
+                assert_eq!(ch.root_key, part.root);
+                assert_eq!(ch.gain_db, part.gain_db);
+                assert!(p.mixer.track(ch.track).is_some());
+            }
+            assert!(peel_document::validate(p).iter().all(|i| !i.is_error()));
+            assert_eq!(
+                s.doc.undo().as_deref(),
+                Some(format!("Add {}", kit.name).as_str())
+            );
+            assert!(
+                s.project().channels.is_empty(),
+                "one step takes it all back"
+            );
+        }
+    }
+
+    #[test]
+    fn a_kit_is_refused_whole_when_the_mixer_lacks_room() {
+        let mut s = Session::new_silent(template::empty());
+        let kit = &super::KITS[0];
+        while s.project().mixer.tracks.len() + kit.parts.len() <= peel_engine::MAX_TRACKS {
+            super::add_instrument(&mut s, "peel.drum.clap").unwrap();
+        }
+        let before = s.project().channels.len();
+        assert!(super::add_kit(&mut s, kit).is_none());
+        assert_eq!(s.project().channels.len(), before, "no partial kit");
+    }
+
+    #[test]
+    fn the_add_menu_offers_kits_above_the_instruments() {
+        let mut h = Harness::new();
+        let before = h.session().project().channels.len();
+        h.click(W::new("rack-add"));
+        h.frame();
+        // Row 0 is the Kits heading; the first kit follows it.
+        h.click(W::new("rack-add-menu").with(("item", 1usize)));
+        h.frame();
+        let p = h.session().project();
+        assert_eq!(p.channels.len(), before + super::KITS[0].parts.len());
+        let first = &p.channels[before];
+        assert_eq!(h.studio.ws.selected_channel, Some(first.id));
     }
 
     #[test]
