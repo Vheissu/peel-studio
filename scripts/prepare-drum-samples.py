@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Build the bundled acoustic kit from a pinned CC0 Big Rusty Drums source.
 
-Developer tool only. Requires Python 3, NumPy and ffmpeg on PATH. Downloads
-only the selected recordings, caches the originals, and writes PCM16 WAVs
-plus a source/processing manifest. The app embeds the results and works offline.
+Developer tool only. Requires Python 3, NumPy, SciPy and ffmpeg on PATH.
+Downloads only the selected recordings, caches the originals, mixes each piece
+(EQ, compression, saturation) and writes PCM16 WAVs plus a source/processing
+manifest. The app embeds the results and works offline.
 """
 
 import argparse
@@ -16,6 +17,7 @@ import urllib.request
 import wave
 
 import numpy as np
+from scipy.signal import lfilter
 
 
 REVISION = "f07ce00df34a46b6b08375be56fe116cf15782bc"
@@ -36,6 +38,106 @@ PIECES = {
     "rack-tom": ("tom_14/center", "t14", (1, 3, 4, 6), {"cl": .85, "oh": .2}, .65, 3.),
     "floor-tom": ("tom_18/center", "t18", (1, 3, 6, 8), {"cl": .85, "oh": .2}, .65, 4.5),
 }
+
+
+# The mix of each piece, applied to the summed microphones. EQ bands are
+# (kind, Hz, dB, Q); "hp" is a 12 dB/octave high-pass and may be repeated.
+# `comp` is (threshold in dB below the piece's loudest peak, ratio, attack ms,
+# release ms): the slow attack lets the stick or beater through and holds the
+# ring down, which is where a close-miked drum gets its punch. `drive` blends
+# in a tanh stage for density; `tail` is (hold s, time constant s) of a decay
+# that shortens a boomy shell. A fixed chain per piece keeps the dynamics
+# between strike strengths: soft hits stay under the threshold.
+MIX = {
+    "kick": {
+        "eq": [("hp", 36, 0, .8), ("peak", 62, 4, 1.1), ("peak", 350, -6, 1.),
+               ("peak", 3500, 11, .8), ("high", 8000, 5, .7)],
+        "comp": (14, 3., 18, 110), "drive": .25, "tail": (.15, .35),
+    },
+    "snare": {
+        "eq": [("hp", 70, 0, .7), ("peak", 200, 2.5, 1.2), ("peak", 450, -3, 1.3),
+               ("peak", 5000, 4, .8), ("high", 9000, 6, .7)],
+        "comp": (14, 3.5, 8, 100), "drive": .2,
+    },
+    "closed-hat": {
+        "eq": [("hp", 350, 0, .54), ("hp", 350, 0, 1.31), ("high", 8000, 3, .7)],
+    },
+    "open-hat": {
+        "eq": [("hp", 350, 0, .54), ("hp", 350, 0, 1.31), ("peak", 560, -9, 2.5),
+               ("high", 8000, 3, .7)],
+    },
+    "ride": {
+        "eq": [("hp", 250, 0, .7), ("peak", 450, -4, 1.), ("high", 8000, 4, .7)],
+    },
+    "crash": {
+        "eq": [("hp", 250, 0, .7), ("peak", 500, -5, 1.2), ("high", 8000, 4, .7)],
+    },
+    "rack-tom": {
+        "eq": [("hp", 55, 0, .7), ("peak", 100, 2, 1.), ("peak", 400, -5, 1.1),
+               ("peak", 4000, 7, .8)],
+        "comp": (14, 3., 15, 120), "drive": .15,
+    },
+    "floor-tom": {
+        "eq": [("hp", 35, 0, .7), ("peak", 70, 2, 1.), ("peak", 350, -5, 1.1),
+               ("peak", 3500, 7, .8)],
+        "comp": (14, 3., 15, 120), "drive": .15,
+    },
+}
+
+
+def biquad(kind, hz, db, q):
+    # RBJ cookbook coefficients.
+    w = 2. * np.pi * hz / RATE
+    cos, alpha, a = np.cos(w), np.sin(w) / (2. * q), 10. ** (db / 40.)
+    if kind == "hp":
+        b = [(1. + cos) / 2., -(1. + cos), (1. + cos) / 2.]
+        d = [1. + alpha, -2. * cos, 1. - alpha]
+    elif kind == "peak":
+        b = [1. + alpha * a, -2. * cos, 1. - alpha * a]
+        d = [1. + alpha / a, -2. * cos, 1. - alpha / a]
+    elif kind == "high":
+        r = 2. * np.sqrt(a) * alpha
+        b = [a * ((a + 1.) + (a - 1.) * cos + r), -2. * a * ((a - 1.) + (a + 1.) * cos),
+             a * ((a + 1.) + (a - 1.) * cos - r)]
+        d = [(a + 1.) - (a - 1.) * cos + r, 2. * ((a - 1.) - (a + 1.) * cos),
+             (a + 1.) - (a - 1.) * cos - r]
+    else:
+        raise ValueError(kind)
+    return np.array(b) / d[0], np.array(d) / d[0]
+
+
+def equalize(audio, piece):
+    for band in MIX[piece]["eq"]:
+        b, a = biquad(*band)
+        audio = lfilter(b, a, audio, axis=0)
+    hold, tau = MIX[piece].get("tail", (0., 0.))
+    if tau:
+        t = np.arange(len(audio)) / RATE - hold
+        audio = audio * np.exp(-np.maximum(t, 0.) / tau)[:, None]
+    return audio
+
+
+def compress(audio, piece, peak):
+    mix = MIX[piece]
+    if "comp" in mix:
+        below, ratio, attack, release = mix["comp"]
+        threshold = peak * 10. ** (-below / 20.)
+        up = 1. - np.exp(-1. / (attack * .001 * RATE))
+        down = 1. - np.exp(-1. / (release * .001 * RATE))
+        # Stereo-linked peak detector with separate attack and release.
+        level = np.max(np.abs(audio), axis=1).tolist()
+        envelope, e = [], 0.
+        for x in level:
+            e += (x - e) * (up if x > e else down)
+            envelope.append(e)
+        over = np.maximum(np.array(envelope) / threshold, 1.)
+        audio = audio * (over ** (1. / ratio - 1.))[:, None]
+    drive = mix.get("drive", 0.)
+    if drive:
+        # tanh at the piece's own scale: unity gain for quiet signal.
+        scale = peak * .7
+        audio = (1. - drive) * audio + drive * scale * np.tanh(audio / scale)
+    return audio
 
 
 def sha(data):
@@ -105,7 +207,8 @@ def build(cache, output):
     manifest = {
         "source": REPOSITORY, "revision": REVISION, "license": "CC0-1.0",
         "sample_rate": RATE, "format": "stereo PCM16 WAV",
-        "processing": "Mic mix preserving original relative timing, 12 Hz high-pass, onset trim with 1 ms pre-roll, 0.25 ms attack fade, 30 ms tail fade; one common gain per piece; no per-take normalization",
+        "processing": "Mic mix preserving original relative timing, 12 Hz high-pass, onset trim with 1 ms pre-roll, 0.25 ms attack fade, 30 ms tail fade; per-piece EQ, compression and saturation (see mix); one common gain per piece; no per-take normalization",
+        "mix": MIX,
         "ffmpeg": subprocess.check_output(["ffmpeg", "-version"], text=True).splitlines()[0],
         "samples": [],
     }
@@ -123,11 +226,15 @@ def build(cache, output):
                 for audio, weight, _ in inputs:
                     mix[:len(audio)] += audio * weight
                 audio, trimmed = prepare(mix, maximum)
-                recordings.append((layer, rr, audio, trimmed, [entry for _, _, entry in inputs]))
+                recordings.append((layer, rr, equalize(audio, piece), trimmed, [entry for _, _, entry in inputs]))
+        # The compressor threshold follows the loudest take of the piece.
+        peak = max(float(np.max(np.abs(audio))) for _, _, audio, _, _ in recordings)
+        recordings = [(layer, rr, compress(audio, piece, peak), trimmed, inputs)
+                      for layer, rr, audio, trimmed, inputs in recordings]
         peak = max(float(np.max(np.abs(audio))) for _, _, audio, _, _ in recordings)
         gain = ceiling / peak
         for layer, rr, audio, trimmed, inputs in recordings:
-            audio *= gain
+            audio = audio * gain
             pcm = np.rint(audio * 32767).astype("<i2")
             file = output / f"{piece}-{layer}-{rr}.wav"
             with wave.open(str(file), "wb") as wav:

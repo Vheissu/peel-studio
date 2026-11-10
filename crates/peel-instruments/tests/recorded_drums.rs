@@ -353,8 +353,10 @@ fn plays_at_common_sample_rates() {
                 None => reference = Some((level, ring, bright)),
                 Some((l0, r0, b0)) => {
                     assert!((level - l0).abs() < 0.5, "{piece} {sr}: {level} vs {l0} dB");
+                    // A cymbal's slow tail crosses the floor at a shallow
+                    // angle, so a small change in the peak moves the time.
                     assert!(
-                        (ring / r0 - 1.0).abs() < 0.05,
+                        (ring / r0 - 1.0).abs() < 0.08,
                         "{piece} {sr}: {ring} vs {r0} s"
                     );
                     // Brightness in Hz-like units stays put across rates.
@@ -682,9 +684,9 @@ fn closed_hat_chokes_open_hat_but_not_crash() {
     // unchoked hat rings on.
     assert!(db(level(&rest, 30) / level(&open, 30)) < -20.0);
     assert!(level(&rest, 150) < 1e-3 * level(&open, 150));
-    // It fades rather than cuts: the first 2 ms after the pedal still
-    // carry most of the hat.
-    assert!(level(&rest, 0) > 0.5 * level(&open, 0));
+    // It fades rather than cuts: the 20 ms after the pedal still carry
+    // much of the hat (a 70 ms fade alone leaves half of it there).
+    assert!(level(&rest, 0) > 0.4 * level(&open, 0));
 
     // The crash under the same pedal is untouched once the short closed hat
     // has ended (closed hats are under a second long).

@@ -3,7 +3,10 @@
 //! Plays multisampled recordings of a real kit (Big Rusty Drums by
 //! Karoryfer, CC0) embedded in the binary: kick, snare, closed and open
 //! hi-hat, ride, crash, rack tom and floor tom, each with four velocity
-//! layers and three alternate takes per layer.
+//! layers and three alternate takes per layer. The recordings are mixed
+//! when the assets are built (EQ on every piece, compression and light
+//! saturation on the drums; see `assets/drums/big-rusty/README.md`), so a
+//! piece sits in a song without a channel strip of its own.
 //!
 //! ## Samples
 //!
@@ -283,14 +286,6 @@ static FILES: [[[&[u8]; TAKES]; LAYERS]; PIECES] = [
     piece_files!("rack-tom"),
     piece_files!("floor-tom"),
 ];
-
-/// Level trim per piece, in dB, applied on top of the recorded levels (one
-/// gain per articulation; the takes and layers inside a piece keep their
-/// recorded relationship).
-const PIECE_TRIM_DB: [f32; PIECES] = [0.0; PIECES];
-
-/// Overall level of the kit relative to the recordings at full scale.
-const KIT_GAIN_DB: f32 = -5.0;
 
 /// Velocities at which each layer plays at its own recorded level.
 const LAYER_VELOCITY: [f32; LAYERS] = [0.22, 0.48, 0.73, 0.95];
@@ -755,7 +750,7 @@ impl RecordedKit {
     fn derive(&mut self) {
         self.tone_hz = self.tone.get().exp();
         self.filter_on = self.tone_hz < 19_500.0;
-        self.out_gain = db_to_gain(self.gain.get() + KIT_GAIN_DB);
+        self.out_gain = db_to_gain(self.gain.get());
         self.out_width = self.width.get();
     }
 
@@ -910,7 +905,7 @@ impl Synth for RecordedKit {
         if sample.frames < 4 {
             return;
         }
-        let gain = db_to_gain(level_db - pb.level_db[layer] + PIECE_TRIM_DB[piece]);
+        let gain = db_to_gain(level_db - pb.level_db[layer]);
 
         // The kit reacts before the new hit sounds.
         self.damp_piece(piece, RETRIGGER_T60[piece]);

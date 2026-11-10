@@ -4,7 +4,259 @@
   "license": "CC0-1.0",
   "sample_rate": 48000,
   "format": "stereo PCM16 WAV",
-  "processing": "Mic mix preserving original relative timing, 12 Hz high-pass, onset trim with 1 ms pre-roll, 0.25 ms attack fade, 30 ms tail fade; one common gain per piece; no per-take normalization",
+  "processing": "Mic mix preserving original relative timing, 12 Hz high-pass, onset trim with 1 ms pre-roll, 0.25 ms attack fade, 30 ms tail fade; per-piece EQ, compression and saturation (see mix); one common gain per piece; no per-take normalization",
+  "mix": {
+    "kick": {
+      "eq": [
+        [
+          "hp",
+          36,
+          0,
+          0.8
+        ],
+        [
+          "peak",
+          62,
+          4,
+          1.1
+        ],
+        [
+          "peak",
+          350,
+          -6,
+          1.0
+        ],
+        [
+          "peak",
+          3500,
+          11,
+          0.8
+        ],
+        [
+          "high",
+          8000,
+          5,
+          0.7
+        ]
+      ],
+      "comp": [
+        14,
+        3.0,
+        18,
+        110
+      ],
+      "drive": 0.25,
+      "tail": [
+        0.15,
+        0.35
+      ]
+    },
+    "snare": {
+      "eq": [
+        [
+          "hp",
+          70,
+          0,
+          0.7
+        ],
+        [
+          "peak",
+          200,
+          2.5,
+          1.2
+        ],
+        [
+          "peak",
+          450,
+          -3,
+          1.3
+        ],
+        [
+          "peak",
+          5000,
+          4,
+          0.8
+        ],
+        [
+          "high",
+          9000,
+          6,
+          0.7
+        ]
+      ],
+      "comp": [
+        14,
+        3.5,
+        8,
+        100
+      ],
+      "drive": 0.2
+    },
+    "closed-hat": {
+      "eq": [
+        [
+          "hp",
+          350,
+          0,
+          0.54
+        ],
+        [
+          "hp",
+          350,
+          0,
+          1.31
+        ],
+        [
+          "high",
+          8000,
+          3,
+          0.7
+        ]
+      ]
+    },
+    "open-hat": {
+      "eq": [
+        [
+          "hp",
+          350,
+          0,
+          0.54
+        ],
+        [
+          "hp",
+          350,
+          0,
+          1.31
+        ],
+        [
+          "peak",
+          560,
+          -9,
+          2.5
+        ],
+        [
+          "high",
+          8000,
+          3,
+          0.7
+        ]
+      ]
+    },
+    "ride": {
+      "eq": [
+        [
+          "hp",
+          250,
+          0,
+          0.7
+        ],
+        [
+          "peak",
+          450,
+          -4,
+          1.0
+        ],
+        [
+          "high",
+          8000,
+          4,
+          0.7
+        ]
+      ]
+    },
+    "crash": {
+      "eq": [
+        [
+          "hp",
+          250,
+          0,
+          0.7
+        ],
+        [
+          "peak",
+          500,
+          -5,
+          1.2
+        ],
+        [
+          "high",
+          8000,
+          4,
+          0.7
+        ]
+      ]
+    },
+    "rack-tom": {
+      "eq": [
+        [
+          "hp",
+          55,
+          0,
+          0.7
+        ],
+        [
+          "peak",
+          100,
+          2,
+          1.0
+        ],
+        [
+          "peak",
+          400,
+          -5,
+          1.1
+        ],
+        [
+          "peak",
+          4000,
+          7,
+          0.8
+        ]
+      ],
+      "comp": [
+        14,
+        3.0,
+        15,
+        120
+      ],
+      "drive": 0.15
+    },
+    "floor-tom": {
+      "eq": [
+        [
+          "hp",
+          35,
+          0,
+          0.7
+        ],
+        [
+          "peak",
+          70,
+          2,
+          1.0
+        ],
+        [
+          "peak",
+          350,
+          -5,
+          1.1
+        ],
+        [
+          "peak",
+          3500,
+          7,
+          0.8
+        ]
+      ],
+      "comp": [
+        14,
+        3.0,
+        15,
+        120
+      ],
+      "drive": 0.15
+    }
+  },
   "ffmpeg": "ffmpeg version 8.1 Copyright (c) 2000-2026 the FFmpeg developers",
   "samples": [
     {
@@ -26,11 +278,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 0.9206721859343403,
+      "piece_gain": 0.9936405719029008,
       "frames": 81532,
-      "peak": 0.08303691975803121,
-      "rms": 0.006222058487054606,
-      "sha256": "bfd5729a6c1e299fdef7551b05db89cd997c636fa06433cec1707fd02e71ec90"
+      "peak": 0.10044542684257898,
+      "rms": 0.008815785675058668,
+      "sha256": "50117b3a9f7ae402c5a9b4b938987bd4a6dd3fbea48c4fc612a5f3741d4e3fa6"
     },
     {
       "file": "kick-1-2.wav",
@@ -51,11 +303,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 0.9206721859343403,
+      "piece_gain": 0.9936405719029008,
       "frames": 81532,
-      "peak": 0.08064435145222762,
-      "rms": 0.006052357480297578,
-      "sha256": "dcd1ce5eb6472f1cc9a872ced8025b2bf7982b589598f4eb4f05f6945e3b922c"
+      "peak": 0.0967574911238979,
+      "rms": 0.008490552067085615,
+      "sha256": "fda7d7359e18c57fdd26406b20e99ad7d6f5b6435572f21d681c239c9ddb0175"
     },
     {
       "file": "kick-1-3.wav",
@@ -76,11 +328,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 0.9206721859343403,
+      "piece_gain": 0.9936405719029008,
       "frames": 81532,
-      "peak": 0.07900773801694212,
-      "rms": 0.005990755457103861,
-      "sha256": "504bf6b34a3b1e358a0c9d8de53af8a443c4772ff9af55185cdfeac0d4cf7598"
+      "peak": 0.09646124337253445,
+      "rms": 0.008328879039754093,
+      "sha256": "91ff550a50bab54ee5c56fa95721bf8bfb78ed73269cb916fced9f84c07dbbe4"
     },
     {
       "file": "kick-2-1.wav",
@@ -101,11 +353,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 0.9206721859343403,
+      "piece_gain": 0.9936405719029008,
       "frames": 81532,
-      "peak": 0.19544311662952138,
-      "rms": 0.01380445593413654,
-      "sha256": "574b6eed8aad89be26caa81e4eb480be30dbc732398fd92cccfb3abb6287addd"
+      "peak": 0.24280049211824076,
+      "rms": 0.019937023407190255,
+      "sha256": "01655bcb857ca996cc17d0d0ff1470df6f884dfe9b339eab5ad252ceb2cada4b"
     },
     {
       "file": "kick-2-2.wav",
@@ -126,11 +378,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 0.9206721859343403,
+      "piece_gain": 0.9936405719029008,
       "frames": 81532,
-      "peak": 0.193673115759157,
-      "rms": 0.013692085088914898,
-      "sha256": "42c133db974fdb67636c63db1f55ba14b1a7bb364d7adcb9f4dbb01d3d0cc3c8"
+      "peak": 0.24066306580739508,
+      "rms": 0.01983036692911048,
+      "sha256": "78bb92624792003f3c117d446145b7e9fc8940050488fbdf0411ba2769f84841"
     },
     {
       "file": "kick-2-3.wav",
@@ -151,11 +403,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 0.9206721859343403,
+      "piece_gain": 0.9936405719029008,
       "frames": 81532,
-      "peak": 0.20007290404561365,
-      "rms": 0.014030758258500052,
-      "sha256": "7fd8ef46247916eff73d95d723c5c9ab02dd533bf50065e16cc89bbb07ed3823"
+      "peak": 0.24808500135498712,
+      "rms": 0.020364651342068465,
+      "sha256": "f6f96ec5e054db52882d291e9dcc0964b8396708838c04fa0bb9936426178bc4"
     },
     {
       "file": "kick-3-1.wav",
@@ -176,11 +428,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 0.9206721859343403,
+      "piece_gain": 0.9936405719029008,
       "frames": 81532,
-      "peak": 0.3082853418037848,
-      "rms": 0.020811378644511228,
-      "sha256": "9c8c726131ea22ec2567817b3f7c26ad7a21c6b752ee6d0cd2146d0b215cafb1"
+      "peak": 0.38426419026447994,
+      "rms": 0.029620901316076288,
+      "sha256": "bc1a6d30df519be15ee3e094f5ed47c6cc1e0baab7557d6c494f60826a59d4d5"
     },
     {
       "file": "kick-3-2.wav",
@@ -201,11 +453,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 0.9206721859343403,
+      "piece_gain": 0.9936405719029008,
       "frames": 76457,
-      "peak": 0.33422534122509406,
-      "rms": 0.021888409030908242,
-      "sha256": "5495055ff93399d100061593229e09d7a2030bd966c96a6f9be357d05e236329"
+      "peak": 0.377340178877172,
+      "rms": 0.030461378821142707,
+      "sha256": "7e943a6374ca1e8bb4ab746235c2f5f78f980ceb51bf261cf3cb4ee2b08414fe"
     },
     {
       "file": "kick-3-3.wav",
@@ -226,11 +478,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 0.9206721859343403,
+      "piece_gain": 0.9936405719029008,
       "frames": 81532,
-      "peak": 0.3068710092295832,
-      "rms": 0.021364670309145347,
-      "sha256": "9f985ba76e6bf706c507be3f38607d5e8d251836d4339858326a963e2c2091eb"
+      "peak": 0.38207115230991356,
+      "rms": 0.02992734105844026,
+      "sha256": "d9f8ca56cb1c22b20598d4c848e7011ee84a6eda12c161915503037f1bb74c43"
     },
     {
       "file": "kick-4-1.wav",
@@ -251,11 +503,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 0.9206721859343403,
+      "piece_gain": 0.9936405719029008,
       "frames": 63044,
-      "peak": 0.6991892514096524,
-      "rms": 0.04433732475462739,
-      "sha256": "0872c9cd7be738cf8cd4c80944251e26947a898b5f1845b5f8cbb68466b9dd19"
+      "peak": 0.6983999938159235,
+      "rms": 0.051047297924864614,
+      "sha256": "5780f0a99fad0cf926bbba685fa11682c908913fb09a8c49bfffd51077a1a660"
     },
     {
       "file": "kick-4-2.wav",
@@ -276,11 +528,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 0.9206721859343403,
+      "piece_gain": 0.9936405719029008,
       "frames": 62419,
       "peak": 0.72,
-      "rms": 0.045901695550116355,
-      "sha256": "0a7314ed6fab2162a013cf1ca29943105e437c7f776b4f6fd2e9757f181aedc3"
+      "rms": 0.0523027406235982,
+      "sha256": "723a8914353b98e33de88ffb59fa77680518ae34f470acd5b8cc2bd3bcf86900"
     },
     {
       "file": "kick-4-3.wav",
@@ -301,11 +553,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 0.9206721859343403,
+      "piece_gain": 0.9936405719029008,
       "frames": 59922,
-      "peak": 0.6956713555373433,
-      "rms": 0.04531468380698488,
-      "sha256": "7881dc091996d5b088b18327c4fc36b0631a8f7da3010e915aa7e2fa9c4edcab"
+      "peak": 0.7162593877982182,
+      "rms": 0.05211364981399711,
+      "sha256": "0ac5740eb8e11324737b11661b9f034e9eb58655b1b14f0b328d1940ed353895"
     },
     {
       "file": "snare-1-1.wav",
@@ -331,11 +583,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.7589530765958166,
+      "piece_gain": 1.8130820697201169,
       "frames": 92521,
-      "peak": 0.08583679019489115,
-      "rms": 0.0050684855656746835,
-      "sha256": "45aedca96751a975475a53581622f9a0a77d71322b1ff4d7fc7977f4a408ea01"
+      "peak": 0.10038155848540403,
+      "rms": 0.0050258153380468105,
+      "sha256": "327a947b8d96e4cd8be82ca02c43d1cccd0503a6c8af67782d9fcaba7691fc4b"
     },
     {
       "file": "snare-1-2.wav",
@@ -361,11 +613,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.7589530765958166,
+      "piece_gain": 1.8130820697201169,
       "frames": 92521,
-      "peak": 0.08775448906964843,
-      "rms": 0.003693415715022958,
-      "sha256": "ac74b8a7afbcad89ba25d9825934148cc91e1083c38bbd5b1a7c8a433ede1e40"
+      "peak": 0.08815041043207551,
+      "rms": 0.0036418447394405097,
+      "sha256": "abc117feb60abbb60d1f05836828fd05650afd53775b8bf5ac7b97dbe488cd62"
     },
     {
       "file": "snare-1-3.wav",
@@ -391,11 +643,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.7589530765958166,
+      "piece_gain": 1.8130820697201169,
       "frames": 92521,
-      "peak": 0.09014904408112523,
-      "rms": 0.004770727677697559,
-      "sha256": "7e4fc0d58ce80a693c070694c1487f7b05b5a137dd4b886a06ff0f0237d875fd"
+      "peak": 0.10369019360301719,
+      "rms": 0.004768483672775309,
+      "sha256": "7eb0b691d28e4921d627ab17aaf550b3443695fff3b8af26ec3ffb59cd6da3fd"
     },
     {
       "file": "snare-2-1.wav",
@@ -421,11 +673,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.7589530765958166,
+      "piece_gain": 1.8130820697201169,
       "frames": 92521,
-      "peak": 0.19470774412924519,
-      "rms": 0.009361791186312533,
-      "sha256": "edb2e8904d5dbca196a2974aad527d102df26374a806231d9ccb389061a9d702"
+      "peak": 0.20558418477768398,
+      "rms": 0.010646596084938469,
+      "sha256": "5f2deb729f70a93f775089932b2e955ebba31d4d6d76bfc8a6df05b5e1180253"
     },
     {
       "file": "snare-2-2.wav",
@@ -451,11 +703,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.7589530765958166,
+      "piece_gain": 1.8130820697201169,
       "frames": 92521,
-      "peak": 0.17912087178042493,
-      "rms": 0.008895656349165573,
-      "sha256": "f10dfeb88ca41dd0f556f45d35f3183cbc1ec3a46f72a1f5a7008523937d4901"
+      "peak": 0.19566855807438133,
+      "rms": 0.010102353591036936,
+      "sha256": "a3f180bcad3795ddc477cb04a3f59dc049f3bed20febdec92e89eeacf7d99b73"
     },
     {
       "file": "snare-2-3.wav",
@@ -481,11 +733,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.7589530765958166,
+      "piece_gain": 1.8130820697201169,
       "frames": 92521,
-      "peak": 0.17117431574455533,
-      "rms": 0.008921056727184466,
-      "sha256": "87b0a7b672d3f2ae3d346ebd49f60fa972a49290d3e0cccbd9a5271f9e567118"
+      "peak": 0.19584017266242312,
+      "rms": 0.010156493740440087,
+      "sha256": "2a1c46bac7168c44113d17d8b62f44512d17391dbb0657206d993e9b2a171220"
     },
     {
       "file": "snare-3-1.wav",
@@ -511,11 +763,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.7589530765958166,
+      "piece_gain": 1.8130820697201169,
       "frames": 92521,
-      "peak": 0.37180598367679635,
-      "rms": 0.018627304407847173,
-      "sha256": "e4998e0a3a546306a3ca844a754b1f447f519b43e0bdc13ed3623acbae1db02c"
+      "peak": 0.40222223616720315,
+      "rms": 0.020823109503523007,
+      "sha256": "1bd588ca0f726874eab25af447a6058f0975c416cbbf9a56805efd18aedfb671"
     },
     {
       "file": "snare-3-2.wav",
@@ -541,11 +793,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.7589530765958166,
+      "piece_gain": 1.8130820697201169,
       "frames": 92521,
-      "peak": 0.329119309359229,
-      "rms": 0.01819475328959104,
-      "sha256": "d1c80f10a4a191641e57a421fed7448ae6309e964fc1fce094a5c40ca98481ed"
+      "peak": 0.3908216683429769,
+      "rms": 0.020288492409004544,
+      "sha256": "000878a6f1b9bd78e4e5c69c2abe1ab10e1863afc3b5595af967154961761149"
     },
     {
       "file": "snare-3-3.wav",
@@ -571,11 +823,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.7589530765958166,
+      "piece_gain": 1.8130820697201169,
       "frames": 92035,
-      "peak": 0.4419684949289325,
-      "rms": 0.020199299767473946,
-      "sha256": "98179d67e9759a2b72871b074a1f7a380603b5558ed5d1d164078b3b4ab4cc4a"
+      "peak": 0.454503449315734,
+      "rms": 0.022572968789743294,
+      "sha256": "991c47cc2503c819b2ee676c06acc36f856d43d798fd6dbeea4db0a0e1c93ff7"
     },
     {
       "file": "snare-4-1.wav",
@@ -601,11 +853,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.7589530765958166,
+      "piece_gain": 1.8130820697201169,
       "frames": 89996,
-      "peak": 0.5127475970167542,
-      "rms": 0.0262729503625518,
-      "sha256": "ef6d3394adbe7188f43e506ceab03ff161c6499dd332a43713c4ff483da9c1cb"
+      "peak": 0.5893240939322159,
+      "rms": 0.026729781019773167,
+      "sha256": "466f9c9390b57ca4014341bcebc901e338d4d7f4f7841847a63f257ab5b538eb"
     },
     {
       "file": "snare-4-2.wav",
@@ -631,11 +883,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.7589530765958166,
+      "piece_gain": 1.8130820697201169,
       "frames": 64019,
       "peak": 0.72,
-      "rms": 0.03533854415597298,
-      "sha256": "0aba7e6d8b1c416346ad71ffbaeb3edb814886a3aa01b05522c168899fcb4745"
+      "rms": 0.034453345515884554,
+      "sha256": "d2cdfe1b87f832b4f98f71c513bd1a9f947c4c355325a19d22c3cc64e5818ad5"
     },
     {
       "file": "snare-4-3.wav",
@@ -661,11 +913,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.7589530765958166,
+      "piece_gain": 1.8130820697201169,
       "frames": 67117,
-      "peak": 0.5656173690170666,
-      "rms": 0.03150075946065404,
-      "sha256": "2e580a4f4e00ef82d0d5d8576f35ae68b25b4b787b403b0e78c6178856ca71a4"
+      "peak": 0.5931233075954593,
+      "rms": 0.03157325276443696,
+      "sha256": "c03b0912a090ee6d583f187cddab41bdf0ab38770222588fd908ab9a48f4a42c"
     },
     {
       "file": "closed-hat-1-1.wav",
@@ -686,11 +938,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.3264032235153458,
+      "piece_gain": 1.153298962609385,
       "frames": 48000,
-      "peak": 0.06384549500470706,
-      "rms": 0.0015407034599039609,
-      "sha256": "b87221b47e20b19339176dc8671ee4ebfd1cb20f31b59a0287a0044ac78e761e"
+      "peak": 0.06355906898816567,
+      "rms": 0.0013979474929895575,
+      "sha256": "427d899fdf53619049cc91619af2106a94a63f376c77624f6b914e8b9c1d9ab7"
     },
     {
       "file": "closed-hat-1-2.wav",
@@ -711,11 +963,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.3264032235153458,
+      "piece_gain": 1.153298962609385,
       "frames": 48000,
-      "peak": 0.039318401439379,
-      "rms": 0.0016378559649424713,
-      "sha256": "e4e3184a69bc40fdcb2a99e4222adfca6f23b29389f6b2e0150b5a9fa0f1c203"
+      "peak": 0.04456693424559408,
+      "rms": 0.0014928293272813327,
+      "sha256": "846abeb343a197952109fa94faa1d192b316b3cf8dd0bab8993863e8857d923d"
     },
     {
       "file": "closed-hat-1-3.wav",
@@ -736,11 +988,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.3264032235153458,
+      "piece_gain": 1.153298962609385,
       "frames": 48000,
-      "peak": 0.03767051515865716,
-      "rms": 0.001546276563402678,
-      "sha256": "5cafca9ad860bd7c66a616f580dc8dddce1fa49112584f378c1f3a9731f58650"
+      "peak": 0.04389349949787769,
+      "rms": 0.0014110992569445783,
+      "sha256": "1e1c46680fae1040e96d6039ef96909f10950c536a4637f1e63cf05c7b7ddea7"
     },
     {
       "file": "closed-hat-2-1.wav",
@@ -761,11 +1013,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.3264032235153458,
+      "piece_gain": 1.153298962609385,
       "frames": 48000,
-      "peak": 0.12822472108331792,
-      "rms": 0.003964862003275777,
-      "sha256": "d1967d891a09c5f61d363b6e279301a7dcf648f3236d41e82c73d4ae21d7b5e8"
+      "peak": 0.12588815501673148,
+      "rms": 0.0038619225638161277,
+      "sha256": "83813f987f4588b9fb4aa1055c83f04ec22471eab9657de1036d6a8aeebbaa66"
     },
     {
       "file": "closed-hat-2-2.wav",
@@ -786,11 +1038,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.3264032235153458,
+      "piece_gain": 1.153298962609385,
       "frames": 48000,
-      "peak": 0.08348308620659976,
-      "rms": 0.002568827334389165,
-      "sha256": "583dc4375c8f7c3a7df0bae92a31ec20638a0d3ed390d3cc0314f5b8814bb716"
+      "peak": 0.08253241921449046,
+      "rms": 0.0024277030489322886,
+      "sha256": "9d1f39bd1e46ff7098ea22e8f487c881463cba9ed6f2c1115f8a4f914f334da2"
     },
     {
       "file": "closed-hat-2-3.wav",
@@ -811,11 +1063,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.3264032235153458,
+      "piece_gain": 1.153298962609385,
       "frames": 48000,
-      "peak": 0.08300070751817333,
-      "rms": 0.0029058927141059464,
-      "sha256": "bce3b75531ba8be244cadeefffbcb4865ff4430838c98e825f31c6dd9893aa72"
+      "peak": 0.09187997146626993,
+      "rms": 0.00277878130269044,
+      "sha256": "c0e4d8ba6f89305b195ad7f5cae20c801164ee1cdc2368618c7e79ea67fe4457"
     },
     {
       "file": "closed-hat-3-1.wav",
@@ -836,11 +1088,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.3264032235153458,
+      "piece_gain": 1.153298962609385,
       "frames": 48000,
-      "peak": 0.1604487522004226,
-      "rms": 0.0054206979557182055,
-      "sha256": "db43fb325387caf71aed1ee3b93080d57faee6619189fdf1e27b51ec92fe058f"
+      "peak": 0.13519569997362724,
+      "rms": 0.0053914459603150175,
+      "sha256": "e37e8f96719c02da27517ab0d0e4e04e55278593bec53fc63ca8dc72f25e12e0"
     },
     {
       "file": "closed-hat-3-2.wav",
@@ -861,11 +1113,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.3264032235153458,
+      "piece_gain": 1.153298962609385,
       "frames": 48000,
-      "peak": 0.21157690763749193,
-      "rms": 0.005358047410275747,
-      "sha256": "f94a9335c4e5dffc677119877df7bd245cd34a11625bada11ed893681e3ee022"
+      "peak": 0.20374213326743906,
+      "rms": 0.005322129051254942,
+      "sha256": "c30a891bdcd5291db40205162d867aca2d0e9bce2a9745d6e738da8aaa77506e"
     },
     {
       "file": "closed-hat-3-3.wav",
@@ -886,11 +1138,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.3264032235153458,
+      "piece_gain": 1.153298962609385,
       "frames": 48000,
-      "peak": 0.2587015158313701,
-      "rms": 0.005738976859739624,
-      "sha256": "2ba613fc132ea28e45bf756cac0633def25d0b7d2922676f168dddbbab8f32e2"
+      "peak": 0.24376058477969592,
+      "rms": 0.005699444730888277,
+      "sha256": "ccd9184ebcca60ba8524d5ac751405606e5cead64df774ac5cbef39a5cff1cf3"
     },
     {
       "file": "closed-hat-4-1.wav",
@@ -911,11 +1163,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.3264032235153458,
+      "piece_gain": 1.153298962609385,
       "frames": 48000,
-      "peak": 0.37999999999999995,
-      "rms": 0.010065201706493967,
-      "sha256": "d53dc7895f04e5117592a0cda172ad8a8384c22687229e06b271dffa8bad4f00"
+      "peak": 0.33124792785080404,
+      "rms": 0.010196880884194917,
+      "sha256": "2f012cf1f1ac84b8f73684f92815089de0f2392c262658ab20c7f49ea115bc9d"
     },
     {
       "file": "closed-hat-4-2.wav",
@@ -936,11 +1188,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.3264032235153458,
+      "piece_gain": 1.153298962609385,
       "frames": 48000,
-      "peak": 0.35077893363211116,
-      "rms": 0.008554582153871618,
-      "sha256": "dc7a72d0187d98f777b21d19cbf6642b9ac991797ce4872eb59814de40108488"
+      "peak": 0.38,
+      "rms": 0.008595550348060055,
+      "sha256": "f4b71da34772eb29edf1e78d534810839a84e92990c078b7deb53a19f6276e0d"
     },
     {
       "file": "closed-hat-4-3.wav",
@@ -961,11 +1213,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.3264032235153458,
+      "piece_gain": 1.153298962609385,
       "frames": 48000,
-      "peak": 0.3143524225478018,
-      "rms": 0.00836811676979016,
-      "sha256": "91bf77cd2a3a7e222da45e6743a44b1d7ecd3b2abf9dbcc0e32b93a68aac5d5a"
+      "peak": 0.2979632467917612,
+      "rms": 0.00842974517114889,
+      "sha256": "e1699073ee74f77ffd81490d7c9414997f314349fba35d61af7e63e4e38d8275"
     },
     {
       "file": "open-hat-1-1.wav",
@@ -986,11 +1238,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 2.1516901897962812,
+      "piece_gain": 1.7406701680909533,
       "frames": 240000,
-      "peak": 0.07400671864692906,
-      "rms": 0.0029044825826918803,
-      "sha256": "3bf3a160021785dd0272919b6313efe48dbcf429ebc0c14c52fa925325c09df4"
+      "peak": 0.061932825299662715,
+      "rms": 0.001715201741817458,
+      "sha256": "6cfc2f70cb72c49582a97d35411aa11b7fc2259a9149497a7906cb63a7840e5b"
     },
     {
       "file": "open-hat-1-2.wav",
@@ -1011,11 +1263,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 2.1516901897962812,
+      "piece_gain": 1.7406701680909533,
       "frames": 240000,
-      "peak": 0.08344093460650989,
-      "rms": 0.002594488144341804,
-      "sha256": "717ca14a59e92dffe00ed75d2976dbe07342105116948c943c49fb2487a47b47"
+      "peak": 0.06983886938010053,
+      "rms": 0.0015336100451640309,
+      "sha256": "88eba988e1da75494240a5f152d8f82a38d94505bf9e4d455d37bd0f18cfa0f9"
     },
     {
       "file": "open-hat-1-3.wav",
@@ -1036,11 +1288,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 2.1516901897962812,
+      "piece_gain": 1.7406701680909533,
       "frames": 240000,
-      "peak": 0.058388428208650034,
-      "rms": 0.003654742117450439,
-      "sha256": "ad6740f682b3796b9116475625c39e6f6c57e05f42ca2aa2bcd85e9c5d733c95"
+      "peak": 0.05213620855885241,
+      "rms": 0.0023759813126172,
+      "sha256": "87516951a19b220551e880a1c353b5ad5c873c71b15612c8b14719372fbe252b"
     },
     {
       "file": "open-hat-2-1.wav",
@@ -1061,11 +1313,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 2.1516901897962812,
+      "piece_gain": 1.7406701680909533,
       "frames": 240000,
-      "peak": 0.17355253680552893,
-      "rms": 0.005948529248249505,
-      "sha256": "d29fe5ff920993882966179d8825745f38edda12b8368d441a8addda4f44223b"
+      "peak": 0.14507392737143154,
+      "rms": 0.003932841785085247,
+      "sha256": "7b3a7deea93a6bb5815feffcdd601143359a2fc066620193f195e05424392a27"
     },
     {
       "file": "open-hat-2-2.wav",
@@ -1086,11 +1338,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 2.1516901897962812,
+      "piece_gain": 1.7406701680909533,
       "frames": 240000,
-      "peak": 0.12816634335086152,
-      "rms": 0.006240481188774952,
-      "sha256": "9d3d5f187e1e2e98005d9547c49221065f5704fe61d533d2fb1d6523a122cf46"
+      "peak": 0.11057692747396022,
+      "rms": 0.00427489319075339,
+      "sha256": "dccc5e1e5d7a2563e625e5fe0fa12b33398a96f6d891da6b59b6f1b3fa6745f8"
     },
     {
       "file": "open-hat-2-3.wav",
@@ -1111,11 +1363,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 2.1516901897962812,
+      "piece_gain": 1.7406701680909533,
       "frames": 240000,
-      "peak": 0.21458526153000274,
-      "rms": 0.0054779316268553785,
-      "sha256": "efdf9ced9f1c301a3d0e3b7da5a39ee19159b1d8c02ecdc0d2cb929e9ec86f72"
+      "peak": 0.1837186663538575,
+      "rms": 0.0035786349076950023,
+      "sha256": "7bee0fb9b15b2c752b3a33f99aaceee64329fba15892f72848c0e1e29181df83"
     },
     {
       "file": "open-hat-3-1.wav",
@@ -1136,11 +1388,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 2.1516901897962812,
+      "piece_gain": 1.7406701680909533,
       "frames": 240000,
-      "peak": 0.22758395457946853,
-      "rms": 0.005439082053464587,
-      "sha256": "1d592406b716d192d5d1240320e37fc853c7d2b12fa73ca70d7b62e9cbe6ce0e"
+      "peak": 0.19614657283258616,
+      "rms": 0.00407258459989587,
+      "sha256": "74759cfa72ff2aee77f61b1a4d504ad74b25f1fcd23dbd1ad6462ffa5264ec40"
     },
     {
       "file": "open-hat-3-2.wav",
@@ -1161,11 +1413,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 2.1516901897962812,
+      "piece_gain": 1.7406701680909533,
       "frames": 240000,
-      "peak": 0.2976457573744676,
-      "rms": 0.009367755643415318,
-      "sha256": "704279ade224302d42d273613a8a55f50644837bcae7b2d78f3fd94224cfd627"
+      "peak": 0.28941273564350395,
+      "rms": 0.006365578403432087,
+      "sha256": "6f89b4bdd455e971cdcfbec9b4376fcfd27fcf7815ebef49f301492009693171"
     },
     {
       "file": "open-hat-3-3.wav",
@@ -1186,11 +1438,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 2.1516901897962812,
+      "piece_gain": 1.7406701680909533,
       "frames": 240000,
-      "peak": 0.3292179207605516,
-      "rms": 0.008540838988121652,
-      "sha256": "3a2989073ffe6a2b13cc5407b8dbeb6257310486cf2ab6e3318e1507fa075c27"
+      "peak": 0.2792716697488229,
+      "rms": 0.005795581357589956,
+      "sha256": "c1fe67f71beb657805f181a2436b3e43a780f3d89234a9010a0ee874c5d1e5e1"
     },
     {
       "file": "open-hat-4-1.wav",
@@ -1211,11 +1463,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 2.1516901897962812,
+      "piece_gain": 1.7406701680909533,
       "frames": 240000,
-      "peak": 0.3762452228712114,
-      "rms": 0.012823799243191408,
-      "sha256": "df087a82a3e82f52d6f88fa61540a346af65e4dc157d8de42aa32c451f9d2f12"
+      "peak": 0.34352241128172134,
+      "rms": 0.009372078851229594,
+      "sha256": "3bb03f25ffa6e9250e44d11b4a4cafde9babae03ad184cc3e839e81f5e4149a8"
     },
     {
       "file": "open-hat-4-2.wav",
@@ -1236,11 +1488,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 2.1516901897962812,
+      "piece_gain": 1.7406701680909533,
       "frames": 240000,
-      "peak": 0.41329697377864205,
-      "rms": 0.01202974249609419,
-      "sha256": "e33c1e863254084a6d3bef2762a6d7850f978af5d056b8a83bd6b67df5685817"
+      "peak": 0.3648650074837966,
+      "rms": 0.008262719218811535,
+      "sha256": "8ccdf570ecd0afc01f46f5822c86144fc42dde14f7bee5d301bad3b7362f7b25"
     },
     {
       "file": "open-hat-4-3.wav",
@@ -1261,11 +1513,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 2.1516901897962812,
+      "piece_gain": 1.7406701680909533,
       "frames": 240000,
       "peak": 0.42,
-      "rms": 0.01302817175746814,
-      "sha256": "dcd734199213ead363280788b82935891e6764cb8aa1bf9a046bceb986bcc47e"
+      "rms": 0.009235134840687992,
+      "sha256": "8d863c0a3ec36795cb3bcd135c8a8d18b09501435923b6efcd4da93234405493"
     },
     {
       "file": "ride-1-1.wav",
@@ -1286,11 +1538,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.3915553693590703,
+      "piece_gain": 1.1018060066307989,
       "frames": 432000,
-      "peak": 0.059526818174189026,
-      "rms": 0.0010149074189430383,
-      "sha256": "a01fe16da26aef8a1ef0314627c15897d58ea7e7fc2dc8e401bddd82c4766e34"
+      "peak": 0.047670559872685404,
+      "rms": 0.0007053567170017622,
+      "sha256": "02d4184f297da2f3b4a76c22acad35d0189920a182cdd2e7c52fab3268dee8c7"
     },
     {
       "file": "ride-1-2.wav",
@@ -1311,11 +1563,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.3915553693590703,
+      "piece_gain": 1.1018060066307989,
       "frames": 432000,
-      "peak": 0.05633848718745711,
-      "rms": 0.0010772319476258672,
-      "sha256": "89a5109b570c3f01d7f669954e5f845eec6a882a16ff993d42cf6cfadcef28c2"
+      "peak": 0.046871864434891365,
+      "rms": 0.0007146874585812826,
+      "sha256": "f2927a3425e4e6a7290fa35a915109e5c5f81df4103d489a618c9a720b1fa127"
     },
     {
       "file": "ride-1-3.wav",
@@ -1336,11 +1588,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.3915553693590703,
+      "piece_gain": 1.1018060066307989,
       "frames": 432000,
-      "peak": 0.06910569749951957,
-      "rms": 0.0012144241133678938,
-      "sha256": "f25e47e1e748976582aa358efc2f5588a94fe1d64c83ba8e80fbd611319a150f"
+      "peak": 0.060108987306305324,
+      "rms": 0.0008755752614744155,
+      "sha256": "86f2deb1f9c39b08e283aabd27196ec1a8ddf1bfcffc0140cc962d9c01b5b317"
     },
     {
       "file": "ride-2-1.wav",
@@ -1361,11 +1613,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.3915553693590703,
+      "piece_gain": 1.1018060066307989,
       "frames": 432000,
-      "peak": 0.16477560131373825,
-      "rms": 0.0024902904128376656,
-      "sha256": "c96f2d5d544f398fc8f924e54e0f82bf6c33a0b37229240073eabb0976acfc1f"
+      "peak": 0.13502075560630716,
+      "rms": 0.001895920051125863,
+      "sha256": "ce3ce05bb76bb9581f3458c76ca120cc83e6e141263f81c9b7168574a4c0bc68"
     },
     {
       "file": "ride-2-2.wav",
@@ -1386,11 +1638,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.3915553693590703,
+      "piece_gain": 1.1018060066307989,
       "frames": 432000,
-      "peak": 0.1361856569185513,
-      "rms": 0.0018258113864939955,
-      "sha256": "04bc6ba929979037f4a0a37c262e8fe8ff17c859bcd90637c51baaadfe6a8543"
+      "peak": 0.12923081792661098,
+      "rms": 0.0013439089208846335,
+      "sha256": "78e8bc731fb6f8534a767ddb6814639c0de72ecbc7f6ad6a117377cabff4b7fd"
     },
     {
       "file": "ride-2-3.wav",
@@ -1411,11 +1663,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.3915553693590703,
+      "piece_gain": 1.1018060066307989,
       "frames": 432000,
-      "peak": 0.12841256788946892,
-      "rms": 0.0022511280827230275,
-      "sha256": "207c1850efff1acd521d20ecaec19af44b93958f5a88d3344eb176bb143b7f13"
+      "peak": 0.11813921371334692,
+      "rms": 0.0016955717897505834,
+      "sha256": "cabed4690a186a03f6f618cf764b4f9ae9402ec74e4d11058448d355100c0aed"
     },
     {
       "file": "ride-3-1.wav",
@@ -1436,11 +1688,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.3915553693590703,
+      "piece_gain": 1.1018060066307989,
       "frames": 432000,
-      "peak": 0.3511354596376205,
-      "rms": 0.004849380985652925,
-      "sha256": "1e2c9006445cc302a90b320a587d3661092f07ccb03bc4b2fbb77ba96ab4e542"
+      "peak": 0.3396941554975704,
+      "rms": 0.003851490532830707,
+      "sha256": "a5a3ecb7f286d723ae7c823c903edcd1af37888b40eb30fa290b3741b1f42816"
     },
     {
       "file": "ride-3-2.wav",
@@ -1461,11 +1713,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.3915553693590703,
+      "piece_gain": 1.1018060066307989,
       "frames": 432000,
-      "peak": 0.3528978023828003,
-      "rms": 0.005157027444557135,
-      "sha256": "3499682e60bf7cf6e369474d96b95a5e5a12410a6f2c0525ce932d066f099f65"
+      "peak": 0.3998994794649407,
+      "rms": 0.004220250225690614,
+      "sha256": "51adfca2472190af020e5cc35155e449b835f2aa57ff166f99348a70a517be96"
     },
     {
       "file": "ride-3-3.wav",
@@ -1486,11 +1738,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.3915553693590703,
+      "piece_gain": 1.1018060066307989,
       "frames": 432000,
-      "peak": 0.2895242271445802,
-      "rms": 0.003684210551835713,
-      "sha256": "30afac786b60196b9456b0eb6401b4feeb2d5c38c88d59f55ff7fe40ae1a701b"
+      "peak": 0.2564280785063924,
+      "rms": 0.002940247629827292,
+      "sha256": "453d29932df71460cdc4f58a3252e9af15adbc466c9598ba55bcf6e59360eb30"
     },
     {
       "file": "ride-4-1.wav",
@@ -1511,11 +1763,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.3915553693590703,
+      "piece_gain": 1.1018060066307989,
       "frames": 432000,
-      "peak": 0.5,
-      "rms": 0.006260897780995779,
-      "sha256": "61b288df1d63917dbbaa6d608c9c11034a247b8a0aa09d88fc0a733d2cb963e1"
+      "peak": 0.49999999999999994,
+      "rms": 0.005157014743110527,
+      "sha256": "bbd5028d81067b8303c6305a7ab47d6df827fc31a58fafc76e9c44e85c1ae5ae"
     },
     {
       "file": "ride-4-2.wav",
@@ -1536,11 +1788,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.3915553693590703,
+      "piece_gain": 1.1018060066307989,
       "frames": 432000,
-      "peak": 0.48028037769198584,
-      "rms": 0.00592458629038624,
-      "sha256": "972055d4f7d799a8a0d88f0ff376d333d4dfe71e5317fea4507f51b3ef1438dc"
+      "peak": 0.41454979684810284,
+      "rms": 0.004820374728561066,
+      "sha256": "05f43a1d703932e8923201deffdcdf15b8f4ca1b027f4fdb1ff5f139c301b1f0"
     },
     {
       "file": "ride-4-3.wav",
@@ -1561,11 +1813,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.3915553693590703,
+      "piece_gain": 1.1018060066307989,
       "frames": 432000,
-      "peak": 0.41135702585696066,
-      "rms": 0.005007068877995157,
-      "sha256": "cc962cf6b4d7f1b8e554afceb9b516ae4c513096166a0d4bc6be1d572a909e58"
+      "peak": 0.3752959469002705,
+      "rms": 0.0041239352480426554,
+      "sha256": "213d26ca1655dafa11c22cf6fb36addaf9aed7ec3d78d876917b34de60ab37d5"
     },
     {
       "file": "crash-1-1.wav",
@@ -1586,11 +1838,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 3.525997255755235,
+      "piece_gain": 2.9400027169361045,
       "frames": 432000,
-      "peak": 0.08621797365294612,
-      "rms": 0.004001040006394396,
-      "sha256": "b52fdd04ec59d71ae556070fc1a86b8301ed538fa668ad53ab44a8384c49b7a4"
+      "peak": 0.09291253499817292,
+      "rms": 0.0022954056536891314,
+      "sha256": "5fe69fc27970fd8f5dce59510b8fe9280c8d4c55606a628af53d4e30bc01c9cd"
     },
     {
       "file": "crash-1-2.wav",
@@ -1611,11 +1863,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 3.525997255755235,
+      "piece_gain": 2.9400027169361045,
       "frames": 432000,
-      "peak": 0.09654806836517796,
-      "rms": 0.00452235417758074,
-      "sha256": "4192baad6c9dfb933145683620d8cab840a78927ef262aa34cab7ae09d4208b0"
+      "peak": 0.08885907519620813,
+      "rms": 0.002588834625240441,
+      "sha256": "df3d1e615e58efa6db890a572e2c74962409c1e3b6243e235ff1939f48c85112"
     },
     {
       "file": "crash-1-3.wav",
@@ -1636,11 +1888,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 3.525997255755235,
+      "piece_gain": 2.9400027169361045,
       "frames": 432000,
-      "peak": 0.12392033988958524,
-      "rms": 0.005082577358865382,
-      "sha256": "f098cd5d918500cecc9565a9925809716e05106abfaf511db89c85cb25a9b5c9"
+      "peak": 0.1292075445441959,
+      "rms": 0.0029844486476051403,
+      "sha256": "c25cd0075234ad4d0fc528947e096e493ba37e6bcd96ac0fc8f9b3d322116c76"
     },
     {
       "file": "crash-2-1.wav",
@@ -1661,11 +1913,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 3.525997255755235,
+      "piece_gain": 2.9400027169361045,
       "frames": 432000,
-      "peak": 0.1726561447017659,
-      "rms": 0.005237415831646875,
-      "sha256": "5a4cdae3ff509b2c6910f3b2ff2dc58ee20c500ebe9ce24b931830dd3aa7c8d5"
+      "peak": 0.16637541473288944,
+      "rms": 0.003305042425736579,
+      "sha256": "4a494748910f7e9ac4c4af9c0963d311dd6a8d9018641f680a7d5b17dc65888a"
     },
     {
       "file": "crash-2-2.wav",
@@ -1686,11 +1938,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 3.525997255755235,
+      "piece_gain": 2.9400027169361045,
       "frames": 432000,
-      "peak": 0.152183678309796,
-      "rms": 0.006800607961475038,
-      "sha256": "ee85bc63111b47683eaa425c719c684712a1f5e896efc55f8ccfe7b258c413d1"
+      "peak": 0.12721195219932138,
+      "rms": 0.003927806635504984,
+      "sha256": "9ccfa3963d6660e691e8612df5de37fac56038901ea767fbd1a7a86ab5dc87e4"
     },
     {
       "file": "crash-2-3.wav",
@@ -1711,11 +1963,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 3.525997255755235,
+      "piece_gain": 2.9400027169361045,
       "frames": 432000,
-      "peak": 0.13599231977719545,
-      "rms": 0.004247668650350103,
-      "sha256": "74cfb5cb9a7868038f682f2492b353cb7af88774541a27cf1d23251a0c331359"
+      "peak": 0.13698671439446394,
+      "rms": 0.002716520549530267,
+      "sha256": "5813613a5da92ef6cd6b15845820cd3d264a6465d2825c58e483fa0e5ca99eb9"
     },
     {
       "file": "crash-3-1.wav",
@@ -1736,11 +1988,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 3.525997255755235,
+      "piece_gain": 2.9400027169361045,
       "frames": 432000,
-      "peak": 0.49477716021091017,
-      "rms": 0.012932067009600876,
-      "sha256": "4feeef2bd3dd45fcd30ea38a1177427784304fc6d06649f85ed33f0f41789a7d"
+      "peak": 0.5747495520459039,
+      "rms": 0.008507125040882049,
+      "sha256": "7363d579177e91563d05b3c9c06ff9b8b1893c5d1950e7e3b503568bb528b84e"
     },
     {
       "file": "crash-3-2.wav",
@@ -1761,11 +2013,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 3.525997255755235,
+      "piece_gain": 2.9400027169361045,
       "frames": 432000,
-      "peak": 0.3385690481621562,
-      "rms": 0.0147160188261793,
-      "sha256": "25a6a704676a6398528d3353067056ee44f6e730657cf8ef76c8b94761f4802a"
+      "peak": 0.3378293419386117,
+      "rms": 0.010230879195520874,
+      "sha256": "51555955a0d0d8c0bcb5b04ea78584ea379847d9c12fa90aef615735463f73ce"
     },
     {
       "file": "crash-3-3.wav",
@@ -1786,11 +2038,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 3.525997255755235,
+      "piece_gain": 2.9400027169361045,
       "frames": 432000,
-      "peak": 0.5152543436585912,
-      "rms": 0.010694101266737277,
-      "sha256": "af0fa3e34398fdad7d4500aba7defc4efa0a2e9bf727e1ea1f9ef0aaf9fb8d30"
+      "peak": 0.535448065344618,
+      "rms": 0.007158939278411119,
+      "sha256": "45acdf1b26a0689e6176726883324f75c85a92837fc3b3a62762318fe98685b4"
     },
     {
       "file": "crash-4-1.wav",
@@ -1811,11 +2063,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 3.525997255755235,
+      "piece_gain": 2.9400027169361045,
       "frames": 432000,
       "peak": 0.6,
-      "rms": 0.014060726120835568,
-      "sha256": "2c4ed06d295db7a91d46f919192261fb83632170d44a5573bec87a7ffa331807"
+      "rms": 0.010783966126143555,
+      "sha256": "60dc822582bb71b8cc91123b5a13a21711c5ccab96d1da90b3dea2c1359df3dd"
     },
     {
       "file": "crash-4-2.wav",
@@ -1836,11 +2088,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 3.525997255755235,
+      "piece_gain": 2.9400027169361045,
       "frames": 432000,
-      "peak": 0.5733607473249558,
-      "rms": 0.01512584377637376,
-      "sha256": "2d721dcb57417dd504554533d10c09aa7ab5ae128162780d57b7c5342c6b0082"
+      "peak": 0.45521298405475996,
+      "rms": 0.011704475801147382,
+      "sha256": "9072dc30b4be717ec1caa82088a4bf44de9e8dca85e0591bb0ca820624d2165c"
     },
     {
       "file": "crash-4-3.wav",
@@ -1861,11 +2113,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 3.525997255755235,
+      "piece_gain": 2.9400027169361045,
       "frames": 432000,
-      "peak": 0.5382873581663244,
-      "rms": 0.01397162371260587,
-      "sha256": "3324ee2e075e9c32f75ffb9dd9c787de1cb2d111dba7f4ed2c4d0bd3432f1fda"
+      "peak": 0.5225447880442965,
+      "rms": 0.01048217275770638,
+      "sha256": "020373346358fd25e0e61315de0714f41532d8271944572ba88cce01f767478e"
     },
     {
       "file": "rack-tom-1-1.wav",
@@ -1886,11 +2138,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.9317395571307745,
+      "piece_gain": 2.1985013624146994,
       "frames": 119843,
-      "peak": 0.08903336829339238,
-      "rms": 0.007865469843767304,
-      "sha256": "66df4161debd833e40d513534cd94d209ec4f339a468502848ba4bfcfee53c46"
+      "peak": 0.10167188712962073,
+      "rms": 0.010055367433163402,
+      "sha256": "e161f332d5a18ddfa18fa330591c081c7844e6209525f9a187122e4a6b2844e1"
     },
     {
       "file": "rack-tom-1-2.wav",
@@ -1911,11 +2163,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.9317395571307745,
+      "piece_gain": 2.1985013624146994,
       "frames": 119843,
-      "peak": 0.0589755672265062,
-      "rms": 0.0064814956250011475,
-      "sha256": "d4722eb0b0c81da917240a635cbf9122e5b2f6feaaea4a45ea5225523fe9e436"
+      "peak": 0.07586042216278623,
+      "rms": 0.008306886173383713,
+      "sha256": "12bd16ff44333bdb2e660e81d0e031c5f9e3b4cd2ecddb500515f47e86ff7ffb"
     },
     {
       "file": "rack-tom-1-3.wav",
@@ -1936,11 +2188,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.9317395571307745,
+      "piece_gain": 2.1985013624146994,
       "frames": 119843,
-      "peak": 0.07011669131639477,
-      "rms": 0.006993669625488549,
-      "sha256": "db3753fad1f1b6431fc66d1573b2b8eefaf488d5aa3a70d4b90b5b92a38b07f4"
+      "peak": 0.08372095487856616,
+      "rms": 0.008934958583442135,
+      "sha256": "02751146e72ed989dd1d2449b4abc0e575ec2131ba89333f2eded620c950d503"
     },
     {
       "file": "rack-tom-2-1.wav",
@@ -1961,11 +2213,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.9317395571307745,
+      "piece_gain": 2.1985013624146994,
       "frames": 119843,
-      "peak": 0.2557306231726436,
-      "rms": 0.015841255154437787,
-      "sha256": "d6731b91849ceafbbd3c9be81c41cf276a3d6c4b85ad255164d54a0b7a37a608"
+      "peak": 0.2562692340676853,
+      "rms": 0.01949716397008676,
+      "sha256": "3a5af91cc06209e047e0b6eed5761e0c88283e762a477b14819eb2fa6d832bd3"
     },
     {
       "file": "rack-tom-2-2.wav",
@@ -1986,11 +2238,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.9317395571307745,
+      "piece_gain": 2.1985013624146994,
       "frames": 119843,
-      "peak": 0.22040002440491888,
-      "rms": 0.015787617281572554,
-      "sha256": "cc18d5a4a11955002abec0d062d721456829d5703c767d41f0559d2a98f97f54"
+      "peak": 0.234824259934209,
+      "rms": 0.019583674303523268,
+      "sha256": "c116a3a6dea2e09a3cad4276dd5b42e049c4389b9b4264aeb5629a26635ecd2c"
     },
     {
       "file": "rack-tom-2-3.wav",
@@ -2011,11 +2263,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.9317395571307745,
+      "piece_gain": 2.1985013624146994,
       "frames": 119843,
-      "peak": 0.22474749476038375,
-      "rms": 0.015758102153055127,
-      "sha256": "a517ac20eacee1745d08b18ed712e9cb6a9ec1521b006502e828a7a0ce00c0d1"
+      "peak": 0.22923576805242704,
+      "rms": 0.019495836944757598,
+      "sha256": "c6c939a9ea6c4944fd7dd3b35947640dac6eabe8f6c18036e129764da850755c"
     },
     {
       "file": "rack-tom-3-1.wav",
@@ -2036,11 +2288,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.9317395571307745,
+      "piece_gain": 2.1985013624146994,
       "frames": 119843,
-      "peak": 0.2929804757183715,
-      "rms": 0.019206196785377695,
-      "sha256": "4d86da75b186143a7bcc65d78034a7345b90c2b4db030f61a0483726540d0215"
+      "peak": 0.3036236431878549,
+      "rms": 0.023217640434573483,
+      "sha256": "fece83d1dec6ab45ec780091e3fb83ae24b974a92e56393a7acb6defba8d9671"
     },
     {
       "file": "rack-tom-3-2.wav",
@@ -2061,11 +2313,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.9317395571307745,
+      "piece_gain": 2.1985013624146994,
       "frames": 119843,
-      "peak": 0.2989712282819643,
-      "rms": 0.02010485427146931,
-      "sha256": "2a597b80d7babc8b84eb5d0f9bc8152e64edd6689a57347e75e76b0aed243d8d"
+      "peak": 0.29716977089637325,
+      "rms": 0.0239757860129634,
+      "sha256": "4857702a2771981df1c42d622f49c83f8842dac2c5240f4a18d26a1e3891d69d"
     },
     {
       "file": "rack-tom-3-3.wav",
@@ -2086,11 +2338,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.9317395571307745,
+      "piece_gain": 2.1985013624146994,
       "frames": 119843,
-      "peak": 0.27147002777535584,
-      "rms": 0.018475177611754642,
-      "sha256": "8f18e463c23b693174967e98dfce8bd764655515ba3c6d53fe6c1f0acd64953b"
+      "peak": 0.2894279462219229,
+      "rms": 0.022562616167758155,
+      "sha256": "a0cd1260e668aa4446ba7fd83b016f6dd403a91562f4ef2894b6ff8192e57c81"
     },
     {
       "file": "rack-tom-4-1.wav",
@@ -2111,11 +2363,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.9317395571307745,
+      "piece_gain": 2.1985013624146994,
       "frames": 107783,
-      "peak": 0.6128313706064168,
-      "rms": 0.03808708976783932,
-      "sha256": "229727dfb4098b3b99169ac1100824f9aba43ec90620a37079cdf2155f35b07c"
+      "peak": 0.65,
+      "rms": 0.03491691809281537,
+      "sha256": "213d615ebda64a28a2875bc67c85ce98968794f4ebd1fdde3141d4888e1bcae0"
     },
     {
       "file": "rack-tom-4-2.wav",
@@ -2136,11 +2388,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.9317395571307745,
+      "piece_gain": 2.1985013624146994,
       "frames": 106991,
-      "peak": 0.65,
-      "rms": 0.037044600470056574,
-      "sha256": "f4fd8ed00de7b548ca91f9a7880f377657d0c4c6b6600d6edfd2c2b4360bc3b0"
+      "peak": 0.6492728276617408,
+      "rms": 0.03440739546639933,
+      "sha256": "a08bda05fcccf7cd14c5481fccfb2ed75d814a6f56d854c2e40b76d0f6c7a296"
     },
     {
       "file": "rack-tom-4-3.wav",
@@ -2161,11 +2413,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.9317395571307745,
+      "piece_gain": 2.1985013624146994,
       "frames": 106976,
-      "peak": 0.6036931243363998,
-      "rms": 0.035217914013439454,
-      "sha256": "b00b680934a439738d25e56d1602390736320fbe7f505622197d3f7568dc0caa"
+      "peak": 0.6018841699114809,
+      "rms": 0.033486688243471695,
+      "sha256": "10ac75daefd1e00cfc831b1d6458710e0b93b660c84252b52706d1f1da6a97c7"
     },
     {
       "file": "floor-tom-1-1.wav",
@@ -2186,11 +2438,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.1705032024276623,
+      "piece_gain": 1.3690988036563871,
       "frames": 108956,
-      "peak": 0.0782300700387023,
-      "rms": 0.005038076899406671,
-      "sha256": "3272521a50e1765976246e5a0126ea5a2c2560b79cb8e2c2e73b5f117570323a"
+      "peak": 0.09243565167658994,
+      "rms": 0.006353409912225071,
+      "sha256": "433c09222018f13200f190a742035908b65b55f25e6c0be1229630cc92ab42b7"
     },
     {
       "file": "floor-tom-1-2.wav",
@@ -2211,11 +2463,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.1705032024276623,
+      "piece_gain": 1.3690988036563871,
       "frames": 108956,
-      "peak": 0.06342108046552704,
-      "rms": 0.004367809854525771,
-      "sha256": "a1084d089853de7211da5ec63f3bae21f49f4401bdf1090d7c65ffe5995339bf"
+      "peak": 0.07153625621112394,
+      "rms": 0.005617573672825583,
+      "sha256": "daa69ddd0616ef51de1d59db4564246376535e3d5dbfa753fddff902ae8c8186"
     },
     {
       "file": "floor-tom-1-3.wav",
@@ -2236,11 +2488,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.1705032024276623,
+      "piece_gain": 1.3690988036563871,
       "frames": 108956,
-      "peak": 0.0697737146464216,
-      "rms": 0.0048512732421869915,
-      "sha256": "db707ad04162ff4428ca5c20a1eb8803dc44e0bf91a7920a6bfec351c784b7d2"
+      "peak": 0.08131030462848082,
+      "rms": 0.00621836676833823,
+      "sha256": "bfdb7117a42818737c249119717fd09ba24f212090f6e4cf0200626e1450372c"
     },
     {
       "file": "floor-tom-2-1.wav",
@@ -2261,11 +2513,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.1705032024276623,
+      "piece_gain": 1.3690988036563871,
       "frames": 108956,
-      "peak": 0.13929841772116858,
-      "rms": 0.010092178602992675,
-      "sha256": "7e868a32cfda9b8c1b8bac86ebcb9e8d103134d638b33d6142c9f667f6eec4e1"
+      "peak": 0.15917137238860682,
+      "rms": 0.01287087349280384,
+      "sha256": "5ce9f5b8ef7c069dee31b3eb9c39dea54ea5a494aec937989f3d6b1c49a29f09"
     },
     {
       "file": "floor-tom-2-2.wav",
@@ -2286,11 +2538,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.1705032024276623,
+      "piece_gain": 1.3690988036563871,
       "frames": 108956,
-      "peak": 0.14598615673198653,
-      "rms": 0.010348119715933538,
-      "sha256": "a2e2f3b3f7ec10899b69aa767bb2eaacb20633bc7b7b52ec256206e1facd0090"
+      "peak": 0.1689704954834078,
+      "rms": 0.013137915644224875,
+      "sha256": "b2b2f27f6295107c1a6bbb00c5742f9df6c1fdd57d06836ca8901446b4b418f1"
     },
     {
       "file": "floor-tom-2-3.wav",
@@ -2311,11 +2563,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.1705032024276623,
+      "piece_gain": 1.3690988036563871,
       "frames": 108956,
-      "peak": 0.12749594263550784,
-      "rms": 0.009051050979685695,
-      "sha256": "7a12ad110f387cc3818c9301b0bda58473721295f904066e6adc7b12463eeba3"
+      "peak": 0.1534426893655688,
+      "rms": 0.011475695068475142,
+      "sha256": "96233333fbb861948fd8af9b2ce0a4ffc36c0ad2b68df838ec06ead245812b51"
     },
     {
       "file": "floor-tom-3-1.wav",
@@ -2336,11 +2588,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.1705032024276623,
+      "piece_gain": 1.3690988036563871,
       "frames": 102742,
-      "peak": 0.36463749063665485,
-      "rms": 0.024818133757677507,
-      "sha256": "17f0c6f6fa73e5b3e74d2cb05f078955ad61324c850f27815b1f07c7519af4c6"
+      "peak": 0.3745894297709042,
+      "rms": 0.02964443038101598,
+      "sha256": "a29f9d0dde8055ddc42ca36346e1b2de3eecbfa7e2c5b78693d3087e84cf8b8b"
     },
     {
       "file": "floor-tom-3-2.wav",
@@ -2361,11 +2613,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.1705032024276623,
+      "piece_gain": 1.3690988036563871,
       "frames": 99327,
-      "peak": 0.3630600650709629,
-      "rms": 0.024066351861258283,
-      "sha256": "87d041629d10faf26131773f43257da007e8befd4d7c6d2990f05e2f520b29e9"
+      "peak": 0.3705472606509785,
+      "rms": 0.029137915806533823,
+      "sha256": "91d6c09e62bce6d046678da58f188e15ee17da177136b68cde0a153b04df01d0"
     },
     {
       "file": "floor-tom-3-3.wav",
@@ -2386,11 +2638,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.1705032024276623,
+      "piece_gain": 1.3690988036563871,
       "frames": 99293,
-      "peak": 0.384744420176283,
-      "rms": 0.028079205277625092,
-      "sha256": "110ac21d625ed5375a9c7898e7b92f5b1c5b5fd85bf97b7348795a4d372776c6"
+      "peak": 0.40104985550630784,
+      "rms": 0.03231916605680746,
+      "sha256": "32102144f8b9350433b03f72b26c7fe8170e75e922124822129c23bcfef1b886"
     },
     {
       "file": "floor-tom-4-1.wav",
@@ -2411,11 +2663,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.1705032024276623,
+      "piece_gain": 1.3690988036563871,
       "frames": 98394,
-      "peak": 0.6033880474060334,
-      "rms": 0.03954024543554728,
-      "sha256": "cabc98bf0427625d66968857f5f506092384d056cc46e1ae76cbc96217b08aa1"
+      "peak": 0.6010861267221261,
+      "rms": 0.039585815209819276,
+      "sha256": "f8664357ad7efeafe79ac9446e234fe19577e4f0941d0e2f4c82ca8434f541e7"
     },
     {
       "file": "floor-tom-4-2.wav",
@@ -2436,11 +2688,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.1705032024276623,
+      "piece_gain": 1.3690988036563871,
       "frames": 90410,
-      "peak": 0.6284116814280984,
-      "rms": 0.042155032448291045,
-      "sha256": "68849dc050f0e939f1e7022c0000818a21513b17029161051d5874d8401fb7ad"
+      "peak": 0.5927317895894287,
+      "rms": 0.04174992775573943,
+      "sha256": "847e25bf008b05aa6af821de2ebe6335f38a75d1c7bc3dd7ee00cd90788239f4"
     },
     {
       "file": "floor-tom-4-3.wav",
@@ -2461,11 +2713,11 @@
         }
       ],
       "trimmed_source_frames": 0,
-      "piece_gain": 1.1705032024276623,
+      "piece_gain": 1.3690988036563871,
       "frames": 90414,
       "peak": 0.65,
-      "rms": 0.04362810853254146,
-      "sha256": "512da16daecb07d5246b2ba8e94158ca2118dd1885b8f249ce55f511cc4b5b58"
+      "rms": 0.0422955097825295,
+      "sha256": "f736a99dac0cf05139c913b78e5ae1895b9792587ebdf5b2847fb53f306af6ee"
     }
   ]
 }
