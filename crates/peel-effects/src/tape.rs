@@ -8,7 +8,10 @@
 //!
 //! The saturation is antialiased by integrating the curve between
 //! consecutive samples (first-order ADAA), which needs no oversampling
-//! filters. Its gain is normalized so turning Drive up squeezes rather than
+//! filters. Only the part of the curve that bends is treated that way: the
+//! straight part passes through untouched, so a quiet signal keeps its top
+//! end and only the distortion products are band-limited. The gain is
+//! normalized so turning Drive up squeezes rather than
 //! clips: quiet material rises by half the drive, while a full-scale signal
 //! stays just under full scale.
 //!
@@ -128,7 +131,7 @@ pub static PRESETS: [Preset; 6] = [
         params: &[
             ("drive", 3.0),
             ("bump", 0.15),
-            ("tone", 17_000.0),
+            ("tone", 20_000.0),
             ("wow", 0.0),
             ("flutter", 0.0),
         ],
@@ -173,6 +176,8 @@ pub static PRESETS: [Preset; 6] = [
     },
 ];
 
+/// Tone settings from here up leave the top end alone.
+const TONE_OPEN: f32 = 19_500.0;
 /// Resting delay of the transport, in seconds.
 const BASE_SECONDS: f32 = 0.003;
 /// Bias of the saturation curve: a little asymmetry for even harmonics.
@@ -190,20 +195,27 @@ fn ln_cosh(x: f64) -> f64 {
     a + (-2.0 * a).exp().ln_1p() - std::f64::consts::LN_2
 }
 
-/// The saturation curve at input gain `s`, with first-order ADAA.
+/// The saturation curve at input gain `s`: `tanh(s x + b) - tanh(b)`, split
+/// into its slope at zero and the rest, with first-order ADAA on the rest.
 #[derive(Clone, Copy, Default)]
 struct Shaper {
     x1: f64,
 }
 
 impl Shaper {
-    fn curve(x: f64, s: f64) -> f64 {
-        (s * x + BIAS).tanh() - BIAS.tanh()
+    /// Slope of the curve at zero.
+    fn slope(s: f64) -> f64 {
+        s * (1.0 - BIAS.tanh().powi(2))
     }
 
-    /// Antiderivative of [`Shaper::curve`] in `x`.
+    /// The curve minus its tangent at zero: nothing for quiet signals.
+    fn bend(x: f64, s: f64) -> f64 {
+        (s * x + BIAS).tanh() - BIAS.tanh() - Self::slope(s) * x
+    }
+
+    /// Antiderivative of [`Shaper::bend`] in `x`.
     fn integral(x: f64, s: f64) -> f64 {
-        ln_cosh(s * x + BIAS) / s - BIAS.tanh() * x
+        ln_cosh(s * x + BIAS) / s - BIAS.tanh() * x - 0.5 * Self::slope(s) * x * x
     }
 
     fn reset(&mut self) {
@@ -216,13 +228,13 @@ impl Shaper {
         let dx = x - self.x1;
         // Both ends are integrated at today's gain, so a moving Drive
         // never leaves a stale term in the difference.
-        let y = if dx.abs() < 1e-6 {
-            Self::curve(0.5 * (x + self.x1), s)
+        let bend = if dx.abs() < 1e-6 {
+            Self::bend(0.5 * (x + self.x1), s)
         } else {
             (Self::integral(x, s) - Self::integral(self.x1, s)) / dx
         };
         self.x1 = x;
-        y as f32
+        (Self::slope(s) * x + bend) as f32
     }
 }
 
@@ -370,13 +382,12 @@ impl Fx for Tape {
             } else {
                 Coeffs::design(FilterKind::Peak, sr, 85.0, 0.8, 5.0 * value)
             }),
-            ID_TONE => self.tone.set_target(Coeffs::design(
-                FilterKind::LowPass,
-                sr,
-                value.min(0.45 * sr),
-                0.6,
-                0.0,
-            )),
+            // Fully open is no filter at all, not a cut near Nyquist.
+            ID_TONE => self.tone.set_target(if value >= TONE_OPEN {
+                Coeffs::IDENTITY
+            } else {
+                Coeffs::design(FilterKind::LowPass, sr, value.min(0.45 * sr), 0.6, 0.0)
+            }),
             ID_WOW => self.wow.set_target(value.powf(1.5)),
             ID_FLUTTER => self.flutter.set_target(value.powf(1.5)),
             ID_HISS => self.hiss.set_target(value * value * HISS),
