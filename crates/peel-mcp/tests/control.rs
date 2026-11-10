@@ -324,6 +324,39 @@ fn demo_can_be_edited_with_the_current_device_catalog() {
 }
 
 #[test]
+fn new_project_loads_demo_songs_and_starters_by_name() {
+    let mut h = Host::new();
+    h.call(
+        "new_project",
+        json!({"title":"x","song":"night shift","discard_changes":true}),
+    )
+    .unwrap();
+    assert_eq!(h.s.project().meta.title, "Night Shift");
+    assert!(
+        h.s.project()
+            .channels
+            .iter()
+            .any(|c| c.device.type_id == "peel.bass.808")
+    );
+    h.call(
+        "new_project",
+        json!({"title":"x","song":"Synthwave","discard_changes":true}),
+    )
+    .unwrap();
+    assert!(!h.s.project().arrangement().clips.is_empty());
+    let error = h
+        .call(
+            "new_project",
+            json!({"title":"x","song":"Polka","discard_changes":true}),
+        )
+        .unwrap_err();
+    assert!(
+        error.contains("Night Shift") && error.contains("Trap"),
+        "{error}"
+    );
+}
+
+#[test]
 fn closing_input_and_disconnecting_release_the_audio_input() {
     let mut h = Host::new();
     let _input = h.s.open_injected_input(48_000, 1);

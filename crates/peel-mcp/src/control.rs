@@ -164,13 +164,14 @@ impl Control {
             Action::NewProject {
                 title,
                 demo,
+                song,
                 discard_changes,
             } => {
                 can_replace(s, discard_changes)?;
-                let p = if demo {
-                    peel_session::template::showcase()
-                } else {
-                    Project::empty(title)
+                let p = match song {
+                    Some(name) => built_in_song(&name)?,
+                    None if demo => peel_session::template::showcase(),
+                    None => Project::empty(title),
                 };
                 s.replace_project(p);
                 Ok(json!({"project_id": s.project().id}))
@@ -796,6 +797,27 @@ fn lane_exists(s: &Session, lane: Id) -> Result<(), String> {
     } else {
         Err("Arrangement lane does not exist".into())
     }
+}
+/// A demo song by title or a song starter by name, ignoring case.
+fn built_in_song(name: &str) -> Result<Project, String> {
+    use peel_session::template;
+    let demos = template::demos();
+    if let Some(d) = demos.iter().find(|d| d.title.eq_ignore_ascii_case(name)) {
+        return Ok((d.make)());
+    }
+    let templates = template::templates();
+    if let Some((_, make)) = templates.iter().find(|(n, _)| n.eq_ignore_ascii_case(name)) {
+        return Ok(make());
+    }
+    let known: Vec<&str> = demos
+        .iter()
+        .map(|d| d.title)
+        .chain(templates.iter().map(|(n, _)| *n))
+        .collect();
+    Err(format!(
+        "No song called {name}. Choose one of: {}",
+        known.join(", ")
+    ))
 }
 fn can_replace(s: &Session, discard: bool) -> Result<(), String> {
     if s.is_recording() || s.pattern_recording_active() {
