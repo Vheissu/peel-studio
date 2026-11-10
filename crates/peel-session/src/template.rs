@@ -459,6 +459,31 @@ pub fn templates() -> Vec<Template> {
     ]
 }
 
+/// A finished song that ships with the app, offered on the start screen
+/// and under File > Demo songs.
+#[derive(Clone, Copy, Debug)]
+pub struct Demo {
+    pub title: &'static str,
+    /// Genre, as a short label: "Progressive house".
+    pub style: &'static str,
+    /// Opening tempo.
+    pub bpm: f32,
+    /// Key, written out: "A minor".
+    pub key: &'static str,
+    pub make: fn() -> Project,
+}
+
+/// The demo songs, in menu order. The first is the one `--demo` renders.
+pub fn demos() -> Vec<Demo> {
+    vec![Demo {
+        title: "Afterglow",
+        style: "Progressive house",
+        bpm: 120.0,
+        key: "A minor",
+        make: showcase,
+    }]
+}
+
 /// Catalog name of the rock / metal song.
 const ROCK_METAL: &str = "Rock / Metal";
 
