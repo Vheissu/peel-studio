@@ -91,7 +91,7 @@ impl Theme {
 
             text: Color::hex(0xF3EEE4),
             text_dim: Color::hex(0xB9B2A6),
-            text_faint: Color::hex(0x8F887C),
+            text_faint: Color::hex(0x999286),
             text_on_accent: Color::hex(0x1F1305),
 
             accent: Color::hex(0xF7992B),

@@ -83,7 +83,7 @@
       "text-faint": {
         "role": "neutral",
         "displayName": "Faint text",
-        "canonical": "#8F887C"
+        "canonical": "#999286"
       }
     },
     "typographyMeta": {
@@ -159,7 +159,7 @@
       "refersTo": "text-field",
       "description": "Single-line field on the seam color with a strong line; the stroke turns focus cyan while editing.",
       "html": "<input class=\"ds-input\" placeholder=\"Search\">",
-      "css": ".ds-input { height: 24px; padding: 0 8px; background: #0C0B0A; color: #F3EEE4; font: 500 13px 'Barlow Semi Condensed', sans-serif; border: 1px solid #403C37; border-radius: 4px; } .ds-input::placeholder { color: #8F887C; } .ds-input:focus { outline: none; border-color: rgba(110, 196, 230, 0.7); }"
+      "css": ".ds-input { height: 24px; padding: 0 8px; background: #0C0B0A; color: #F3EEE4; font: 500 13px 'Barlow Semi Condensed', sans-serif; border: 1px solid #403C37; border-radius: 4px; } .ds-input::placeholder { color: #999286; } .ds-input:focus { outline: none; border-color: rgba(110, 196, 230, 0.7); }"
     },
     {
       "name": "Pane Tab",
