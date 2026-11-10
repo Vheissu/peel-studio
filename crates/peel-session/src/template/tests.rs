@@ -317,11 +317,18 @@ fn trap_snare_is_half_time_and_hats_roll() {
         "no triplet roll: {gaps:?}"
     );
 
-    let low = in_section(&p, "Hook", "peel.synth.bass");
+    let low = in_section(&p, "Hook", "peel.bass.808");
     assert!(
         low.iter().map(|h| h.key).min() < Some(36),
         "808 sits in the sub range"
     );
+    // The jump at the end of each hook bar is a slide: the note before it
+    // is still held when it starts.
+    let slides = low
+        .windows(2)
+        .filter(|w| w[0].beat + w[0].len > w[1].beat && w[1].key == w[0].key + 12)
+        .count();
+    assert!(slides >= 8, "{slides} octave slides in the hook");
 }
 
 #[test]
@@ -723,4 +730,370 @@ fn rock_metal_has_distorted_guitar_and_bass_that_change_by_section() {
         .map(|h| (h.beat * 12.0).round() as i64)
         .collect();
     assert_eq!(kicks, chugs);
+}
+
+// ---------------------------------------------------------------- demos
+
+fn demo(title: &str) -> Project {
+    let d = super::demos()
+        .into_iter()
+        .find(|d| d.title == title)
+        .unwrap_or_else(|| panic!("no demo called {title}"));
+    (d.make)()
+}
+
+fn channel_named<'a>(p: &'a Project, name: &str) -> &'a peel_document::Channel {
+    p.channels
+        .iter()
+        .find(|c| c.name == name)
+        .unwrap_or_else(|| panic!("no channel {name}"))
+}
+
+fn track_named(p: &Project, name: &str) -> Id {
+    p.mixer
+        .tracks
+        .iter()
+        .find(|t| t.name == name)
+        .unwrap_or_else(|| panic!("no mixer track {name}"))
+        .id
+}
+
+/// The project with only `track` soloed and the master chain removed.
+fn soloed(p: &Project, track: &str) -> Project {
+    let mut p = p.clone();
+    let id = track_named(&p, track);
+    p.mixer.tracks[0].inserts.clear();
+    p.mixer.track_mut(id).unwrap().solo = true;
+    p
+}
+
+/// Frequency of `buf` from its rising zero crossings.
+fn crossing_hz(buf: &[f32], rate: f32) -> f32 {
+    let mut times = Vec::new();
+    for i in 1..buf.len() {
+        if buf[i - 1] < 0.0 && buf[i] >= 0.0 {
+            times.push(i as f32 - 1.0 - buf[i - 1] / (buf[i] - buf[i - 1]));
+        }
+    }
+    assert!(times.len() >= 2, "too few cycles");
+    rate * (times.len() - 1) as f32 / (times[times.len() - 1] - times[0])
+}
+
+#[test]
+fn demo_catalog_opens_with_afterglow_and_describes_each_song() {
+    let demos = super::demos();
+    let titles: Vec<_> = demos.iter().map(|d| d.title).collect();
+    assert_eq!(
+        titles,
+        ["Afterglow", "Night Shift", "Neon Coast", "Corner Store"]
+    );
+    for d in &demos {
+        let p = (d.make)();
+        assert_eq!(p.meta.title, d.title);
+        assert!((p.bpm() - f64::from(d.bpm)).abs() < 1e-6, "{}", d.title);
+        assert!(!d.style.is_empty() && !d.key.is_empty(), "{}", d.title);
+        assert!(!p.meta.notes.is_empty(), "{}", d.title);
+    }
+    // The first demo is still the template catalog's "Demo song".
+    let (name, make) = super::templates()[0];
+    assert_eq!(name, "Demo song");
+    assert_eq!(make().meta.title, demos[0].title);
+}
+
+#[test]
+fn every_demo_is_valid_and_uses_real_devices_and_presets() {
+    for d in super::demos() {
+        let p = (d.make)();
+        let issues = peel_document::validate(&p);
+        assert!(
+            issues.iter().all(|i| !i.is_error()),
+            "{}: {issues:?}",
+            d.title
+        );
+        for dev in all_devices(&p) {
+            is_real(dev).unwrap_or_else(|e| panic!("{}: {e}", d.title));
+        }
+        for c in &p.channels {
+            assert!(c.device.preset.is_some(), "{}: {}", d.title, c.name);
+        }
+    }
+}
+
+#[test]
+fn every_demo_is_a_mixed_and_arranged_song() {
+    for d in super::demos() {
+        let p = (d.make)();
+        let arr = p.arrangement();
+        let bars = arr.end().as_f64() / 4.0;
+        assert!(bars >= 48.0, "{}: only {bars} bars", d.title);
+        let mut marks: Vec<_> = arr.markers.iter().collect();
+        marks.sort_by_key(|m| m.position);
+        assert!(marks.len() >= 5, "{}: {} sections", d.title, marks.len());
+        assert_eq!(marks[0].name, "Intro", "{}", d.title);
+        assert_eq!(marks[0].position, Time::ZERO, "{}", d.title);
+
+        // Every pattern is placed, and every lane in use is named.
+        for pat in &p.patterns {
+            let used = arr.clips.iter().any(
+                |c| matches!(&c.content, ClipContent::Pattern { pattern } if *pattern == pat.id),
+            );
+            assert!(used, "{}: {} is never placed", d.title, pat.name);
+            assert!(!pat.notes.is_empty(), "{}: {}", d.title, pat.name);
+        }
+        for clip in &arr.clips {
+            let lane = arr.tracks.iter().find(|t| t.id == clip.track).unwrap();
+            assert!(!lane.name.is_empty(), "{}: unnamed lane", d.title);
+        }
+
+        // A real mix: buses, returns fed by sends, a keyed effect,
+        // automation and a master chain that ends in a limiter.
+        let buses = p.mixer.tracks.len() - 1 - p.channels.len();
+        assert!(buses >= 3, "{}: {buses} buses", d.title);
+        let sends: usize = p.mixer.tracks.iter().map(|t| t.sends.len()).sum();
+        assert!(sends >= 6, "{}: {sends} sends", d.title);
+        assert!(
+            all_devices(&p).any(|dev| dev.sidechain.is_some()),
+            "{}: nothing is keyed",
+            d.title
+        );
+        let automation = arr
+            .clips
+            .iter()
+            .filter(|c| matches!(c.content, ClipContent::Automation { .. }))
+            .count();
+        assert!(
+            automation >= 3,
+            "{}: {automation} automation clips",
+            d.title
+        );
+        let last = p.mixer.tracks[0].inserts.last().expect("master chain");
+        assert!(
+            matches!(
+                last.type_id.as_str(),
+                "peel.fx.mastering" | "peel.fx.limiter"
+            ),
+            "{}: master ends in {}",
+            d.title,
+            last.type_id
+        );
+    }
+}
+
+#[test]
+fn every_demo_section_sounds_with_headroom_and_stays_under_the_ceiling() {
+    let db = |x: f32| 20.0 * x.max(1e-9).log10();
+    for d in super::demos() {
+        let p = (d.make)();
+        let mut dry = p.clone();
+        dry.mixer.tracks[0].inserts.clear();
+        let mut levels = Vec::new();
+        for m in &p.arrangement().markers {
+            // Two bars into the section, past any filtered pickup.
+            let at = m.position.as_f64() + 8.0;
+            let (l, r) = render(&dry, at, 2.0);
+            assert!(
+                l.iter().chain(&r).all(|s| s.is_finite()),
+                "{} {}",
+                d.title,
+                m.name
+            );
+            let (peak, rms) = peak_and_rms(&l, &r);
+            // Afterglow predates this rule and runs a little hotter.
+            let limit = if d.title == "Afterglow" { 3.0 } else { -0.5 };
+            assert!(
+                db(peak) < limit,
+                "{} {} peaks at {:.1} dB before the master chain",
+                d.title,
+                m.name,
+                db(peak)
+            );
+            assert!(
+                db(rms) > -40.0,
+                "{} {} is nearly silent ({:.1} dB)",
+                d.title,
+                m.name,
+                db(rms)
+            );
+            levels.push(db(rms));
+            // Through the master chain nothing passes the limiter.
+            let (l, r) = render(&p, at, 2.0);
+            let (peak, _) = peak_and_rms(&l, &r);
+            assert!(
+                db(peak) < -0.2,
+                "{} {} leaves the master at {:.1} dB",
+                d.title,
+                m.name,
+                db(peak)
+            );
+        }
+        let loudest = levels.iter().copied().fold(f32::MIN, f32::max);
+        assert!(
+            loudest > -24.0,
+            "{}: loudest section {loudest:.1} dB",
+            d.title
+        );
+    }
+}
+
+#[test]
+fn night_shift_slides_its_808_between_overlapping_notes() {
+    let p = demo("Night Shift");
+    let sub = channel_named(&p, "808");
+    assert_eq!(sub.device.type_id, "peel.bass.808");
+    assert!(sub.device.params["glide.mode"] >= 1.0, "the 808 must glide");
+    assert!(sub.device.params["glide.time"] > 0.05);
+
+    // In the hook pattern, a note that runs into the next one on another
+    // key is a slide; every other note stops before its neighbour starts.
+    let pat = p.patterns.iter().find(|x| x.name == "Hook 808").unwrap();
+    let notes: Vec<_> = pat.notes.iter().filter(|n| n.channel == sub.id).collect();
+    let mut slides = Vec::new();
+    for w in notes.windows(2) {
+        if w[0].end() > w[1].start {
+            assert_ne!(w[0].key, w[1].key, "an overlap that goes nowhere");
+            slides.push((w[0].key, w[1].key));
+        } else {
+            assert!(w[0].end() < w[1].start, "a restart needs a gap");
+        }
+    }
+    assert_eq!(slides, [(29, 41), (37, 32), (34, 46), (36, 31)]);
+    assert!(
+        notes.iter().all(|n| (24..=48).contains(&n.key)),
+        "808 notes belong in the sub range"
+    );
+
+    // And the engine plays them that way: on the first slide the pitch
+    // climbs from F1 to F2 without a new attack.
+    let (hook, _) = section(&p, "Hook", 0);
+    let solo = soloed(&p, "808");
+    let rate = 44_100.0;
+    let step = 60.0 / 142.0 / 4.0;
+    let (l, _) = render(&solo, hook, 2.0);
+    let at = |a: f32, b: f32| &l[(a * step * rate) as usize..(b * step * rate) as usize];
+    let before = crossing_hz(at(10.6, 12.8), rate);
+    let after = crossing_hz(at(14.8, 15.9), rate);
+    assert!((before / 43.65 - 1.0).abs() < 0.02, "held at {before} Hz");
+    assert!((after / 87.31 - 1.0).abs() < 0.02, "landed on {after} Hz");
+    let mid = crossing_hz(at(13.3, 14.3), rate);
+    assert!(
+        mid > before * 1.1 && mid < after * 0.95,
+        "between the two at {mid} Hz"
+    );
+    // A restart would begin near silence; a slide keeps sounding.
+    let rms = |b: &[f32]| (b.iter().map(|x| x * x).sum::<f32>() / b.len() as f32).sqrt();
+    assert!(rms(at(13.0, 13.4)) > 0.5 * rms(at(12.0, 13.0)));
+}
+
+#[test]
+fn night_shift_is_half_time_with_rolling_hats() {
+    let p = demo("Night Shift");
+    assert_eq!(p.swing, 0.0);
+    let snares = channel_in_section(&p, "Hook", "Snare");
+    let on_three = snares
+        .iter()
+        .filter(|h| (beat_in_bar(h) - 2.0).abs() < 1e-9)
+        .count();
+    assert!(on_three >= 16, "a snare on beat three of every bar");
+    assert!(on_three * 10 >= snares.len() * 8);
+    let hats: Vec<f64> = channel_in_section(&p, "Hook", "Hat")
+        .iter()
+        .map(|h| h.beat)
+        .collect();
+    let gaps: BTreeSet<i64> = hats
+        .windows(2)
+        .map(|w| ((w[1] - w[0]) * 96.0).round() as i64)
+        .filter(|&g| g > 0)
+        .collect();
+    assert!(gaps.contains(&12), "thirty-second rolls: {gaps:?}");
+    assert!(gaps.contains(&16), "sixteenth-triplet rolls: {gaps:?}");
+    assert!(gaps.contains(&48), "eighths in between: {gaps:?}");
+    // The kick lands with the 808's attacks, never on the snare.
+    let kicks = channel_in_section(&p, "Hook", "Kick");
+    assert!(kicks.iter().all(|h| (beat_in_bar(h) - 2.0).abs() > 1e-9));
+}
+
+#[test]
+fn neon_coast_gates_its_snare_plate_with_the_dry_snare() {
+    let p = demo("Neon Coast");
+    let plate = p.mixer.track(track_named(&p, "Snare Plate")).unwrap();
+    let kinds: Vec<_> = plate.inserts.iter().map(|d| d.type_id.as_str()).collect();
+    assert_eq!(kinds, ["peel.fx.reverb", "peel.fx.gate"]);
+    let snare = channel_named(&p, "Snare");
+    assert_eq!(plate.inserts[1].sidechain, Some(snare.track));
+    let feeds = p.mixer.track(snare.track).unwrap();
+    assert!(feeds.sends.iter().any(|s| s.target == plate.id));
+
+    // Heard on its own in the verse, the plate rings while the gate holds
+    // and is gone well before the next snare, two beats later.
+    let (verse, _) = section(&p, "Verse", 0);
+    let solo = soloed(&p, "Snare Plate");
+    let rate = 44_100.0;
+    let beat = 60.0 / 108.0;
+    // Bar three of the verse; the snare is on beats two and four.
+    let (l, r) = render(&solo, verse + 8.0, 4.0 * beat);
+    let rms = |from: f32, to: f32| {
+        let (a, b) = ((from * rate) as usize, (to * rate) as usize);
+        let sum: f32 = l[a..b].iter().chain(&r[a..b]).map(|x| x * x).sum();
+        (sum / (2 * (b - a)) as f32).sqrt()
+    };
+    let ringing = rms(beat + 0.03, beat + 0.18);
+    let shut = rms(beat + 0.45, beat + 1.0);
+    assert!(ringing > 0.01, "the plate is silent ({ringing})");
+    assert!(
+        shut < ringing * 0.05,
+        "the gate left the tail open: {ringing} then {shut}"
+    );
+}
+
+#[test]
+fn neon_coast_drives_on_a_sixteenth_arp_and_bass() {
+    let p = demo("Neon Coast");
+    let (a, b) = section(&p, "Chorus", 0);
+    for name in ["Arp", "Bass"] {
+        let starts: BTreeSet<i64> = channel_in_section(&p, "Chorus", name)
+            .iter()
+            .map(|h| (h.beat * 4.0).round() as i64)
+            .collect();
+        assert_eq!(
+            starts.len() as f64,
+            (b - a) * 4.0,
+            "{name} plays every sixteenth"
+        );
+    }
+    let snares = channel_in_section(&p, "Chorus", "Snare");
+    assert!(
+        snares.iter().all(|h| [1.0, 3.0].contains(&beat_in_bar(h))),
+        "snare on two and four"
+    );
+    assert!(channel_in_section(&p, "Verse", "Lead").is_empty());
+    assert!(!channel_in_section(&p, "Chorus", "Lead").is_empty());
+}
+
+#[test]
+fn corner_store_is_swung_and_runs_its_drums_through_tape() {
+    let p = demo("Corner Store");
+    assert!(p.swing > 0.3);
+    let bus = p.mixer.track(track_named(&p, "Drum Bus")).unwrap();
+    let kinds: Vec<_> = bus.inserts.iter().map(|d| d.type_id.as_str()).collect();
+    assert!(kinds.contains(&"peel.fx.crush") && kinds.contains(&"peel.fx.tape"));
+    let master: Vec<_> = p.mixer.tracks[0]
+        .inserts
+        .iter()
+        .map(|d| d.type_id.as_str())
+        .collect();
+    assert!(master.contains(&"peel.fx.tape"), "{master:?}");
+    let snares = channel_in_section(&p, "Verse", "Snare");
+    let backbeat = snares
+        .iter()
+        .filter(|h| [1.0, 3.0].contains(&beat_in_bar(h)))
+        .count();
+    assert!(backbeat * 10 >= snares.len() * 8, "snare on two and four");
+    let kicks = channel_in_section(&p, "Verse", "Kick");
+    assert!(
+        kicks.iter().any(|h| beat_in_bar(h).fract() != 0.0),
+        "the kick is syncopated"
+    );
+    // The sax leads the middle section, not the first verse.
+    assert!(channel_in_section(&p, "Verse", "Sax").is_empty());
+    assert!(!channel_in_section(&p, "Middle", "Sax").is_empty());
 }
