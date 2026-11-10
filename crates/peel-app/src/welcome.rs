@@ -13,7 +13,8 @@ pub enum WelcomeAction {
     Template(usize),
     /// Start from one of the user's own templates (its root file).
     UserTemplate(PathBuf),
-    Demo,
+    /// Open `peel_session::template::demos()[i]`.
+    Demo(usize),
     Open,
     OpenPath(PathBuf),
     Recover(PathBuf),
@@ -27,6 +28,11 @@ pub struct WelcomeData<'a> {
     pub show_at_startup: &'a mut bool,
 }
 
+/// Height of a template button with the gap under it.
+const TEMPLATE_ROW: f32 = 34.0;
+/// Height of a demo song row with the gap under it.
+const DEMO_ROW: f32 = 56.0;
+
 fn big_button(ui: &mut Ui, id: W, r: Rect, icon: &str, label: &str, primary: bool) -> bool {
     let t = ui.theme.clone();
     let resp = ui.interact_button(id, r, label);
@@ -36,8 +42,8 @@ fn big_button(ui: &mut Ui, id: W, r: Rect, icon: &str, label: &str, primary: boo
     } else {
         (t.control.mix(t.control_hover, hot), t.text)
     };
-    ui.scene.rect(r, t.radius_l, fill);
-    let mut inner = r.shrink2(16.0, 0.0);
+    ui.keycap(r, t.radius_m, fill, resp.active);
+    let mut inner = r.shrink2(14.0, 0.0);
     ui.icon(inner.cut_left(20.0), icon, 17.0, ink);
     inner.cut_left(12.0);
     ui.text(inner, label, t.label.size(14.0), ink, Align::Start);
@@ -48,6 +54,40 @@ fn big_button(ui: &mut Ui, id: W, r: Rect, icon: &str, label: &str, primary: boo
     resp.clicked
 }
 
+/// One demo song: a play tile in a step-key color, its title, and its
+/// style, tempo and key.
+fn demo_row(ui: &mut Ui, id: W, r: Rect, n: usize, demo: &peel_session::template::Demo) -> bool {
+    let t = ui.theme.clone();
+    let resp = ui.interact_button(id, r, &format!("Open {}", demo.title));
+    let hot = ui.animate_bool(id, resp.hovered);
+    if hot > 0.0 {
+        ui.scene.rect(r, t.radius_m, t.raised.alpha(hot));
+    }
+    let key = t.step_keys[n % t.step_keys.len()];
+    let mut inner = r.shrink2(8.0, 0.0);
+    let tile = Rect::from_center(inner.cut_left(36.0).center(), 36.0, 36.0);
+    ui.keycap(tile, t.radius_m, key.lighten(hot * 0.08), false);
+    ui.icon_fill(tile, icons::PLAY, 15.0, crate::util::ink_on(key));
+    inner.cut_left(12.0);
+    let mut text = Rect::from_center(inner.center(), inner.w, 36.0);
+    let title = ui.fit_text(demo.title, t.label.size(14.0), text.w);
+    ui.text(
+        text.cut_top(19.0),
+        &title,
+        t.label.size(14.0),
+        t.text,
+        Align::Start,
+    );
+    let sub = format!("{} · {:.0} BPM · {}", demo.style, demo.bpm, demo.key);
+    let sub = ui.fit_text(&sub, t.caption, text.w);
+    ui.text(text, &sub, t.caption, t.text_faint, Align::Start);
+    if resp.hovered {
+        ui.set_cursor(CursorIcon::Pointer);
+    }
+    ui.focus_ring(id, r, t.radius_m);
+    resp.clicked
+}
+
 pub fn draw(ui: &mut Ui, data: WelcomeData) -> Option<WelcomeAction> {
     let t = ui.theme.clone();
     let screen = ui.screen();
@@ -55,71 +95,76 @@ pub fn draw(ui: &mut Ui, data: WelcomeData) -> Option<WelcomeAction> {
     ui.with_layer(LayerId::POPUP, |ui| {
         ui.scene.push_clip_absolute(Rect::EVERYTHING);
         let backdrop = ui.interact(W::new("welcome-backdrop"), screen);
-        ui.scene.rect(screen, 0.0, t.bg.alpha(0.78));
+        ui.scene.rect(screen, 0.0, t.bg.alpha(0.82));
         let styles = crate::project::styles();
-        let has_demo = crate::project::demo_index().is_some();
-        // The demo and My templates share one row under the grid.
+        let demos = peel_session::template::demos();
         let has_mine = !data.templates.is_empty();
-        let has_extra = has_demo || has_mine;
         let cols = 2usize;
         let rows = styles.len().div_ceil(cols);
-        // Brand, two actions, the template grid, the demo and the toggle.
-        let left_h = 82.0 + 112.0 + 30.0 + rows as f32 * 38.0 + 44.0 + 40.0;
-        let w = 820.0f32.min(screen.w - 40.0);
-        let h = (left_h + 56.0).max(470.0).min(screen.h - 40.0);
+        // Three columns: start something, hear something, pick up where
+        // you left off. The tallest column sets the height.
+        let start_h = 56.0
+            + 24.0
+            + 96.0
+            + 22.0
+            + 26.0
+            + rows as f32 * TEMPLATE_ROW
+            + if has_mine { 34.0 } else { 0.0 }
+            + 38.0;
+        let songs_h = 26.0 + demos.len() as f32 * DEMO_ROW;
+        let w = 1000.0f32.min(screen.w - 40.0);
+        let h = (start_h.max(songs_h) + 64.0)
+            .max(480.0)
+            .min(screen.h - 40.0);
         let panel = Rect::from_center(screen.center(), w, h);
         ui.interact(W::new("welcome-panel"), panel);
         ui.scene
-            .shadow(panel.translate(vec2(0.0, 10.0)), 14.0, 28.0, t.shadow);
-        ui.scene.rect(panel, 14.0, t.panel);
+            .shadow(panel.translate(vec2(0.0, 8.0)), t.radius_l, 24.0, t.shadow);
+        ui.scene.rect(panel, t.radius_l, t.panel);
         if backdrop.clicked {
             action = Some(WelcomeAction::Close);
         }
 
-        let mut body = panel.shrink(28.0);
-        let mut left = body.cut_left(300.0);
-        body.cut_left(28.0);
-        let right = body;
+        let mut body = panel.shrink(32.0);
+        let mut left = body.cut_left(264.0);
+        body.cut_left(32.0);
+        let right = body.cut_right(280.0f32.min(body.w * 0.45));
+        body.cut_right(32.0);
+        let mut songs = body;
+        for x in [songs.x - 16.0, right.x - 16.0] {
+            ui.scene
+                .vline(x, panel.y + 32.0, panel.bottom() - 32.0, t.line);
+        }
 
         // Brand.
         let brand = left.cut_top(56.0);
-        let c = vec2(brand.x + 22.0, brand.center().y);
-        ui.scene.circle(c, 20.0, t.accent);
-        ui.scene.circle(c, 14.0, t.accent.darken(0.18));
-        ui.scene.arc(c, 20.0, 5.0, 0.35, 1.25, t.panel);
-        ui.scene.arc(
-            c + vec2(15.0, -13.0),
-            6.5,
-            3.5,
-            3.4,
-            2.6,
-            t.accent.lighten(0.15),
-        );
+        crate::util::logo(ui, vec2(brand.x + 22.0, brand.center().y), 20.0, t.panel);
         let mut tr = brand;
         tr.cut_left(56.0);
+        tr.cut_top(4.0);
         ui.text(
-            tr.cut_top(32.0),
+            tr.cut_top(30.0),
             "Peel Studio",
             t.heading.size(22.0),
             t.text,
             Align::Start,
         );
         ui.text(
-            tr,
+            tr.cut_top(16.0),
             &format!("Version {}", env!("CARGO_PKG_VERSION")),
             t.caption,
             t.text_faint,
             Align::Start,
         );
-        left.cut_top(26.0);
+        left.cut_top(24.0);
 
         let buttons = [
             (icons::PLUS, "New project", true, 0usize),
             (icons::FOLDER_OPEN, "Open project or MIDI", false, 1),
         ];
         for (icon, label, primary, which) in buttons {
-            let r = left.cut_top(46.0);
-            left.cut_top(10.0);
+            let r = left.cut_top(44.0);
+            left.cut_top(4.0);
             if big_button(ui, W::new(("welcome-btn", which)), r, icon, label, primary) {
                 action = Some(if which == 0 {
                     WelcomeAction::New
@@ -128,81 +173,7 @@ pub fn draw(ui: &mut Ui, data: WelcomeData) -> Option<WelcomeAction> {
                 });
             }
         }
-        // Templates: two columns, as many rows as the catalog needs and
-        // the window allows (all of them are in File > New from template).
-        left.cut_top(4.0);
-        ui.text(
-            left.cut_top(22.0),
-            "Templates",
-            t.caption,
-            t.text_dim,
-            Align::Start,
-        );
-        left.cut_top(4.0);
-        let foot = 26.0 + 8.0 + if has_extra { 40.0 } else { 0.0 };
-        let fit_rows = (((left.h - foot) / 38.0).floor().max(1.0)) as usize;
-        let cell_w = (left.w - 6.0 * (cols - 1) as f32) / cols as f32;
-        for (n, (i, name)) in styles.iter().enumerate().take(fit_rows * cols) {
-            let r = Rect {
-                x: left.x + (n % cols) as f32 * (cell_w + 6.0),
-                y: left.y + (n / cols) as f32 * 38.0,
-                w: cell_w,
-                h: 32.0,
-            };
-            let label = ui.fit_text(name, t.label, r.w - 16.0);
-            if ui
-                .button(W::new(("welcome-template", *i)), r, &label)
-                .clicked
-            {
-                action = Some(WelcomeAction::Template(*i));
-            }
-        }
-        left.cut_top(rows.min(fit_rows) as f32 * 38.0);
-        let mut extra = Rect::ZERO;
-        if has_extra {
-            left.cut_top(4.0);
-            extra = left.cut_top(30.0);
-        }
-        if has_mine {
-            let label = "My templates";
-            let mw = ui.quiet_button_width(true, label, true);
-            let r = extra.cut_right(mw);
-            let list = crate::user_templates::picker_id();
-            let open = ui.is_popup_open(list);
-            let resp = ui.quiet_button(
-                W::new("welcome-my-templates"),
-                r,
-                Some(icons::FOLDER_OPEN),
-                label,
-                true,
-                open,
-            );
-            if resp.clicked && !open {
-                crate::user_templates::open_picker(ui, r);
-            }
-            if let Some(path) = crate::user_templates::picker(ui, r, data.templates) {
-                action = Some(WelcomeAction::UserTemplate(path));
-            }
-        }
-        if has_demo {
-            let label = "Open the demo song";
-            let dw = ui.quiet_button_width(true, label, false);
-            let r = extra.with_w(dw.min(extra.w));
-            if ui
-                .quiet_button(
-                    W::new("welcome-demo"),
-                    r,
-                    Some(icons::MUSIC_NOTES),
-                    label,
-                    false,
-                    false,
-                )
-                .clicked
-            {
-                action = Some(WelcomeAction::Demo);
-            }
-        }
-        // Startup toggle.
+        // Startup toggle, pinned to the bottom of the column.
         let toggle_r = left.cut_bottom(26.0);
         let mut tr = toggle_r;
         let led = ui.led(
@@ -222,6 +193,88 @@ pub fn draw(ui: &mut Ui, data: WelcomeData) -> Option<WelcomeAction> {
             t.text_dim,
             Align::Start,
         );
+        left.cut_bottom(12.0);
+
+        // Templates: two columns, as many rows as the catalog needs and
+        // the window allows (all of them are in File > New from template).
+        left.cut_top(22.0);
+        ui.text(
+            left.cut_top(22.0),
+            "Templates",
+            t.label,
+            t.text_dim,
+            Align::Start,
+        );
+        left.cut_top(4.0);
+        let foot = if has_mine { 34.0 } else { 0.0 };
+        let fit_rows = (((left.h - foot) / TEMPLATE_ROW).floor().max(1.0)) as usize;
+        let cell_w = (left.w - 4.0 * (cols - 1) as f32) / cols as f32;
+        for (n, (i, name)) in styles.iter().enumerate().take(fit_rows * cols) {
+            let r = Rect {
+                x: left.x + (n % cols) as f32 * (cell_w + 4.0),
+                y: left.y + (n / cols) as f32 * TEMPLATE_ROW,
+                w: cell_w,
+                h: TEMPLATE_ROW - 4.0,
+            };
+            let label = ui.fit_text(name, t.label, r.w - 16.0);
+            if ui
+                .button(W::new(("welcome-template", *i)), r, &label)
+                .clicked
+            {
+                action = Some(WelcomeAction::Template(*i));
+            }
+        }
+        left.cut_top(rows.min(fit_rows) as f32 * TEMPLATE_ROW);
+        if has_mine {
+            left.cut_top(4.0);
+            let row = left.cut_top(30.0);
+            let label = "My templates";
+            let mw = ui.quiet_button_width(true, label, true);
+            let r = row.with_w(mw.min(row.w));
+            let list = crate::user_templates::picker_id();
+            let open = ui.is_popup_open(list);
+            let resp = ui.quiet_button(
+                W::new("welcome-my-templates"),
+                r,
+                Some(icons::FOLDER_OPEN),
+                label,
+                true,
+                open,
+            );
+            if resp.clicked && !open {
+                crate::user_templates::open_picker(ui, r);
+            }
+            if let Some(path) = crate::user_templates::picker(ui, r, data.templates) {
+                action = Some(WelcomeAction::UserTemplate(path));
+            }
+        }
+
+        // Demo songs: finished arrangements to open, play and take apart.
+        ui.text(
+            songs.cut_top(22.0),
+            "Demo songs",
+            t.label,
+            t.text_dim,
+            Align::Start,
+        );
+        songs.cut_top(4.0);
+        for (i, demo) in demos.iter().enumerate() {
+            if songs.h < DEMO_ROW - 4.0 {
+                break;
+            }
+            let mut r = songs.cut_top(DEMO_ROW);
+            r.h -= 4.0;
+            r.x -= 8.0;
+            r.w += 8.0;
+            let id = if i == 0 {
+                W::new("welcome-demo")
+            } else {
+                W::new(("welcome-demo", i))
+            };
+            if demo_row(ui, id, r, i, demo) {
+                action = Some(WelcomeAction::Demo(i));
+            }
+        }
 
         // Recent and recovered projects.
         let mut list = right;
@@ -230,7 +283,7 @@ pub fn draw(ui: &mut Ui, data: WelcomeData) -> Option<WelcomeAction> {
             ui.text(
                 list.cut_top(22.0),
                 "Recovered after an unexpected exit",
-                t.caption,
+                t.label,
                 t.record,
                 Align::Start,
             );
@@ -243,10 +296,11 @@ pub fn draw(ui: &mut Ui, data: WelcomeData) -> Option<WelcomeAction> {
         ui.text(
             list.cut_top(22.0),
             "Recent",
-            t.caption,
-            t.text_faint,
+            t.label,
+            t.text_dim,
             Align::Start,
         );
+        list.cut_top(4.0);
         if data.recent.is_empty() {
             let mut hint = list.cut_top(40.0);
             hint.cut_top(6.0);
@@ -258,29 +312,6 @@ pub fn draw(ui: &mut Ui, data: WelcomeData) -> Option<WelcomeAction> {
                 Align::Start,
             );
         }
-        // Key reference fills whatever room the lists leave.
-        let shown = data
-            .recent
-            .len()
-            .min(((list.h - 40.0) / 48.0).max(0.0) as usize);
-        let keys_h = list.h - shown as f32 * 48.0 - 30.0;
-        if keys_h > 120.0 {
-            let mut keys = Rect {
-                y: list.bottom() - keys_h,
-                h: keys_h,
-                ..list
-            };
-            ui.text(
-                keys.cut_top(24.0),
-                "Keys",
-                t.caption,
-                t.text_faint,
-                Align::Start,
-            );
-            let rows = (keys.h / 26.0) as usize;
-            crate::keys::draw_list(ui, keys, rows);
-            list.h -= keys_h + 8.0;
-        }
         for (i, _) in data.recent.iter().enumerate() {
             if list.h < 44.0 {
                 break;
@@ -290,11 +321,19 @@ pub fn draw(ui: &mut Ui, data: WelcomeData) -> Option<WelcomeAction> {
         }
         for (row, recovered, i) in y_rows {
             let id = W::new(("welcome-row", recovered, i));
+            // The hover fill reaches past the text so names line up with
+            // the heading above them.
+            let row = Rect {
+                x: row.x - 8.0,
+                w: row.w + 8.0,
+                ..row
+            };
             let resp = ui.interact(id, row);
             let hot = ui.animate_bool(id, resp.hovered);
-            ui.scene
-                .rect(row, t.radius_m, t.raised.alpha(0.35 + hot * 0.65));
-            let mut inner = row.shrink2(14.0, 6.0);
+            if hot > 0.0 {
+                ui.scene.rect(row, t.radius_m, t.raised.alpha(hot));
+            }
+            let mut inner = row.shrink2(8.0, 6.0);
             let icon_r = inner.cut_left(20.0);
             inner.cut_left(10.0);
             let (title, sub, path) = if recovered {

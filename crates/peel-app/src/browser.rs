@@ -41,6 +41,7 @@ struct DirCache {
 fn category_color(cat: &str) -> Color {
     let c = match cat {
         "Drums" => peel_document::PALETTE[0],
+        "Bass" => peel_document::PALETTE[1],
         "Percussion" => peel_document::PALETTE[10],
         "Synth" => peel_document::PALETTE[6],
         "Keys" => peel_document::PALETTE[4],
@@ -62,6 +63,7 @@ fn category_color(cat: &str) -> Color {
 fn category_icon(cat: &str) -> &'static str {
     match cat {
         "Drums" => icons::LIGHTNING,
+        "Bass" => icons::SPEAKER,
         "Percussion" => icons::BELL,
         "Synth" => icons::WAVE_SAW,
         "Keys" => icons::PIANO_KEYS,

@@ -22,8 +22,8 @@ pub enum Change {
     New,
     /// `template::templates()[i]`.
     Template(usize),
-    /// The demo song.
-    Demo,
+    /// `template::demos()[i]`.
+    Demo(usize),
     /// One of the user's own templates, by its root file.
     UserTemplate(PathBuf),
     OpenPath(PathBuf),
@@ -87,8 +87,8 @@ impl Studio {
                     .notify("That template is no longer there", true);
                 return;
             }
-            Change::Demo if demo_index().is_none() => {
-                self.session.notify("The demo song is not available", true);
+            Change::Demo(i) if template::demos().get(*i).is_none() => {
+                self.session.notify("That demo song is not available", true);
                 return;
             }
             Change::OpenPath(p) if !openable(p) => {
@@ -151,8 +151,8 @@ impl Studio {
                 None => return false,
             },
             Change::UserTemplate(path) => return self.start_user_template(&path),
-            Change::Demo => match demo_index() {
-                Some(i) => self.start((template::templates()[i].1)()),
+            Change::Demo(i) => match template::demos().get(i) {
+                Some(demo) => self.start((demo.make)()),
                 None => return false,
             },
             Change::Close => {

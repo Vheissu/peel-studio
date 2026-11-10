@@ -4145,6 +4145,54 @@ mod lifecycle {
     }
 
     #[test]
+    fn every_demo_song_opens_from_the_start_screen_and_the_file_menu() {
+        let demos = template::demos();
+        assert!(!demos.is_empty());
+        for (i, demo) in demos.iter().enumerate() {
+            // Its row on the start screen, inside the sheet.
+            let mut h = Harness::new();
+            h.size = vec2(1200.0, 720.0);
+            h.studio.welcome = true;
+            h.frame();
+            let row = if i == 0 {
+                W::new("welcome-demo")
+            } else {
+                W::new(("welcome-demo", i))
+            };
+            let panel = h.rect(W::new("welcome-panel"));
+            let r = h.rect(row);
+            assert!(
+                r.y >= panel.y && r.bottom() <= panel.bottom(),
+                "{} overflows",
+                demo.title
+            );
+            h.click(row);
+            assert!(!h.studio.welcome, "{}", demo.title);
+            let opened = h.session().project().clone();
+            assert!(!opened.arrangement().clips.is_empty(), "{}", demo.title);
+            assert!(!h.session().doc.is_dirty());
+
+            // The same song from File > Demo songs.
+            let c = Command::Demo(i);
+            assert_eq!(Command::from_id(c.id()), Some(c));
+            let mut h = Harness::new();
+            menu(&mut h, c);
+            let p = h.session().project();
+            assert_eq!(p.meta.title, opened.meta.title);
+            assert_eq!(p.channels.len(), opened.channels.len());
+            assert_eq!(
+                p.arrangement().clips.len(),
+                opened.arrangement().clips.len()
+            );
+        }
+        // An index past the catalog is refused and the project stays.
+        let mut h = Harness::new();
+        let before = h.session().project().id;
+        h.studio.request(Change::Demo(demos.len()));
+        assert_eq!(h.session().project().id, before);
+    }
+
+    #[test]
     fn the_start_screen_fits_a_small_window() {
         let mut h = Harness::new();
         h.size = vec2(1200.0, 720.0);
@@ -4681,8 +4729,8 @@ mod lifecycle {
             let toggle = h.rect(W::new("welcome-startup"));
             assert!(panel.contains(mine.center()) && mine.bottom() <= toggle.y);
             assert!(
-                (mine.y - demo.y).abs() < 0.5 && demo.right() <= mine.x,
-                "one row"
+                panel.contains(demo.center()) && demo.x > mine.right(),
+                "demo songs have their own column"
             );
 
             h.click(W::new("welcome-my-templates"));

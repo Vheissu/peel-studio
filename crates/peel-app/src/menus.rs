@@ -23,7 +23,8 @@ pub const STRIP: W = W(0x5e1f_a11e_0b42);
 pub enum Command {
     NewProject,
     Template(usize),
-    Demo,
+    /// `template::demos()[i]`.
+    Demo(usize),
     StartScreen,
     Open,
     Recent(usize),
@@ -59,6 +60,10 @@ pub enum Command {
     UserTemplate(usize),
 }
 
+/// Demo songs after the first, which keeps its place among the simple
+/// commands.
+const DEMO_BASE: u32 = 800;
+const DEMO_END: u32 = 900;
 const TEMPLATE_BASE: u32 = 1000;
 const RECENT_BASE: u32 = 2000;
 const USER_TEMPLATE_BASE: u32 = 3000;
@@ -67,7 +72,7 @@ const USER_TEMPLATE_END: u32 = USER_TEMPLATE_BASE + crate::user_templates::MAX_T
 // New commands go at the end so existing ids never move.
 const SIMPLE: [Command; 30] = [
     Command::NewProject,
-    Command::Demo,
+    Command::Demo(0),
     Command::StartScreen,
     Command::Open,
     Command::ClearRecent,
@@ -109,6 +114,7 @@ impl Command {
     pub fn id(self) -> u32 {
         match self {
             Command::Template(i) => TEMPLATE_BASE + i as u32,
+            Command::Demo(i) if i > 0 => (DEMO_BASE + i as u32).min(DEMO_END - 1),
             Command::Recent(i) => RECENT_BASE + i as u32,
             Command::UserTemplate(i) => USER_TEMPLATE_BASE + i as u32,
             Command::Dock(tab) => 900 + DOCKS.iter().position(|d| *d == tab).unwrap_or(0) as u32,
@@ -120,6 +126,7 @@ impl Command {
     pub fn from_id(id: u32) -> Option<Command> {
         match id {
             950 => Some(Command::Hints),
+            DEMO_BASE..DEMO_END => Some(Command::Demo((id - DEMO_BASE) as usize)),
             900..=903 => Some(Command::Dock(DOCKS[(id - 900) as usize])),
             TEMPLATE_BASE..RECENT_BASE => Some(Command::Template((id - TEMPLATE_BASE) as usize)),
             RECENT_BASE..USER_TEMPLATE_BASE => Some(Command::Recent((id - RECENT_BASE) as usize)),
@@ -138,7 +145,7 @@ impl Command {
             Command::NewProject
                 | Command::Template(_)
                 | Command::UserTemplate(_)
-                | Command::Demo
+                | Command::Demo(_)
                 | Command::StartScreen
                 | Command::Open
                 | Command::Recent(_)
@@ -201,14 +208,23 @@ pub fn bar(studio: &Studio, mac: bool) -> MenuBar {
         menu: mine,
         inline: None,
     });
-    if crate::project::demo_index().is_some() {
-        styles.separator();
-        styles.push(cmd(Command::Demo, "Demo song"));
-    }
     file.push(MenuEntry::Submenu {
         menu: styles,
         enabled: true,
         inline: Some(cmd(Command::StartScreen, "New from template…")),
+    });
+    let demos = peel_session::template::demos();
+    let mut songs = Menu::new("Demo songs");
+    for (i, demo) in demos.iter().enumerate() {
+        songs.push(cmd(
+            Command::Demo(i),
+            format!("{} ({})", demo.title, demo.style),
+        ));
+    }
+    file.push(MenuEntry::Submenu {
+        menu: songs,
+        enabled: !demos.is_empty(),
+        inline: None,
     });
     file.separator();
     file.push(cmd(Command::Open, "Open…").shortcut(Shortcut::cmd('o')));
@@ -441,7 +457,7 @@ pub fn run(ui: &mut Ui, studio: &mut Studio, c: Command) {
     match c {
         Command::NewProject => studio.request(Change::New),
         Command::Template(i) => studio.request(Change::Template(i)),
-        Command::Demo => studio.request(Change::Demo),
+        Command::Demo(i) => studio.request(Change::Demo(i)),
         Command::UserTemplate(slot) => match studio.templates.get(slot) {
             Some(entry) => {
                 let path = entry.path.clone();

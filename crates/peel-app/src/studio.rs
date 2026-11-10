@@ -276,7 +276,7 @@ impl Studio {
         match action {
             WelcomeAction::New => self.request(Change::New),
             WelcomeAction::Template(i) => self.request(Change::Template(i)),
-            WelcomeAction::Demo => self.request(Change::Demo),
+            WelcomeAction::Demo(i) => self.request(Change::Demo(i)),
             WelcomeAction::UserTemplate(p) => self.request(Change::UserTemplate(p)),
             WelcomeAction::Open => self.open(),
             WelcomeAction::OpenPath(p) => self.request(Change::OpenPath(p)),
