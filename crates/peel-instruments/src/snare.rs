@@ -168,7 +168,7 @@ pub static DESC: DeviceDescriptor = DeviceDescriptor {
     params: &PARAMS,
 };
 
-pub static PRESETS: [Preset; 14] = [
+pub static PRESETS: [Preset; 19] = [
     Preset {
         name: "Crack",
         params: &[
@@ -402,6 +402,86 @@ pub static PRESETS: [Preset; 14] = [
             ("out.room", 0.0),
             ("out.velocity", 0.7),
             ("out.level", 0.0),
+        ],
+    },
+    Preset {
+        name: "Rim Click",
+        params: &[
+            ("body.acoustic", 0.0),
+            ("body.circuit", 0.0),
+            ("body.pitch", 330.0),
+            ("body.decay", 0.045),
+            ("body.overtone", 2.1),
+            ("body.mix", 0.85),
+            ("noise.decay", 0.05),
+            ("noise.tone", 6_500.0),
+            ("noise.snap", 1.0),
+            ("out.drive", 0.25),
+            ("out.room", 0.0),
+        ],
+    },
+    Preset {
+        name: "Finger Snap",
+        params: &[
+            ("body.acoustic", 0.0),
+            ("body.circuit", 0.0),
+            ("body.pitch", 380.0),
+            ("body.decay", 0.04),
+            ("body.mix", 0.15),
+            ("noise.decay", 0.09),
+            ("noise.tone", 3_200.0),
+            ("noise.snap", 0.9),
+            ("noise.burst", 0.5),
+            ("out.drive", 0.1),
+            ("out.room", 0.2),
+        ],
+    },
+    Preset {
+        name: "Gated",
+        params: &[
+            ("body.acoustic", 0.0),
+            ("body.circuit", 0.0),
+            ("body.pitch", 175.0),
+            ("body.decay", 0.22),
+            ("body.mix", 0.55),
+            ("noise.decay", 0.42),
+            ("noise.tone", 4_200.0),
+            ("noise.snap", 0.55),
+            ("noise.burst", 0.2),
+            ("out.drive", 0.3),
+            ("out.room", 0.6),
+        ],
+    },
+    Preset {
+        name: "Dusty",
+        params: &[
+            ("body.acoustic", 0.0),
+            ("body.circuit", 0.0),
+            ("body.pitch", 165.0),
+            ("body.decay", 0.18),
+            ("body.mix", 0.5),
+            ("noise.decay", 0.22),
+            ("noise.tone", 3_000.0),
+            ("noise.snap", 0.4),
+            ("out.drive", 0.5),
+            ("out.room", 0.1),
+            ("out.velocity", 0.6),
+        ],
+    },
+    Preset {
+        name: "Piccolo",
+        params: &[
+            ("body.acoustic", 0.0),
+            ("body.circuit", 0.0),
+            ("body.pitch", 265.0),
+            ("body.decay", 0.1),
+            ("body.overtone", 1.8),
+            ("body.mix", 0.45),
+            ("noise.decay", 0.16),
+            ("noise.tone", 7_000.0),
+            ("noise.snap", 0.8),
+            ("out.drive", 0.2),
+            ("out.room", 0.1),
         ],
     },
 ];

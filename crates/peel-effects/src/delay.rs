@@ -176,7 +176,7 @@ pub static DESCRIPTOR: DeviceDescriptor = DeviceDescriptor {
     params: &PARAMS,
 };
 
-pub static PRESETS: [Preset; 6] = [
+pub static PRESETS: [Preset; 8] = [
     Preset {
         name: "Eighth Note",
         params: &[],
@@ -238,6 +238,34 @@ pub static PRESETS: [Preset; 6] = [
             ("feedback.lp", 4_000.0),
             ("mod.depth", 0.2),
             ("mix", 0.35),
+        ],
+    },
+    Preset {
+        name: "Worn Echo",
+        params: &[
+            ("mode", 2.0),
+            ("beats.left", 0.75),
+            ("beats.right", 0.75),
+            ("feedback", 0.35),
+            ("feedback.hp", 250.0),
+            ("feedback.lp", 2_500.0),
+            ("mod.rate", 0.4),
+            ("mod.depth", 0.35),
+            ("mix", 0.22),
+        ],
+    },
+    Preset {
+        name: "Half Note Wash",
+        params: &[
+            ("mode", 1.0),
+            ("beats.left", 2.0),
+            ("beats.right", 1.5),
+            ("feedback", 0.55),
+            ("feedback.hp", 300.0),
+            ("feedback.lp", 4_500.0),
+            ("mod.rate", 0.2),
+            ("mod.depth", 0.2),
+            ("mix", 0.25),
         ],
     },
 ];

@@ -280,7 +280,7 @@ pub static DESC: DeviceDescriptor = DeviceDescriptor {
     params: &PARAMS,
 };
 
-pub static PRESETS: [Preset; 8] = [
+pub static PRESETS: [Preset; 9] = [
     Preset {
         name: "Classic",
         params: &[
@@ -411,6 +411,22 @@ pub static PRESETS: [Preset; 8] = [
             ("trem.sync", 4.0),
             ("out.width", 0.7),
             ("out.chorus", 0.2),
+        ],
+    },
+    Preset {
+        name: "Lo-Fi",
+        params: &[
+            ("tone.bell", 0.3),
+            ("tone.growl", 0.4),
+            ("tone.pickup", 0.3),
+            ("tone.hammer", 0.35),
+            ("trem.rate", 4.2),
+            ("trem.depth", 0.25),
+            ("trem.mode", 1.0),
+            ("out.drive", 0.35),
+            ("out.tone", 0.35),
+            ("out.chorus", 0.35),
+            ("out.width", 0.6),
         ],
     },
 ];

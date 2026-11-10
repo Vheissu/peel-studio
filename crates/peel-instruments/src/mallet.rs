@@ -182,7 +182,7 @@ use peel_dsp::osc::fast_sin;
 use peel_dsp::util::{db_to_gain, key_to_hz};
 use peel_dsp::voice::StealPolicy;
 
-pub static PRESETS: [Preset; 10] = [
+pub static PRESETS: [Preset; 12] = [
     Preset {
         name: "Marimba",
         params: &[],
@@ -288,6 +288,32 @@ pub static PRESETS: [Preset; 10] = [
             ("mallet.hardness", 0.3),
             ("body.position", 0.3),
             ("out.width", 0.6),
+        ],
+    },
+    Preset {
+        name: "Music Box",
+        params: &[
+            ("mallet.hardness", 0.8),
+            ("mallet.noise", 0.05),
+            ("body.model", 0.0),
+            ("body.material", 0.8),
+            ("body.decay", 1.6),
+            ("body.position", 0.15),
+            ("pitch.tune", 12.0),
+            ("out.width", 0.4),
+        ],
+    },
+    Preset {
+        name: "Dark Bell",
+        params: &[
+            ("mallet.hardness", 0.35),
+            ("mallet.noise", 0.05),
+            ("body.model", 4.0),
+            ("body.material", 0.25),
+            ("body.decay", 3.5),
+            ("body.position", 0.3),
+            ("out.width", 0.5),
+            ("out.level", -2.0),
         ],
     },
 ];

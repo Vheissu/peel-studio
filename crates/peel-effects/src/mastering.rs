@@ -154,7 +154,7 @@ pub static DESCRIPTOR: DeviceDescriptor = DeviceDescriptor {
     params: &PARAMS,
 };
 
-pub static PRESETS: [Preset; 5] = [
+pub static PRESETS: [Preset; 8] = [
     Preset {
         name: "Clean",
         params: &[],
@@ -206,6 +206,48 @@ pub static PRESETS: [Preset; 5] = [
             ("makeup", 2.0),
             ("width", 1.05),
             ("limiter_release", 120.0),
+        ],
+    },
+    Preset {
+        name: "Low End",
+        params: &[
+            ("low", 1.5),
+            ("high", 1.5),
+            ("threshold", -14.0),
+            ("ratio", 2.0),
+            ("attack", 30.0),
+            ("release", 180.0),
+            ("makeup", 2.5),
+            ("ceiling", -1.0),
+        ],
+    },
+    Preset {
+        name: "Neon",
+        params: &[
+            ("low", 1.0),
+            ("mid", -0.5),
+            ("high", 2.0),
+            ("threshold", -16.0),
+            ("ratio", 1.8),
+            ("attack", 30.0),
+            ("release", 250.0),
+            ("makeup", 2.0),
+            ("width", 1.15),
+            ("ceiling", -1.0),
+        ],
+    },
+    Preset {
+        name: "Dusty",
+        params: &[
+            ("low", 1.0),
+            ("high", -2.5),
+            ("threshold", -18.0),
+            ("ratio", 2.5),
+            ("attack", 20.0),
+            ("release", 300.0),
+            ("makeup", 3.0),
+            ("width", 0.9),
+            ("ceiling", -1.0),
         ],
     },
 ];

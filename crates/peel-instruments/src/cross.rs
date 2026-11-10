@@ -211,7 +211,7 @@ use peel_dsp::osc::{self, Waveform};
 use peel_dsp::util::{db_to_gain, key_to_hz};
 use peel_dsp::voice::StealPolicy;
 
-pub static PRESETS: [Preset; 7] = [
+pub static PRESETS: [Preset; 9] = [
     Preset {
         name: "Duo",
         params: &[],
@@ -320,6 +320,51 @@ pub static PRESETS: [Preset; 7] = [
             ("filter.resonance", 0.45),
             ("mod.amount", 0.3),
             ("mod.decay", 0.5),
+        ],
+    },
+    Preset {
+        name: "FM Keys",
+        params: &[
+            ("osc1.wave", 0.0),
+            ("osc2.wave", 0.0),
+            ("osc2.semi", 0.0),
+            ("osc2.detune", 3.0),
+            ("osc.mix", 0.3),
+            ("cross.mode", 0.0),
+            ("cross.fm12", 0.35),
+            ("cross.fm21", 0.0),
+            ("mod.amount", 0.6),
+            ("mod.decay", 0.5),
+            ("filter.cutoff", 8_000.0),
+            ("filter.resonance", 0.05),
+            ("filter.env", 0.5),
+            ("amp.attack", 0.002),
+            ("amp.decay", 1.8),
+            ("amp.sustain", 0.2),
+            ("amp.release", 0.35),
+        ],
+    },
+    Preset {
+        name: "Night Bell",
+        params: &[
+            ("osc1.wave", 0.0),
+            ("osc2.wave", 0.0),
+            ("osc2.semi", 19.0),
+            ("osc2.detune", 4.0),
+            ("osc.mix", 0.4),
+            ("cross.mode", 0.0),
+            ("cross.fm12", 0.45),
+            ("cross.fm21", 0.0),
+            ("mod.amount", 0.5),
+            ("mod.decay", 1.2),
+            ("filter.cutoff", 5_000.0),
+            ("filter.resonance", 0.1),
+            ("filter.env", 1.0),
+            ("amp.attack", 0.001),
+            ("amp.decay", 2.2),
+            ("amp.sustain", 0.0),
+            ("amp.release", 1.6),
+            ("out.level", -2.0),
         ],
     },
 ];

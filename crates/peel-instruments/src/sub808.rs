@@ -331,7 +331,7 @@ pub static PRESETS: [Preset; 14] = [
             ("drive.amount", 0.7),
             ("tone.cutoff", 4_200.0),
             ("click.level", 0.2),
-            ("out.gain", -4.5),
+            ("out.gain", -3.0),
         ],
     },
     Preset {
@@ -345,7 +345,7 @@ pub static PRESETS: [Preset; 14] = [
             ("drive.amount", 0.75),
             ("tone.cutoff", 2_600.0),
             ("click.level", 0.05),
-            ("out.gain", -5.0),
+            ("out.gain", -2.5),
         ],
     },
     Preset {
@@ -408,7 +408,7 @@ pub static PRESETS: [Preset; 14] = [
             ("tone.cutoff", 9_000.0),
             ("click.level", 0.35),
             ("click.tone", 4_200.0),
-            ("out.gain", -4.0),
+            ("out.gain", -2.0),
         ],
     },
     Preset {
@@ -424,7 +424,7 @@ pub static PRESETS: [Preset; 14] = [
             ("tone.cutoff", 1_700.0),
             ("click.level", 0.06),
             ("click.tone", 1_600.0),
-            ("out.gain", -2.0),
+            ("out.gain", -1.0),
         ],
     },
     Preset {
@@ -456,7 +456,7 @@ pub static PRESETS: [Preset; 14] = [
             ("drive.amount", 0.6),
             ("tone.cutoff", 6_500.0),
             ("click.level", 0.25),
-            ("out.gain", -5.0),
+            ("out.gain", -2.5),
         ],
     },
     Preset {
