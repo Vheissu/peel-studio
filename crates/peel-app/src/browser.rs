@@ -1,5 +1,9 @@
 //! Browser: native instruments and effects, sample files and patterns.
 //! Everything can be dragged onto the rack, mixer or playlist.
+//!
+//! Clicking an instrument or one of its presets plays it; double-clicking,
+//! the plus button or a drag adds it. An effect has nothing to play on its
+//! own, so a click adds it.
 
 use std::path::{Path, PathBuf};
 
@@ -136,6 +140,54 @@ pub fn draw(ui: &mut Ui, r: Rect, s: &mut Session, ws: &mut Workspace) -> bool {
 #[derive(Default)]
 struct Expanded(std::collections::HashSet<&'static str>);
 
+/// The instrument row last clicked: the one that was heard.
+#[derive(Default)]
+struct Picked {
+    row: Option<W>,
+    /// A double-click added the row on its second press; the click that
+    /// ends it is not another request to hear it.
+    added: bool,
+}
+
+/// What a press on an instrument row asks for.
+enum Pick {
+    Nothing,
+    Hear,
+    Add,
+}
+
+/// Reads an instrument row: a click hears it and marks it picked, and a
+/// double-click or its add button adds it.
+fn pick(ui: &mut Ui, picked_id: W, row: W, resp: &peel_ui::Response, add: bool) -> Pick {
+    let st = ui.state::<Picked>(picked_id);
+    if add || resp.double_clicked {
+        st.added = resp.double_clicked;
+        return Pick::Add;
+    }
+    if !resp.clicked {
+        return Pick::Nothing;
+    }
+    if std::mem::take(&mut st.added) {
+        return Pick::Nothing;
+    }
+    st.row = Some(row);
+    Pick::Hear
+}
+
+/// Width of the add button at the right of an instrument row.
+const ADD_W: f32 = 22.0;
+
+/// The add button of an instrument row. It is drawn while the row is hot or
+/// picked, and can always be reached with the keyboard.
+fn add_button(ui: &mut Ui, id: W, r: Rect, name: &str) -> peel_ui::Response {
+    let resp = ui.interact_button(id, r, &format!("Add {name}"));
+    ui.tooltip(&resp, "Add to the Channel Rack");
+    if resp.hovered {
+        ui.set_cursor(CursorIcon::Pointer);
+    }
+    resp
+}
+
 enum Row {
     Heading(&'static str),
     Device(&'static peel_dsp::DeviceDescriptor, bool),
@@ -163,6 +215,7 @@ fn devices(
 ) {
     let t = ui.theme.clone();
     let expanded_id = W::new("browser-expanded");
+    let picked_id = W::new("browser-picked");
     if let Ok(t) = std::env::var("PEEL_EXPAND")
         && let Some(d) = peel_devices::descriptor(&t)
     {
@@ -294,16 +347,23 @@ fn devices(
                 let mut cells = row.shrink2(4.0, 0.0);
                 let has_presets = !peel_devices::presets(d.type_id).is_empty();
                 let caret_r = cells.cut_left(16.0);
+                // An instrument row ends in its add button.
+                let add_r = instrument.then(|| cells.cut_right(ADD_W));
                 let resp = ui.interact_button(
                     id,
                     Rect {
                         x: caret_r.right(),
-                        w: row.right() - caret_r.right(),
+                        w: cells.right() - caret_r.right(),
                         ..row
                     },
                     d.name,
                 );
-                let hot = ui.animate_bool(id, resp.hovered);
+                let add = add_r.map(|r| add_button(ui, id.with("add"), r, d.name));
+                let picked = instrument && ui.state::<Picked>(picked_id).row == Some(id);
+                let over = resp.hovered || add.as_ref().is_some_and(|a| a.hovered);
+                let hot = ui
+                    .animate_bool(id, over)
+                    .max(if picked { 0.7 } else { 0.0 });
                 if hot > 0.0 {
                     ui.scene.rect(row, t.radius_m, t.raised.alpha(hot));
                 }
@@ -352,15 +412,29 @@ fn devices(
                     Align::Start,
                 );
                 if hot > 0.2 {
+                    let lit = add.as_ref().is_some_and(|a| a.hovered);
                     ui.icon(
-                        cells.cut_right(18.0),
+                        add_r.unwrap_or_else(|| cells.cut_right(18.0)),
                         icons::PLUS,
                         13.0,
-                        t.text_dim.alpha(hot),
+                        if lit { t.text } else { t.text_dim.alpha(hot) },
                     );
                 }
-                ui.tooltip(&resp, d.description);
+                if instrument {
+                    ui.tooltip(
+                        &resp,
+                        &format!(
+                            "{}. Click to hear it, double-click to add it",
+                            d.description
+                        ),
+                    );
+                } else {
+                    ui.tooltip(&resp, d.description);
+                }
                 ui.focus_ring(id, row, t.radius_m);
+                if let Some(r) = add_r {
+                    ui.focus_ring(id.with("add"), r, t.radius_s);
+                }
                 if resp.hovered {
                     ui.set_cursor(CursorIcon::Grab);
                 }
@@ -371,8 +445,19 @@ fn devices(
                         color: cc,
                     });
                 }
-                if resp.clicked {
-                    add_device(s, ws, d, None);
+                let add_clicked = add.is_some_and(|a| a.clicked);
+                if !instrument {
+                    if resp.clicked {
+                        add_device(s, ws, d, None);
+                    }
+                } else {
+                    match pick(ui, picked_id, id, &resp, add_clicked) {
+                        Pick::Add => add_device(s, ws, d, None),
+                        Pick::Hear => {
+                            s.preview_device(d.type_id, rack::default_preset(d.type_id));
+                        }
+                        Pick::Nothing => {}
+                    }
                 }
             }
             Row::Scanning => {
@@ -416,20 +501,43 @@ fn devices(
                 let id = W::new(("browser-plugin", p.type_id.as_str()));
                 let mut cells = row.shrink2(4.0, 0.0);
                 cells.cut_left(16.0);
-                let resp = ui.interact_button(id, row, &p.name);
-                let hot = ui.animate_bool(id, resp.hovered);
+                // A plugin cannot be heard before it is loaded, so a click
+                // on an instrument only picks it; adding works as for the
+                // built-in instruments.
+                let add_r = instrument.then(|| cells.cut_right(ADD_W));
+                let resp = ui.interact_button(
+                    id,
+                    Rect {
+                        w: cells.right() - row.x,
+                        ..row
+                    },
+                    &p.name,
+                );
+                let add = add_r.map(|r| add_button(ui, id.with("add"), r, &p.name));
+                let picked = instrument && ui.state::<Picked>(picked_id).row == Some(id);
+                let over = resp.hovered || add.as_ref().is_some_and(|a| a.hovered);
+                let hot = ui
+                    .animate_bool(id, over)
+                    .max(if picked { 0.7 } else { 0.0 });
                 if hot > 0.0 {
                     ui.scene.rect(row, t.radius_m, t.raised.alpha(hot));
                 }
                 let cc = t.text_dim;
                 cells.cut_left(4.0);
                 if hot > 0.2 {
+                    let lit = add.as_ref().is_some_and(|a| a.hovered);
                     ui.icon(
-                        cells.cut_right(18.0),
+                        add_r.unwrap_or_else(|| cells.cut_right(18.0)),
                         icons::PLUS,
                         13.0,
-                        t.text_dim.alpha(hot),
+                        if lit { t.text } else { t.text_dim.alpha(hot) },
                     );
+                }
+                if instrument {
+                    ui.tooltip(&resp, "Double-click to add it");
+                }
+                if let Some(r) = add_r {
+                    ui.focus_ring(id.with("add"), r, t.radius_s);
                 }
                 let vendor_w = ui.measure(&p.vendor, t.caption).x.min(cells.w * 0.4);
                 let vendor_r = cells.cut_right(vendor_w);
@@ -452,18 +560,55 @@ fn devices(
                         color: cc,
                     });
                 }
-                if resp.clicked {
-                    add_plugin(s, ws, &p.type_id, &p.name, instrument);
+                let add_clicked = add.is_some_and(|a| a.clicked);
+                if !instrument {
+                    if resp.clicked {
+                        add_plugin(s, ws, &p.type_id, &p.name, instrument);
+                    }
+                } else {
+                    match pick(ui, picked_id, id, &resp, add_clicked) {
+                        Pick::Add => add_plugin(s, ws, &p.type_id, &p.name, instrument),
+                        Pick::Hear => s.stop_preview(),
+                        Pick::Nothing => {}
+                    }
                 }
             }
             Row::Preset(d, preset) => {
                 let id = W::new(("browser-preset", d.type_id, preset));
-                let resp = ui.interact_button(id, row, preset);
-                let hot = ui.animate_bool(id, resp.hovered);
+                let mut cells = row.shrink2(4.0, 0.0);
+                let add_r = instrument.then(|| cells.cut_right(ADD_W));
+                let resp = ui.interact_button(
+                    id,
+                    Rect {
+                        w: cells.right() - row.x,
+                        ..row
+                    },
+                    preset,
+                );
+                let add = add_r.map(|r| add_button(ui, id.with("add"), r, preset));
+                let picked = instrument && ui.state::<Picked>(picked_id).row == Some(id);
+                let over = resp.hovered || add.as_ref().is_some_and(|a| a.hovered);
+                let hot = ui
+                    .animate_bool(id, over)
+                    .max(if picked { 0.85 } else { 0.0 });
                 if hot > 0.0 {
                     ui.scene.rect(row, t.radius_m, t.raised.alpha(hot * 0.8));
                 }
-                let mut cells = row.shrink2(4.0, 0.0);
+                if let Some(r) = add_r
+                    && hot > 0.2
+                {
+                    let lit = add.as_ref().is_some_and(|a| a.hovered);
+                    ui.icon(
+                        r,
+                        icons::PLUS,
+                        13.0,
+                        if lit { t.text } else { t.text_dim.alpha(hot) },
+                    );
+                    ui.focus_ring(id.with("add"), r, t.radius_s);
+                }
+                if instrument {
+                    ui.tooltip(&resp, "Click to hear it, double-click to add it");
+                }
                 cells.cut_left(16.0 + 14.0);
                 let cc = category_color(d.category);
                 ui.scene.vline(
@@ -490,8 +635,17 @@ fn devices(
                     });
                 }
                 ui.focus_ring(id, row, t.radius_m);
-                if resp.clicked {
-                    add_device(s, ws, d, Some(preset));
+                let add_clicked = add.is_some_and(|a| a.clicked);
+                if !instrument {
+                    if resp.clicked {
+                        add_device(s, ws, d, Some(preset));
+                    }
+                } else {
+                    match pick(ui, picked_id, id, &resp, add_clicked) {
+                        Pick::Add => add_device(s, ws, d, Some(preset)),
+                        Pick::Hear => s.preview_device(d.type_id, Some(preset)),
+                        Pick::Nothing => {}
+                    }
                 }
             }
         }

@@ -1,6 +1,7 @@
 //! Channel Rack: one row per instrument with a step grid for the selected
 //! pattern. Steps are ordinary notes, so the Piano Roll edits the same data.
 
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use peel_document::{Channel, Id, Note, PALETTE, Time};
@@ -204,6 +205,15 @@ fn step_fitting(rows: &[Vec<Note>]) -> Option<Time> {
 
 pub fn draw(ui: &mut Ui, r: Rect, tools: Rect, s: &mut Session, ws: &mut Workspace) {
     let t = ui.theme.clone();
+    // Cmd+D copies the selected channel while the pointer is over the rack.
+    if !ui.text_focus()
+        && !ui.any_popup()
+        && ui.pointer_in(r)
+        && ui.input.take_command("d", false)
+        && let Some(cid) = ws.selected_channel
+    {
+        duplicate_channel(s, ws, cid, true);
+    }
     let pid = current_pattern(s);
     let Some(pattern) = s.project().pattern(pid).cloned() else {
         return;
@@ -890,7 +900,8 @@ fn channel_button(
         MenuItem::new("Piano roll").shortcut("F7"),
         MenuItem::new("Instrument"),
         MenuItem::new("Rename channel"),
-        MenuItem::new("Clone channel"),
+        MenuItem::new("Duplicate").shortcut("Cmd+D"),
+        MenuItem::new("Duplicate without notes"),
         MenuItem::new("Clear notes in pattern"),
         MenuItem::Separator,
         MenuItem::Heading("Color".into()),
@@ -912,8 +923,13 @@ fn channel_button(
             0 => ws.dock = DockTab::PianoRoll,
             1 => crate::instrument_editor::open(s, ws, cid),
             2 => crate::rename::open(ui, W::new(("rename-channel-popup", cid)), r, &ch.name),
-            3 => clone_channel(s, cid),
+            3 => {
+                duplicate_channel(s, ws, cid, true);
+            }
             4 => {
+                duplicate_channel(s, ws, cid, false);
+            }
+            5 => {
                 let pid = current_pattern(s);
                 s.doc.edit("Clear notes", |p| {
                     if let Some(pt) = p.pattern_mut(pid) {
@@ -1185,22 +1201,26 @@ pub fn add_instrument(s: &mut Session, type_id: &str) -> Option<Id> {
     add_instrument_preset(s, type_id, None)
 }
 
+/// The preset a new channel of `type_id` starts with when none is named.
+/// New drum channels start with the acoustic kit; existing project
+/// instances keep their own settings.
+pub(crate) fn default_preset(type_id: &str) -> Option<&'static str> {
+    match type_id {
+        "peel.drum.kick" => Some("Acoustic Kick"),
+        "peel.drum.snare" => Some("Acoustic Snare"),
+        "peel.drum.hat" => Some("Acoustic Closed"),
+        "peel.drum.tom" => Some("Acoustic Rack"),
+        _ => None,
+    }
+}
+
 /// Adds an instrument channel with a factory preset applied.
 pub fn add_instrument_preset(s: &mut Session, type_id: &str, preset: Option<&str>) -> Option<Id> {
     if crate::util::mixer_full(s) {
         return None;
     }
     let desc = peel_devices::descriptor(type_id)?;
-    // New drum channels start with the acoustic kit. Explicit presets and
-    // existing project instances keep their own settings.
-    let default = match type_id {
-        "peel.drum.kick" => Some("Acoustic Kick"),
-        "peel.drum.snare" => Some("Acoustic Snare"),
-        "peel.drum.hat" => Some("Acoustic Closed"),
-        "peel.drum.tom" => Some("Acoustic Rack"),
-        _ => None,
-    };
-    let dev = template::device(type_id, preset.or(default));
+    let dev = template::device(type_id, preset.or(default_preset(type_id)));
     let name = preset
         .filter(|p| {
             !peel_devices::presets(type_id)
@@ -1363,24 +1383,102 @@ pub fn add_sample_channel(s: &mut Session, path: &Path) -> Option<Id> {
     new_id
 }
 
-fn clone_channel(s: &mut Session, cid: Id) {
-    if crate::util::mixer_full(s) {
-        return;
-    }
-    let Some(src) = s.project().channel(cid).cloned() else {
-        return;
+/// "Kick" gives "Kick 2", "Kick 2" gives "Kick 3": the first number not
+/// already used by another channel.
+fn next_name<'a>(name: &str, taken: impl Iterator<Item = &'a str>) -> String {
+    let taken: HashSet<&str> = taken.collect();
+    let base = match name.rsplit_once(' ') {
+        Some((base, n)) if !base.is_empty() && n.parse::<u32>().is_ok() => base,
+        _ => name,
     };
-    s.doc.edit(format!("Clone {}", src.name), |p| {
-        let mut dev = src.device.clone();
-        dev.id = Id::new();
-        let n = p.channels.len();
-        let id = template::add_channel(p, &format!("{} 2", src.name), n * 5 + 2, dev, src.root_key);
-        if let Some(c) = p.channel_mut(id) {
-            c.color = src.color;
-            c.gain_db = src.gain_db;
-            c.pan = src.pan;
+    (2u32..)
+        .map(|n| format!("{base} {n}"))
+        .find(|c| !taken.contains(c.as_str()))
+        .unwrap_or_else(|| name.to_string())
+}
+
+/// Copies a channel: its instrument and settings, and its mixer track with
+/// the effects, sends and routing when the track is the channel's own. A
+/// channel on a shared track (or the master) stays on that track. With
+/// `notes`, the copy plays the same notes and expression in every pattern.
+/// The copy sits right after the original and becomes the selection.
+pub(crate) fn duplicate_channel(
+    s: &mut Session,
+    ws: &mut Workspace,
+    cid: Id,
+    notes: bool,
+) -> Option<Id> {
+    let p = s.project();
+    let src = p.channel(cid).cloned()?;
+    let master = p.mixer.tracks.first().map(|t| t.id);
+    let shared = Some(src.track) == master
+        || p.channels
+            .iter()
+            .any(|c| c.id != cid && c.track == src.track);
+    let track = if shared {
+        None
+    } else {
+        p.mixer.track(src.track).cloned()
+    };
+    let name = next_name(&src.name, p.channels.iter().map(|c| c.name.as_str()));
+    if track.is_some() && crate::util::mixer_full(s) {
+        return None;
+    }
+    let new_id = Id::new();
+    s.doc.edit(format!("Duplicate {}", src.name), |p| {
+        let mut ch = src.clone();
+        ch.id = new_id;
+        ch.name = name.clone();
+        ch.device.id = Id::new();
+        if let Some(mut t) = track {
+            t.id = Id::new();
+            t.name = name.clone();
+            t.solo = false;
+            for insert in &mut t.inserts {
+                insert.id = Id::new();
+            }
+            ch.track = t.id;
+            let at = p
+                .mixer
+                .tracks
+                .iter()
+                .position(|m| m.id == src.track)
+                .map_or(p.mixer.tracks.len(), |i| i + 1);
+            p.mixer.tracks.insert(at, t);
+        }
+        let at = p
+            .channels
+            .iter()
+            .position(|c| c.id == cid)
+            .map_or(p.channels.len(), |i| i + 1);
+        p.channels.insert(at, ch);
+        if !notes {
+            return;
+        }
+        for pt in p.patterns.iter_mut().filter(|pt| pt.uses_channel(cid)) {
+            let pt = std::sync::Arc::make_mut(pt);
+            let mut map = HashMap::new();
+            let copies: Vec<Note> = pt
+                .notes_for(cid)
+                .map(|n| {
+                    let id = Id::new();
+                    map.insert(n.id, id);
+                    Note {
+                        id,
+                        channel: new_id,
+                        ..*n
+                    }
+                })
+                .collect();
+            let curves =
+                crate::note_expr::remap(&crate::note_expr::gather(pt, map.keys().copied()), &map);
+            pt.notes.extend(copies);
+            pt.sort_notes();
+            crate::note_expr::insert(pt, curves);
         }
     });
+    select(ws, new_id);
+    Some(new_id)
 }
 
 pub fn delete_channel(s: &mut Session, ws: &mut Workspace, cid: Id) {

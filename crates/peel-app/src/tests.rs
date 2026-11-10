@@ -939,7 +939,12 @@ fn browser_presets_add_configured_channels() {
     let n = h.session().project().channels.len();
     h.click(W::new(("browser-dev", "peel.synth.bass")).with("caret"));
     h.frame();
-    h.click(W::new(("browser-preset", "peel.synth.bass", "Acid")));
+    // A click plays the preset and adds nothing.
+    let acid = W::new(("browser-preset", "peel.synth.bass", "Acid"));
+    h.click(acid);
+    assert_eq!(h.session().project().channels.len(), n);
+    // Its add button adds it.
+    h.click(acid.with("add"));
     let p = h.session().project();
     assert_eq!(p.channels.len(), n + 1);
     let ch = p.channels.last().unwrap();
@@ -953,6 +958,84 @@ fn browser_presets_add_configured_channels() {
         assert_eq!(ch.device.params.get(*k), Some(v), "{k}");
     }
     assert_eq!(h.studio.ws.selected_channel, Some(ch.id));
+}
+
+#[test]
+fn browser_instruments_add_on_a_double_click_only() {
+    let mut h = Harness::new();
+    let n = h.session().project().channels.len();
+    let row = W::new(("browser-dev", "peel.keys.tine"));
+    h.click(row);
+    h.click(row);
+    assert_eq!(h.session().project().channels.len(), n, "clicks only play");
+    let c = h.rect(row).center();
+    h.move_to(c);
+    h.ui.input.double_clicked = true;
+    h.press(0);
+    h.release(0);
+    h.frame();
+    let p = h.session().project();
+    assert_eq!(p.channels.len(), n + 1, "one channel, not one per click");
+    assert_eq!(p.channels.last().unwrap().device.type_id, "peel.keys.tine");
+}
+
+#[test]
+fn duplicating_a_channel_copies_its_sound_effects_and_notes() {
+    let mut h = Harness::new();
+    let (src, track, pid) = {
+        let p = h.session().project();
+        let ch = p.channels.iter().find(|c| c.name == "Kick").unwrap();
+        (ch.id, ch.track, p.patterns[0].id)
+    };
+    h.studio.session.doc.edit("Set up", |p| {
+        p.channel_mut(src).unwrap().gain_db = -4.0;
+        let fx = template::device("peel.fx.compressor", None);
+        p.mixer.track_mut(track).unwrap().inserts.push(fx);
+    });
+    let before = h.session().project().clone();
+    let notes = |p: &peel_document::Project, ch| -> Vec<(Time, u8)> {
+        p.pattern(pid)
+            .unwrap()
+            .notes_for(ch)
+            .map(|n| (n.start, n.key))
+            .collect()
+    };
+    let copy =
+        crate::rack::duplicate_channel(&mut h.studio.session, &mut h.studio.ws, src, true).unwrap();
+    let p = h.session().project().clone();
+    let at = p.channels.iter().position(|c| c.id == src).unwrap();
+    let ch = &p.channels[at + 1];
+    assert_eq!(ch.id, copy, "the copy follows the original");
+    assert_eq!(ch.name, "Kick 2");
+    assert_eq!(ch.gain_db, -4.0);
+    let original = p.channel(src).unwrap();
+    assert_eq!(ch.device.params, original.device.params);
+    assert_ne!(ch.device.id, original.device.id);
+    // Its own track, with a copy of the effect.
+    assert_ne!(ch.track, track);
+    let (a, b) = (
+        p.mixer.track(track).unwrap(),
+        p.mixer.track(ch.track).unwrap(),
+    );
+    assert_eq!(b.inserts.len(), 1);
+    assert_eq!(b.inserts[0].type_id, a.inserts[0].type_id);
+    assert_ne!(b.inserts[0].id, a.inserts[0].id);
+    assert!(!notes(&p, src).is_empty());
+    assert_eq!(notes(&p, copy), notes(&p, src));
+    assert_eq!(h.studio.ws.selected_channel, Some(copy));
+    assert!(peel_document::validate(&p).iter().all(|i| !i.is_error()));
+    // The next copy counts on, and can leave the notes behind.
+    let third =
+        crate::rack::duplicate_channel(&mut h.studio.session, &mut h.studio.ws, copy, false)
+            .unwrap();
+    let p = h.session().project().clone();
+    assert_eq!(p.channel(third).unwrap().name, "Kick 3");
+    assert!(notes(&p, third).is_empty());
+    // One undo step each.
+    h.studio.session.doc.undo();
+    h.studio.session.doc.undo();
+    assert_eq!(h.session().project().channels, before.channels);
+    assert_eq!(h.session().project().mixer, before.mixer);
 }
 
 #[test]

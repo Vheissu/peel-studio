@@ -19,7 +19,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Cmd Z  /  Cmd ⇧ Z", "Undo / redo"),
     ("Cmd C  X  V", "Copy, cut, paste notes or clips"),
     ("Cmd A", "Select all notes or clips"),
-    ("Cmd D", "Duplicate notes or clips"),
+    ("Cmd D", "Duplicate notes, clips or the channel"),
     ("Del", "Delete selection"),
     ("↑  ↓", "Transpose notes (⇧ octave)"),
     ("Cmd scroll", "Zoom"),

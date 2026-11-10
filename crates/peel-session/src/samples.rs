@@ -4,6 +4,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use peel_document::Id;
@@ -12,7 +13,11 @@ use peel_media::Peaks;
 
 enum Request {
     Asset(Id, PathBuf, f32),
-    Preview(PathBuf, f32, f32),
+    /// A file to audition: path, engine rate, gain, request number.
+    Preview(PathBuf, f32, f32, u64),
+    /// One note of a native instrument: type, preset, engine rate, gain,
+    /// request number.
+    Audition(String, Option<String>, f32, f32, u64),
 }
 
 /// A decoded asset with its waveform summary, both built on the worker.
@@ -20,7 +25,7 @@ type Loaded = (Arc<SampleBuffer>, Arc<Peaks>);
 
 enum Done {
     Asset(Id, Result<Loaded, String>),
-    Preview(Arc<SampleBuffer>, f32),
+    Preview(Arc<SampleBuffer>, f32, u64),
 }
 
 pub struct SampleLoader {
@@ -30,12 +35,17 @@ pub struct SampleLoader {
     peaks: HashMap<Id, Arc<Peaks>>,
     pending: HashSet<Id>,
     preview: Option<(Arc<SampleBuffer>, f32)>,
+    /// Number of the latest preview request. Older ones are skipped by the
+    /// worker and dropped on arrival, so only the last click is heard.
+    preview_no: Arc<AtomicU64>,
 }
 
 impl SampleLoader {
     pub fn new() -> SampleLoader {
         let (tx, req_rx) = channel::<Request>();
         let (done_tx, rx) = channel::<Done>();
+        let preview_no = Arc::new(AtomicU64::new(0));
+        let latest = preview_no.clone();
         std::thread::Builder::new()
             .name("peel-samples".into())
             .spawn(move || {
@@ -54,9 +64,23 @@ impl SampleLoader {
                                 break;
                             }
                         }
-                        Request::Preview(path, rate, gain) => {
-                            if let Ok(buf) = peel_media::load_for_engine(&path, rate)
-                                && done_tx.send(Done::Preview(Arc::new(buf), gain)).is_err()
+                        Request::Preview(path, rate, gain, no) => {
+                            if latest.load(Ordering::Relaxed) == no
+                                && let Ok(buf) = peel_media::load_for_engine(&path, rate)
+                                && done_tx
+                                    .send(Done::Preview(Arc::new(buf), gain, no))
+                                    .is_err()
+                            {
+                                break;
+                            }
+                        }
+                        Request::Audition(type_id, preset, rate, gain, no) => {
+                            if latest.load(Ordering::Relaxed) == no
+                                && let Some(buf) =
+                                    crate::audition::render(&type_id, preset.as_deref(), rate)
+                                && done_tx
+                                    .send(Done::Preview(Arc::new(buf), gain, no))
+                                    .is_err()
                             {
                                 break;
                             }
@@ -72,6 +96,7 @@ impl SampleLoader {
             peaks: HashMap::new(),
             pending: HashSet::new(),
             preview: None,
+            preview_no,
         }
     }
 
@@ -83,7 +108,30 @@ impl SampleLoader {
     }
 
     pub fn request_preview(&mut self, path: PathBuf, rate: f32, gain: f32) {
-        let _ = self.tx.send(Request::Preview(path, rate, gain));
+        let no = self.next_preview();
+        let _ = self.tx.send(Request::Preview(path, rate, gain, no));
+    }
+
+    /// Asks for one note of a native instrument on the preview route.
+    pub fn request_audition(&mut self, type_id: &str, preset: Option<&str>, rate: f32, gain: f32) {
+        let no = self.next_preview();
+        let _ = self.tx.send(Request::Audition(
+            type_id.to_string(),
+            preset.map(str::to_string),
+            rate,
+            gain,
+            no,
+        ));
+    }
+
+    /// Drops any preview still being prepared.
+    pub fn cancel_preview(&mut self) {
+        self.next_preview();
+        self.preview = None;
+    }
+
+    fn next_preview(&mut self) -> u64 {
+        self.preview_no.fetch_add(1, Ordering::Relaxed) + 1
     }
 
     pub fn cached(&self, id: Id) -> Option<Arc<SampleBuffer>> {
@@ -123,7 +171,11 @@ impl SampleLoader {
                         }),
                     ));
                 }
-                Done::Preview(buf, gain) => self.preview = Some((buf, gain)),
+                Done::Preview(buf, gain, no) => {
+                    if self.preview_no.load(Ordering::Relaxed) == no {
+                        self.preview = Some((buf, gain));
+                    }
+                }
             }
         }
         out

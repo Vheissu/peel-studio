@@ -6,6 +6,7 @@
 //! so a fader move never rebuilds the plan.
 
 mod audio;
+pub mod audition;
 mod bounce;
 mod compile;
 mod credits;
@@ -926,7 +927,16 @@ impl Session {
             .request_preview(path.to_path_buf(), self.engine.sample_rate(), 0.7);
     }
 
+    /// Plays one note of a native instrument on the preview route, without
+    /// adding it to the project. Like a file preview it is left out of
+    /// exports and replaces whatever was previewing.
+    pub fn preview_device(&mut self, type_id: &str, preset: Option<&str>) {
+        self.samples
+            .request_audition(type_id, preset, self.engine.sample_rate(), 0.8);
+    }
+
     pub fn stop_preview(&mut self) {
+        self.samples.cancel_preview();
         let _ = self.engine.send(EngineCommand::Preview {
             sample: None,
             gain: 0.0,
