@@ -14,6 +14,7 @@ fn new_devices_round_trip_and_render_through_the_session() {
         "peel.perc.mallet",
         "peel.strings.zither",
         "peel.synth.cross",
+        "peel.bass.808",
     ] {
         let mut project = template::beat_and_melody();
         project.channels.truncate(1);

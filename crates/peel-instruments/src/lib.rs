@@ -12,6 +12,7 @@
 //! | `peel.drum.acoustic` | Acoustic Kit | Drums | Recorded kit: velocity layers, alternate takes |
 //! | `peel.synth.poly`  | Poly    | Synth    | Polyphonic subtractive synth                 |
 //! | `peel.synth.bass`  | Bass    | Synth    | Monophonic bass with glide and drive         |
+//! | `peel.bass.808`    | 808     | Bass     | Tuned 808 sub: punch, long decay, drive, slides |
 //! | `peel.keys.tine`   | Tine    | Keys     | Electric piano: tine and pickup model        |
 //! | `peel.keys.grand`  | Grand   | Keys     | Synthesized acoustic piano (modal)           |
 //! | `peel.wind.sax`    | Sax     | Wind     | Saxophone: reed and breath model, legato     |
@@ -49,9 +50,10 @@
 //! - tone filter and attack: Kick (beater click), Tom (stick), Snare (wire
 //!   band), Hat (bright band), Clap (burst band);
 //! - string loss: Guitar, Zither; mallet hardness and mode tilt: Mallet;
-//! - a ±9 dB treble shelf: Grand, Tine, Sampler, Violin.
+//! - a ±9 dB treble shelf: Grand, Tine, Sampler, Violin;
+//! - the tone filter: 808 (±2 octaves);
 //!
-//! Limits: Hat and Clap have no pitch to bend. Bass, Sax (mono) and Poly in
+//! Limits: Hat and Clap have no pitch to bend. Bass, 808, Sax (mono) and Poly in
 //! Mono/Legato play the expression of the note on top of their key stack.
 //! Zither re-strikes the key's own string, so same-key notes share it.
 //! The instrument-wide bend and per-note snapshots both reach ±120 st.
@@ -84,6 +86,7 @@ mod recorded_strings;
 mod sampler;
 mod sax;
 mod snare;
+mod sub808;
 mod tine;
 mod tom;
 mod violin;
@@ -91,7 +94,7 @@ mod zither;
 
 use peel_dsp::{Device, DeviceDescriptor, Preset};
 
-static ALL: [&DeviceDescriptor; 20] = [
+static ALL: [&DeviceDescriptor; 21] = [
     &kick::DESC,
     &snare::DESC,
     &hat::DESC,
@@ -101,6 +104,7 @@ static ALL: [&DeviceDescriptor; 20] = [
     &mallet::DESC,
     &poly::DESC,
     &bass::DESC,
+    &sub808::DESC,
     &cross::DESC,
     &tine::DESC,
     &grand::DESC,
@@ -133,6 +137,7 @@ pub fn create(type_id: &str) -> Option<Box<dyn Device>> {
         "peel.strings.zither" => Some(zither::create()),
         "peel.synth.poly" => Some(poly::create()),
         "peel.synth.bass" => Some(bass::create()),
+        "peel.bass.808" => Some(sub808::create()),
         "peel.keys.tine" => Some(tine::create()),
         "peel.keys.grand" => Some(grand::create()),
         "peel.guitar.electric" => Some(guitar::create()),
@@ -161,6 +166,7 @@ pub fn presets(type_id: &str) -> &'static [Preset] {
         "peel.strings.zither" => &zither::PRESETS,
         "peel.synth.poly" => &poly::PRESETS,
         "peel.synth.bass" => &bass::PRESETS,
+        "peel.bass.808" => &sub808::PRESETS,
         "peel.keys.tine" => &tine::PRESETS,
         "peel.keys.grand" => &grand::PRESETS,
         "peel.guitar.electric" => &guitar::PRESETS,

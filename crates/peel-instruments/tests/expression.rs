@@ -6,7 +6,7 @@ mod common;
 use common::*;
 use peel_dsp::EventKind;
 
-const PITCHED: [(&str, u8); 8] = [
+const PITCHED: [(&str, u8); 9] = [
     ("peel.synth.poly", 57),
     ("peel.synth.bass", 40),
     ("peel.keys.grand", 57),
@@ -15,6 +15,7 @@ const PITCHED: [(&str, u8); 8] = [
     ("peel.sampler", 57),
     ("peel.strings.violin", 62),
     ("peel.wind.sax", 57),
+    ("peel.bass.808", 45),
 ];
 
 fn bend(at: usize, semitones: f32) -> Timed {
