@@ -2,31 +2,36 @@
 name: Peel Studio
 description: Pattern-and-playlist DAW. Source of truth is Theme::dark() in crates/peel-ui/src/theme.rs.
 colors:
-  bg: "#0F1011"
-  panel: "#1C1E21"
-  panel-alt: "#23262A"
-  raised: "#2A2D32"
-  control: "#31353B"
-  control-hover: "#3B4047"
-  control-active: "#464C54"
-  line: "#2B2E33"
-  line-strong: "#3A3E44"
-  well: "#151719"
-  text: "#EEEFF0"
-  text-dim: "#ADB1B7"
-  text-faint: "#8C9199"
-  text-on-accent: "#1E1406"
-  accent: "#F0A443"
-  focus: "#6EC4E6"
-  record: "#EE5F5B"
+  bg: "#0C0B0A"
+  panel: "#1A1917"
+  panel-alt: "#211F1D"
+  raised: "#2B2926"
+  control: "#35322E"
+  control-hover: "#423E39"
+  control-active: "#504B45"
+  line: "#2D2B28"
+  line-strong: "#403C37"
+  well: "#121110"
+  text: "#F3EEE4"
+  text-dim: "#B9B2A6"
+  text-faint: "#8F887C"
+  text-on-accent: "#1F1305"
+  accent: "#F7992B"
+  focus: "#7FC8EA"
+  record: "#F2553F"
   play: "#9FD65B"
-  warn: "#E8C45C"
-  shadow: "rgba(0, 0, 0, 0.5)"
-  grid-bar: "rgba(255, 255, 255, 0.12)"
-  grid-beat: "rgba(255, 255, 255, 0.06)"
-  grid-step: "rgba(255, 255, 255, 0.028)"
-  key-white: "#D6D8DB"
-  key-black: "#26282C"
+  warn: "#EFC53F"
+  shadow: "rgba(0, 0, 0, 0.55)"
+  grid-bar: "rgba(255, 245, 230, 0.13)"
+  grid-beat: "rgba(255, 245, 230, 0.065)"
+  grid-step: "rgba(255, 245, 230, 0.03)"
+  key-white: "#E6DFD0"
+  step-key-1: "#E8503C"
+  step-key-2: "#F28A2E"
+  step-key-3: "#F0C63E"
+  step-key-4: "#EFE7D6"
+  display: "#FFB454"
+  key-black: "#252320"
 typography:
   caption:
     fontFamily: "Barlow Semi Condensed"
@@ -56,8 +61,8 @@ typography:
     fontFeature: "tnum"
 rounded:
   s: "2px"
-  m: "3px"
-  l: "3px"
+  m: "4px"
+  l: "6px"
 spacing:
   unit: "4px"
   seam: "2px"
@@ -100,38 +105,50 @@ first, then this file.
 
 ## Reference
 
-A pattern-and-playlist DAW workspace in the FL Studio mould: compact
-toolbars, continuous editing surfaces and color reserved for the music.
-Peel Studio borrows the hierarchy, not the assets or the gloss. The chrome
-is neutral graphite and stays quiet. Clips, notes, lit steps, waveforms
-and the playhead are the brightest things on screen, and a channel's color
+The front panel of a Roland TR-808 and the drum machines that followed it:
+a warm black panel, cream legends, and step keys in red, orange, yellow
+and cream, four to a beat. Peel Studio takes that palette and its sense of
+hardware, with controls that have weight and displays that sit in the
+panel. It does not copy the artwork. The layout is a pattern-and-playlist
+workspace in the FL Studio mould: compact toolbars and continuous editing
+surfaces. The chrome stays quiet; clips, notes, lit steps, waveforms and
+the playhead are the brightest things on screen, and a channel's color
 identifies it everywhere it appears.
 
 ## Color
 
 | Token | Value | Use |
 | --- | --- | --- |
-| `bg` | `#0F1011` | Seams between panes, rails, status bar |
-| `panel` | `#1C1E21` | Panes and the top bar |
-| `panel_alt` | `#23262A` | Editor canvases, mixer strips |
-| `raised` | `#2A2D32` | Selected rows, hovered lane headers |
-| `control` | `#31353B` | Buttons, channel buttons, knob caps, step cells |
-| `well` | `#151719` | Recessed trays: transport groups, insert slots, scrollbar tracks |
-| `text` | `#EEEFF0` | Primary text |
-| `text_dim` | `#ADB1B7` | Secondary text |
-| `text_faint` | `#8C9199` | Labels and hints |
-| `accent` | `#F0A443` | Primary action, playhead, tempo |
-| `play` | `#9FD65B` | Play state, signal present, meters below -3 dB (amber above, coral at clip) |
-| `record` | `#EE5F5B` | Recording and clipping |
-| `focus` | `#6EC4E6` | Keyboard focus and drop targets only, never text |
+| `bg` | `#0C0B0A` | Seams between panes, rails, status bar, grooves, display windows |
+| `panel` | `#1A1917` | Panes and the top bar |
+| `panel_alt` | `#211F1D` | Editor canvases, mixer strips |
+| `raised` | `#2B2926` | Selected rows, hovered lane headers |
+| `control` | `#35322E` | Buttons, channel buttons, knob caps |
+| `well` | `#121110` | Recessed trays: transport groups, insert slots, scrollbar tracks |
+| `text` | `#F3EEE4` | Primary text, knob pointers, fader index lines |
+| `text_dim` | `#B9B2A6` | Secondary text |
+| `text_faint` | `#8F887C` | Labels and hints |
+| `accent` | `#F7992B` | Primary action, playhead, the peel |
+| `display` | `#FFB454` | Position and tempo figures in the time display |
+| `play` | `#9FD65B` | Play state, signal present, meters below -6 dB (orange above, red at clip) |
+| `record` | `#F2553F` | Recording and clipping |
+| `focus` | `#7FC8EA` | Keyboard focus and drop targets only, never text |
+| `step_keys` | `#E8503C` `#F28A2E` `#F0C63E` `#EFE7D6` | Step keys by beat of the bar |
+
+The neutrals lean warm so they sit with the orange; none of them is a
+pure grey.
 
 Channel colors come from a 12-entry palette (`peel_document::PALETTE`).
-A channel's color carries into its rack button, piano roll notes, mixer
-cap and playlist clips. Chrome never borrows it.
+It starts on the step keys' red, orange and yellow and continues round the
+wheel at the same weight, and every entry takes dark text. A channel's
+color carries into its rack button, piano roll notes, mixer name plate
+and playlist clips. Chrome never borrows it.
 
-There are no decorative gradients or glows. Shadows appear only under
+Light and shadow are literal. Things you press or turn (buttons, knob
+caps, fader caps, lit step keys) are lit slightly from above. A lit lamp
+spills a little of its color onto the panel. Shadows appear only under
 things that float above the workspace: menus, tooltips, sheets and drag
-previews.
+previews. Panes, canvases and text carry no gradients.
 
 ## Type
 
@@ -155,9 +172,9 @@ way.
 
 ## Shape
 
-4 px base unit. Corner radius 2 px for small controls, step cells, clips
-and insert slots, 3 px for buttons, menus and sheets. Panes, editor
-canvases and mixer strips are square.
+4 px base unit. Corner radius 2 px for small controls, step keys and
+insert slots, 3 px for clips, 4 px for buttons and menus, 6 px for sheets.
+Panes, editor canvases and mixer strips are square.
 
 Panes are not cards. They meet at a 2 px `bg` seam that doubles as the
 splitter, and a splitter's grab zone is 8 px wide whatever its seam. The
@@ -193,6 +210,8 @@ status:   notices                                  device · MIDI · settings
   Piano roll editors, the work it targets.
 - Side panes cap themselves at about a quarter (browser) and a third
   (right column) of narrow windows without losing the user's size.
+- The time well is a display window: position and tempo in `display` on
+  `bg`.
 - The top bar measures itself and sheds, in order: the load figure,
   rewind and fast-forward, the meter, the Export label, the clock, the
   project title and finally the View label.
@@ -206,11 +225,20 @@ Transport and Help after it; a tight bar keeps File only. Menus, their
 shortcuts and the start screen run the same commands (`menus.rs`).
 
 New project (Cmd/Ctrl+N) is blank: no channels, notes, clips or effects.
-Templates come from `template::templates()` and show on the start screen
-as a two-column grid; the demo song is a separate link. Close project
-(Cmd/Ctrl+W) returns to the start screen. New, a template, Open, Recent,
-Recover, Close, Quit and closing the window first finish any recording,
-then ask Save, Don't save or Cancel when there is unsaved work.
+Templates come from `template::templates()` and demo songs from
+`template::demos()`; File lists both. Close project (Cmd/Ctrl+W) returns
+to the start screen. New, a template, a demo song, Open, Recent, Recover,
+Close, Quit and closing the window first finish any recording, then ask
+Save, Don't save or Cancel when there is unsaved work.
+
+## Start screen
+
+One sheet in three columns: start something (New, Open, the templates as
+a two-column grid, My templates), hear something (the demo songs) and
+pick up where you left off (recovered and recent projects). Each demo
+song is a row with a play tile in a step-key color, its title, and its
+style, tempo and key. The tallest column sets the sheet's height, and it
+fits the minimum window.
 
 ## Visibility
 
@@ -236,14 +264,16 @@ that is one of a set (Draw, Select, Erase) shows the selection the way
 the segmented control does. Tabs are text with a 2 px accent underline.
 Property rows put a 72 px caption label left of the value.
 
-Knobs are a thin value arc around a flat cap with a pointer, and no rim.
-The arc carries the value in the control's color, and bipolar knobs fill
-from the top. Sizes: 22 px in the rack, 28 px for mixer pan, 32 px in the
-inspector. Inspector knob cells are at least 76 px and stretch to fill the
-row, so a default inspector shows three columns with whole parameter names. A name
-that still does not fit is cut and shown in full in the knob's tooltip.
-Faders are a 3 px track filled in the track's color, ticks on one side
-and a flat cap with an index line. LEDs are flat dots without a halo.
+Knobs are a value arc in a dark groove around a cap lit from above, with
+a cream pointer. The arc carries the value in the control's color, and
+bipolar knobs fill from the top. Sizes: 22 px in the rack, 28 px for mixer
+pan, 34 px in the inspector. Inspector knob cells are at least 76 px and
+stretch to fill the row, so a default inspector shows three columns with
+whole parameter names. A name that still does not fit is cut and shown in
+full in the knob's tooltip. Faders run in a 5 px groove filled in the
+track's color below the cap, with ticks on one side and a cap with a cream
+index line. LEDs are lamps: dark when off, and lit with a small halo of
+their own color.
 
 When a toolbar runs short, names go before controls: the pattern picker
 shrinks to its swatch and the piano roll's channel to its color, both
@@ -261,12 +291,12 @@ preset name and let the preset menu reload it.
 
 ## Step grid
 
-Each step is a 2 px-radius cell. Beats alternate between a darker and a
-lighter neutral so a bar reads as four groups, with a wider gap between
-beats than between steps. A lit step takes the channel color, mixed toward
-the cell value as velocity drops. The playing step brightens. Only the
-selected channel's row gets a band, edge to edge; other rows have no fill
-of their own.
+Each step is a key. Keys take one of four colors by beat of the bar (red,
+orange, yellow, cream), so a bar reads in beats the way a drum machine's
+keys do, with a wider gap between beats than between steps. An unlit key
+is a dark tint of its color; a hit lights it, dimmer the softer it is
+played. The playing step brightens. The channel's own color stays on its
+name button, its knobs and its note preview.
 
 ## Rhythm
 
@@ -283,8 +313,10 @@ a note only selects it; moving or resizing requires a deliberate drag.
 
 ## Mixer
 
-Strips sit side by side with a 1 px seam and the channel color across the
-top edge. Insert slots are recessed into a `well`. Strips scroll sideways
+Strips sit side by side with a 1 px seam. Each name sits on a plate in
+the channel color, like a console's scribble strip; the selected strip's
+plate is at full strength. Insert slots are recessed into a `well`.
+Meters are LED ladders, one lamp every 3 px. Strips scroll sideways
 with the master pinned on the right. Three sizes
 in the dock header (Compact 64 px, Expanded 92, Full 124) decide which
 rows a strip has; the dock height decides how many insert and send rows

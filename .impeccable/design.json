@@ -7,8 +7,8 @@
     "colorMeta": {
       "accent": {
         "role": "primary",
-        "displayName": "Amber",
-        "canonical": "#F0A443"
+        "displayName": "Peel orange",
+        "canonical": "#F7992B"
       },
       "play": {
         "role": "secondary",
@@ -18,72 +18,72 @@
       "record": {
         "role": "tertiary",
         "displayName": "Coral",
-        "canonical": "#EE5F5B"
+        "canonical": "#F2553F"
       },
       "focus": {
         "role": "focus",
         "displayName": "Focus cyan",
-        "canonical": "#6EC4E6"
+        "canonical": "#7FC8EA"
       },
       "warn": {
         "role": "warning",
         "displayName": "Warning",
-        "canonical": "#E8C45C"
+        "canonical": "#EFC53F"
       },
       "bg": {
         "role": "neutral",
         "displayName": "Seam",
-        "canonical": "#0F1011"
+        "canonical": "#0C0B0A"
       },
       "well": {
         "role": "neutral",
         "displayName": "Well",
-        "canonical": "#151719"
+        "canonical": "#121110"
       },
       "panel": {
         "role": "neutral",
         "displayName": "Panel",
-        "canonical": "#1C1E21"
+        "canonical": "#1A1917"
       },
       "panel-alt": {
         "role": "neutral",
         "displayName": "Canvas",
-        "canonical": "#23262A"
+        "canonical": "#211F1D"
       },
       "raised": {
         "role": "neutral",
         "displayName": "Raised",
-        "canonical": "#2A2D32"
+        "canonical": "#2B2926"
       },
       "control": {
         "role": "neutral",
         "displayName": "Control",
-        "canonical": "#31353B"
+        "canonical": "#35322E"
       },
       "line": {
         "role": "neutral",
         "displayName": "Line",
-        "canonical": "#2B2E33"
+        "canonical": "#2D2B28"
       },
       "line-strong": {
         "role": "neutral",
         "displayName": "Strong line",
-        "canonical": "#3A3E44"
+        "canonical": "#403C37"
       },
       "text": {
         "role": "neutral",
         "displayName": "Text",
-        "canonical": "#EEEFF0"
+        "canonical": "#F3EEE4"
       },
       "text-dim": {
         "role": "neutral",
         "displayName": "Dim text",
-        "canonical": "#ADB1B7"
+        "canonical": "#B9B2A6"
       },
       "text-faint": {
         "role": "neutral",
         "displayName": "Faint text",
-        "canonical": "#8C9199"
+        "canonical": "#8F887C"
       }
     },
     "typographyMeta": {
@@ -115,7 +115,7 @@
     "shadows": [
       {
         "name": "shadow",
-        "value": "rgba(0, 0, 0, 0.5)",
+        "value": "rgba(0, 0, 0, 0.55)",
         "purpose": "Only under floating layers: menus, tooltips, sheets, drag previews."
       }
     ],
@@ -141,9 +141,9 @@
       "name": "Primary Button",
       "kind": "button",
       "refersTo": "button-primary",
-      "description": "Amber fill for the one primary action in a region, such as Export or Run.",
+      "description": "Orange fill for the one primary action in a region, such as Export or Run.",
       "html": "<button class=\"ds-btn-primary\">Export</button>",
-      "css": ".ds-btn-primary { height: 24px; padding: 0; min-width: 80px; background: #F0A443; color: #1E1406; font: 600 13px 'Barlow Semi Condensed', sans-serif; border: none; border-radius: 3px; cursor: pointer; } .ds-btn-primary:hover { background: color-mix(in srgb, #F0A443 92%, white); } .ds-btn-primary:active { background: color-mix(in srgb, #F0A443 88%, black); } .ds-btn-primary:focus-visible { outline: 2px solid #6EC4E6; outline-offset: 1px; }"
+      "css": ".ds-btn-primary { height: 24px; padding: 0; min-width: 80px; background: #F7992B; color: #1F1305; font: 600 13px 'Barlow Semi Condensed', sans-serif; border: none; border-radius: 4px; cursor: pointer; } .ds-btn-primary:hover { background: color-mix(in srgb, #F7992B 92%, white); } .ds-btn-primary:active { background: color-mix(in srgb, #F7992B 88%, black); } .ds-btn-primary:focus-visible { outline: 2px solid #7FC8EA; outline-offset: 1px; }"
     },
     {
       "name": "Secondary Button",
@@ -151,7 +151,7 @@
       "refersTo": "button-secondary",
       "description": "Control fill for dialog buttons and dropdown values in property rows.",
       "html": "<button class=\"ds-btn\">Cancel</button>",
-      "css": ".ds-btn { height: 24px; padding: 0; min-width: 80px; background: #31353B; color: #EEEFF0; font: 600 13px 'Barlow Semi Condensed', sans-serif; border: none; border-radius: 3px; cursor: pointer; } .ds-btn:hover { background: #3B4047; } .ds-btn:active { background: #464C54; } .ds-btn:focus-visible { outline: 2px solid #6EC4E6; outline-offset: 1px; }"
+      "css": ".ds-btn { height: 24px; padding: 0; min-width: 80px; background: #35322E; color: #F3EEE4; font: 600 13px 'Barlow Semi Condensed', sans-serif; border: none; border-radius: 4px; cursor: pointer; } .ds-btn:hover { background: #423E39; } .ds-btn:active { background: #504B45; } .ds-btn:focus-visible { outline: 2px solid #7FC8EA; outline-offset: 1px; }"
     },
     {
       "name": "Text Field",
@@ -159,7 +159,7 @@
       "refersTo": "text-field",
       "description": "Single-line field on the seam color with a strong line; the stroke turns focus cyan while editing.",
       "html": "<input class=\"ds-input\" placeholder=\"Search\">",
-      "css": ".ds-input { height: 24px; padding: 0 8px; background: #0F1011; color: #EEEFF0; font: 500 13px 'Barlow Semi Condensed', sans-serif; border: 1px solid #3A3E44; border-radius: 3px; } .ds-input::placeholder { color: #8C9199; } .ds-input:focus { outline: none; border-color: rgba(110, 196, 230, 0.7); }"
+      "css": ".ds-input { height: 24px; padding: 0 8px; background: #0C0B0A; color: #F3EEE4; font: 500 13px 'Barlow Semi Condensed', sans-serif; border: 1px solid #403C37; border-radius: 4px; } .ds-input::placeholder { color: #8F887C; } .ds-input:focus { outline: none; border-color: rgba(110, 196, 230, 0.7); }"
     },
     {
       "name": "Pane Tab",
@@ -167,22 +167,22 @@
       "refersTo": "tab",
       "description": "Text tab in a 32px pane header; the selected tab gets a 2px amber underline and widths never change with selection.",
       "html": "<div class=\"ds-tabs\"><button class=\"ds-tab ds-tab-on\">Channels</button><button class=\"ds-tab\">Piano roll</button><button class=\"ds-tab\">Mixer</button></div>",
-      "css": ".ds-tabs { display: flex; height: 32px; background: #1C1E21; border-bottom: 1px solid #2B2E33; } .ds-tab { padding: 0 10px; background: none; border: none; color: #ADB1B7; font: 600 13px 'Barlow Semi Condensed', sans-serif; box-shadow: inset 0 -2px 0 transparent; cursor: pointer; } .ds-tab:hover { color: #EEEFF0; } .ds-tab-on { color: #EEEFF0; box-shadow: inset 0 -2px 0 #F0A443; } .ds-tab:focus-visible { outline: 2px solid #6EC4E6; outline-offset: -2px; }"
+      "css": ".ds-tabs { display: flex; height: 32px; background: #1A1917; border-bottom: 1px solid #2D2B28; } .ds-tab { padding: 0 10px; background: none; border: none; color: #B9B2A6; font: 600 13px 'Barlow Semi Condensed', sans-serif; box-shadow: inset 0 -2px 0 transparent; cursor: pointer; } .ds-tab:hover { color: #F3EEE4; } .ds-tab-on { color: #F3EEE4; box-shadow: inset 0 -2px 0 #F7992B; } .ds-tab:focus-visible { outline: 2px solid #7FC8EA; outline-offset: -2px; }"
     }
   ],
   "narrative": {
-    "overview": "A pattern-and-playlist DAW workspace in the FL Studio mould: compact toolbars, continuous editing surfaces and color reserved for the music. Peel Studio borrows the hierarchy, not the assets or the gloss. The chrome is neutral graphite and stays quiet. Clips, notes, lit steps, waveforms and the playhead are the brightest things on screen, and a channel's color identifies it everywhere it appears.",
+    "overview": "The front panel of a Roland TR-808 and the drum machines that followed it: a warm black panel, cream legends, and step keys in red, orange, yellow and cream, four to a beat. Peel Studio takes that palette and its sense of hardware, not its artwork, on a pattern-and-playlist workspace with compact toolbars and continuous editing surfaces. The chrome stays quiet. Clips, notes, lit steps, waveforms and the playhead are the brightest things on screen, and a channel's color identifies it everywhere it appears.",
     "keyCharacteristics": [
       "Panes meet at a 2px bg seam instead of floating as cards",
-      "Panes, editor canvases and mixer strips are square; controls use 2-3px radii",
-      "Amber for the primary action, playhead and tempo; green for signal",
+      "Panes, editor canvases and mixer strips are square; controls use 2-4px radii",
+      "Orange for the primary action and playhead; green for signal",
       "Channel colors only on musical content, never on chrome",
-      "No decorative gradients or glows; shadows only under floating layers"
+      "Controls you press or turn are lit from above and lit lamps have a small halo; panes and text carry no gradients; shadows only under floating layers"
     ],
     "rules": [],
     "dos": [
       "Do take hierarchy from value steps and 1px separators.",
-      "Do keep one primary (amber) button per region."
+      "Do keep one primary (orange) button per region."
     ],
     "donts": [
       "Don't nest surfaces more than one deep.",
