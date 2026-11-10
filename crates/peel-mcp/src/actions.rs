@@ -16,11 +16,13 @@ pub enum Action {
     NewIds { count: usize },
     /// Discover native instruments, effects, installed CLAP plugins, parameter ranges and factory presets. Filter by type_id for full details.
     Devices { type_id: Option<String> },
-    /// Create an empty project or load the demo. Refuses to discard unsaved work unless discard_changes is true.
+    /// Create an empty project, or load a built-in song: demo true loads the first demo song, and song names a demo song by title or a song starter by name (an unknown name is refused with the list of valid ones). Refuses to discard unsaved work unless discard_changes is true.
     NewProject {
         title: String,
         #[serde(default)]
         demo: bool,
+        #[serde(default)]
+        song: Option<String>,
         #[serde(default)]
         discard_changes: bool,
     },

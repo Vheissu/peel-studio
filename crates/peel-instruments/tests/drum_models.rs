@@ -71,15 +71,29 @@ const ACOUSTIC: [(&str, &[&str]); 4] = [
             "Acoustic Open",
             "Acoustic Ride",
             "Acoustic Crash",
+            "Dusty",
+            "Dusty Open",
         ],
     ),
     (TOM, &["Acoustic Rack", "Acoustic Floor"]),
 ];
 
 const CIRCUIT: [(&str, &[&str]); 4] = [
-    (KICK, &["909 Kick", "808 Kick", "Hard Kick"]),
+    (
+        KICK,
+        &["909 Kick", "808 Kick", "Hard Kick", "Synthwave Kick"],
+    ),
     (SNARE, &["909 Snare", "808 Snare"]),
-    (HAT, &["808 Closed", "808 Open", "909 Closed"]),
+    (
+        HAT,
+        &[
+            "808 Closed",
+            "808 Open",
+            "909 Closed",
+            "Trap Tight",
+            "Trap Open",
+        ],
+    ),
     (TOM, &["808 Tom", "909 Tom"]),
 ];
 

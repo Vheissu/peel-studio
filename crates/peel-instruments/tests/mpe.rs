@@ -21,7 +21,7 @@ const POLY: [&str; 8] = [
 ];
 
 /// Everything with a held, measurable pitch.
-const PITCHED: [&str; 11] = [
+const PITCHED: [&str; 12] = [
     "peel.synth.poly",
     "peel.synth.bass",
     "peel.keys.grand",
@@ -33,6 +33,7 @@ const PITCHED: [&str; 11] = [
     "peel.perc.mallet",
     "peel.strings.zither",
     "peel.synth.cross",
+    "peel.bass.808",
 ];
 
 const KEY: u8 = 57;

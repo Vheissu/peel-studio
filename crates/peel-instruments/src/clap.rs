@@ -152,7 +152,7 @@ pub static DESC: DeviceDescriptor = DeviceDescriptor {
     params: &PARAMS,
 };
 
-pub static PRESETS: [Preset; 8] = [
+pub static PRESETS: [Preset; 11] = [
     Preset {
         name: "Classic",
         params: &[
@@ -256,6 +256,51 @@ pub static PRESETS: [Preset; 8] = [
             ("tail.room", 0.1),
             ("out.width", 0.3),
             ("out.drive", 0.1),
+        ],
+    },
+    Preset {
+        name: "Trap",
+        params: &[
+            ("tone.freq", 1_900.0),
+            ("tone.focus", 0.45),
+            ("tone.air", 0.7),
+            ("burst.count", 1.0),
+            ("burst.spread", 0.008),
+            ("burst.snap", 1.0),
+            ("tail.decay", 0.16),
+            ("tail.room", 0.2),
+            ("out.width", 0.55),
+            ("out.drive", 0.35),
+        ],
+    },
+    Preset {
+        name: "Finger Snap",
+        params: &[
+            ("tone.freq", 2_600.0),
+            ("tone.focus", 0.7),
+            ("tone.air", 0.3),
+            ("burst.count", 0.0),
+            ("burst.spread", 0.006),
+            ("burst.snap", 1.0),
+            ("tail.decay", 0.09),
+            ("tail.room", 0.15),
+            ("out.width", 0.3),
+            ("out.drive", 0.1),
+        ],
+    },
+    Preset {
+        name: "Gated",
+        params: &[
+            ("tone.freq", 1_200.0),
+            ("tone.focus", 0.3),
+            ("tone.air", 0.5),
+            ("burst.count", 2.0),
+            ("burst.spread", 0.012),
+            ("burst.snap", 0.85),
+            ("tail.decay", 0.5),
+            ("tail.room", 0.9),
+            ("out.width", 0.7),
+            ("out.drive", 0.2),
         ],
     },
 ];

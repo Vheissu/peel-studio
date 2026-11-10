@@ -1,6 +1,10 @@
 //! Project templates built from native devices only, so they work offline
 //! on a fresh install.
 
+mod corner_store;
+mod kit;
+mod neon_coast;
+mod night_shift;
 mod showcase;
 mod songs;
 #[cfg(test)]
@@ -8,6 +12,9 @@ mod tests;
 
 use std::sync::Arc;
 
+pub use corner_store::corner_store;
+pub use neon_coast::neon_coast;
+pub use night_shift::night_shift;
 pub use showcase::showcase;
 pub use songs::{edm, hip_hop, rap, rock_metal, synthwave, trap};
 
@@ -475,13 +482,36 @@ pub struct Demo {
 
 /// The demo songs, in menu order. The first is the one `--demo` renders.
 pub fn demos() -> Vec<Demo> {
-    vec![Demo {
-        title: "Afterglow",
-        style: "Progressive house",
-        bpm: 120.0,
-        key: "A minor",
-        make: showcase,
-    }]
+    vec![
+        Demo {
+            title: "Afterglow",
+            style: "Progressive house",
+            bpm: 120.0,
+            key: "A minor",
+            make: showcase,
+        },
+        Demo {
+            title: "Night Shift",
+            style: "Trap",
+            bpm: 142.0,
+            key: "F minor",
+            make: night_shift,
+        },
+        Demo {
+            title: "Neon Coast",
+            style: "Synthwave",
+            bpm: 108.0,
+            key: "F sharp minor",
+            make: neon_coast,
+        },
+        Demo {
+            title: "Corner Store",
+            style: "Boom bap",
+            bpm: 86.0,
+            key: "C major",
+            make: corner_store,
+        },
+    ]
 }
 
 /// Catalog name of the rock / metal song.

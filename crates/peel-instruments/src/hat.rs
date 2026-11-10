@@ -206,7 +206,7 @@ pub static DESC: DeviceDescriptor = DeviceDescriptor {
     params: &PARAMS,
 };
 
-pub static PRESETS: [Preset; 18] = [
+pub static PRESETS: [Preset; 23] = [
     Preset {
         name: "Closed",
         params: &[
@@ -507,6 +507,84 @@ pub static PRESETS: [Preset; 18] = [
             ("out.width", 0.2),
             ("out.velocity", 0.7),
             ("out.level", 0.0),
+        ],
+    },
+    Preset {
+        name: "Trap Tight",
+        params: &[
+            ("tone.acoustic", 0.0),
+            ("tone.circuit", 1.0),
+            ("tone.metal", 0.8),
+            ("tone.color", 10_500.0),
+            ("tone.bright", 8_000.0),
+            ("amp.decay", 0.03),
+            ("amp.choke", 0.003),
+            ("out.width", 0.1),
+            ("out.velocity", 0.8),
+        ],
+    },
+    Preset {
+        name: "Trap Open",
+        params: &[
+            ("tone.acoustic", 0.0),
+            ("tone.circuit", 1.0),
+            ("tone.metal", 0.85),
+            ("tone.color", 9_500.0),
+            ("tone.bright", 7_000.0),
+            ("amp.decay", 0.42),
+            ("amp.choke", 0.012),
+            ("amp.gate", 1.0),
+            ("out.width", 0.15),
+            ("out.velocity", 0.8),
+        ],
+    },
+    Preset {
+        name: "Crisp",
+        params: &[
+            ("tone.acoustic", 0.0),
+            ("tone.circuit", 0.0),
+            ("tone.metal", 0.4),
+            ("tone.color", 13_000.0),
+            ("tone.bright", 9_500.0),
+            ("tone.shimmer", 0.15),
+            ("amp.decay", 0.05),
+            ("out.width", 0.2),
+        ],
+    },
+    Preset {
+        name: "Dusty",
+        params: &[
+            ("tone.acoustic", 1.0),
+            ("tone.circuit", 0.0),
+            ("tone.tune", -2.0),
+            ("tone.metal", 0.5),
+            ("tone.color", 6_500.0),
+            ("tone.bright", 4_200.0),
+            ("tone.wash", 0.1),
+            ("tone.shimmer", 0.2),
+            ("amp.decay", 0.09),
+            ("amp.bloom", 0.001),
+            ("out.width", 0.2),
+            ("out.velocity", 0.75),
+        ],
+    },
+    Preset {
+        name: "Dusty Open",
+        params: &[
+            ("tone.acoustic", 1.0),
+            ("tone.circuit", 0.0),
+            ("tone.tune", -2.0),
+            ("tone.metal", 0.55),
+            ("tone.color", 6_000.0),
+            ("tone.bright", 4_000.0),
+            ("tone.wash", 0.4),
+            ("tone.shimmer", 0.45),
+            ("amp.decay", 0.5),
+            ("amp.bloom", 0.001),
+            ("amp.choke", 0.02),
+            ("amp.gate", 1.0),
+            ("out.width", 0.3),
+            ("out.velocity", 0.7),
         ],
     },
 ];

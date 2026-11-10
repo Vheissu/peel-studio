@@ -61,13 +61,13 @@ pub fn apply_preset(device: &mut dyn Device, preset: &Preset) {
 /// Device types with a sidechain (key) input that can listen to another
 /// mixer track.
 pub fn accepts_sidechain(type_id: &str) -> bool {
-    matches!(type_id, "peel.fx.compressor")
+    matches!(type_id, "peel.fx.compressor" | "peel.fx.gate")
 }
 
 /// Device types that report gain reduction for a meter.
 pub fn shows_reduction(type_id: &str) -> bool {
     matches!(
         type_id,
-        "peel.fx.compressor" | "peel.fx.limiter" | "peel.fx.mastering"
+        "peel.fx.compressor" | "peel.fx.gate" | "peel.fx.limiter" | "peel.fx.mastering"
     )
 }

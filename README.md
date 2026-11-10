@@ -19,18 +19,23 @@ effects. There is no web view.
 - Pattern workflow: a Channel Rack step sequencer (with a velocity graph)
   and a Piano Roll edit the same notes; patterns are painted into the
   Playlist as linked clips, and Make unique splits one off.
-- Twenty native instruments: a recorded acoustic kit, sustained and palm-muted guitars, recorded bass, five synthesized drums, Mallet modal percussion,
-  Poly and Cross synths, a mono bass, tine electric piano, acoustic piano,
-  electric guitar with amp and cabinet, bowed violin, Zither plucked strings,
-  saxophone and sampler. Nineteen effects cover EQ, dynamics, delay, reverb,
-  distortion, filtering and modulation, with Glitch, Transient, Crush,
-  Resonator and Mastering for further shaping. Over 200 factory presets
-  are available in the Browser, alongside installed CLAP plugins.
-- A demo song, "Afterglow", opens on first launch: 80 bars of progressive
-  house with tempo ramps, a slower breakdown, two drops and a key change,
-  a drum bus, sidechain pumping, a mastering chain,
-  reverb and delay returns, and automation of volume, pan, filters, pitch
-  and effects.
+- Twenty-one native instruments: a recorded acoustic kit, sustained and
+  palm-muted guitars, recorded bass, five synthesized drums, a tuned 808
+  sub bass that slides between notes, Mallet modal percussion, Poly and
+  Cross synths, a mono bass, tine electric piano, acoustic piano, electric
+  guitar with amp and cabinet, bowed violin, Zither plucked strings,
+  saxophone and sampler. Twenty-one effects cover EQ, dynamics, delay,
+  reverb, distortion, filtering and modulation, with Glitch, Transient,
+  Gate, Tape, Crush, Resonator and Mastering for further shaping. Over 380
+  factory presets are available in the Browser, alongside installed CLAP
+  plugins.
+- Four demo songs, each a finished arrangement with buses, sends,
+  sidechains, automation and a mastering chain. "Afterglow" is 80 bars of
+  progressive house with tempo ramps, a slower breakdown, two drops and a
+  key change. "Night Shift" is trap built on the 808, with slides, hat
+  rolls and a filtered break. "Neon Coast" is synthwave with a gated snare
+  plate, an arpeggio and a gliding lead. "Corner Store" is swung boom bap
+  through tape and a twelve-bit crusher.
 - Arrangement: pattern, audio and automation clips; trims, fades, slicing,
   marquee selection, Alt-drag copies, markers, tempo changes, alternate
   arrangements; audio loops that follow the tempo; render to audio.
@@ -67,8 +72,10 @@ File > New project starts blank, with no instruments or notes. File > New
 from template offers Rap, Trap, Hip-hop, Synthwave, EDM and Rock / Metal
 song starters, alongside House and Beat and melody. Rock / Metal opens
 Channels on a one-bar Double kick pattern with the step grid at 1/16T, so
-the six-kick bursts on beats one and three line up with the steps. The demo
-song is a separate choice.
+the six-kick bursts on beats one and three line up with the steps. Trap
+uses the 808 instrument and slides it up an octave at the end of each hook
+bar; Synthwave and Hip-hop use the gated and dusty drum presets. The demo
+songs are a separate choice.
 File > Close project returns to the start screen. New, Open and Close ask
 before replacing unsaved work; cancelling Save As keeps the current project.
 
@@ -110,6 +117,39 @@ separate **Grid** and **Note length** controls, with quarter notes, eighths,
 sixteenths, finer divisions and triplets. Note length also offers dotted
 values. Changing the grid leaves existing notes untouched. Cmd/Ctrl+wheel
 zooms the Piano Roll; Shift+wheel scrolls a long step grid sideways.
+
+## 808
+
+The 808 instrument is a tuned sub bass: a sine that drops onto its note for
+the punch, holds, then decays, through a drive stage and a tone filter. It
+plays one note at a time. With Glide on Legato, a note that starts while
+another is still held slides to the new pitch instead of restarting, so a
+slide is two overlapping notes in the Piano Roll: lengthen the first until
+it runs under the second. Always also slides between separate notes; Off
+restarts every note. Glide Time is the same for any interval.
+
+Note Off chooses Release (the key gates the note; a short Release chokes
+it) or Ring (the decay always runs out, like a one-shot sample). Decay
+Track shortens higher notes. Drive offers Warm, Tube, Clip and Fold;
+Shape and Octave add harmonics before it so the bass reads on small
+speakers. Fourteen presets run from Clean Sub to Fuzz. The Trap starter
+and Night Shift use Slide.
+
+## Presets
+
+Hat, Snare, Clap, Kick, Bass, Poly, Cross, Mallet and Tine have presets
+for trap, boom bap and synthwave: Trap Tight and Trap Open hats (Open is
+cut by the note's length), Dusty drums, Rim Click and Finger Snap, a Gated
+snare and clap, Trap Bell, Flute Lead, Synth Brass, PWM Pad, Night Lead,
+Cowbell and more. Reverb, Delay, Compressor and Mastering have presets to
+match, such as Snare Plate, Neon Hall, Worn Echo and 808 Duck.
+
+## Tape and Gate
+
+**Tape** adds saturation, a head bump, a high cut, wow, flutter and hiss
+that only sounds under a signal. **Gate** mutes or ducks a track below a
+threshold, with hold, hysteresis and a sidechain: put it after a reverb on
+a return and key it from the dry snare for a gated reverb.
 
 ## Clip editing
 
@@ -156,11 +196,21 @@ peel render song.peelproj mix.wav --rate 48000 --bits 24
 peel render song.peelproj mix.mp3 --bitrate 192 --normalize
 peel render song.peelproj mix.flac --bits 24 --rate 96000
 peel render song.peelproj mix.aiff --mono --tail 8
-peel render --demo demo.wav       # the demo song
+peel render --demo demo.wav       # the first demo song
+peel render "--demo=Night Shift" night.wav
+peel render --template=Trap trap.wav
+peel render song.peelproj drums.wav --solo "Drum Bus" --dry-master
+peel songs                        # demo songs and song starters
 peel info song.peelproj
 peel validate song.peelproj
 peel devices                      # every native instrument and effect
+peel audition peel.bass.808 808.wav --key 33
 ```
+
+`--solo` renders only the named mixer tracks (a stem) and `--dry-master`
+leaves out the master track's effects. `peel audition` plays one native
+device on its own, preset by preset, and prints each preset's level: an
+instrument plays a note, an effect processes a drum hit and a chord.
 
 ## MCP
 

@@ -161,7 +161,7 @@ pub static DESCRIPTOR: DeviceDescriptor = DeviceDescriptor {
     params: &PARAMS,
 };
 
-pub static PRESETS: [Preset; 8] = [
+pub static PRESETS: [Preset; 10] = [
     Preset {
         name: "Default",
         params: &[],
@@ -251,6 +251,29 @@ pub static PRESETS: [Preset; 8] = [
             ("knee", 3.0),
             ("mix", 0.4),
             ("makeup", 6.0),
+        ],
+    },
+    Preset {
+        name: "808 Duck",
+        params: &[
+            ("threshold", -30.0),
+            ("ratio", 10.0),
+            ("attack", 0.3),
+            ("release", 90.0),
+            ("knee", 3.0),
+            ("detector", 0.0),
+        ],
+    },
+    Preset {
+        name: "Slow Pump",
+        params: &[
+            ("threshold", -24.0),
+            ("ratio", 3.0),
+            ("attack", 25.0),
+            ("release", 320.0),
+            ("knee", 10.0),
+            ("detector", 2.0),
+            ("makeup", 3.0),
         ],
     },
 ];

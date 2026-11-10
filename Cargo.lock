@@ -2847,6 +2847,7 @@ version = "0.1.0"
 dependencies = [
  "peel-devices",
  "peel-document",
+ "peel-dsp",
  "peel-extensions",
  "peel-mcp",
  "peel-media",

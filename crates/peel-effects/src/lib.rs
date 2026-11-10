@@ -23,6 +23,8 @@
 //! | `peel.fx.transient` | Transient | Dynamics |
 //! | `peel.fx.crush` | Crush | Distortion |
 //! | `peel.fx.resonator` | Resonator | Creative |
+//! | `peel.fx.gate` | Gate | Dynamics |
+//! | `peel.fx.tape` | Tape | Distortion |
 //!
 //! Every effect processes the left and right buffers in place, ignores note
 //! events, splits blocks at parameter events so changes land on the exact
@@ -45,6 +47,7 @@ pub mod drive;
 pub mod eq;
 pub mod filter;
 pub mod flanger;
+pub mod gate;
 pub mod glitch;
 pub mod limiter;
 pub mod mastering;
@@ -52,21 +55,24 @@ pub mod multiband;
 pub mod phaser;
 pub mod resonator;
 pub mod reverb;
+pub mod tape;
 pub mod transient;
 pub mod utility;
 pub mod vintage_chorus;
 
 /// Every effect descriptor, in browser order.
 pub fn descriptors() -> &'static [&'static DeviceDescriptor] {
-    static ALL: [&DeviceDescriptor; 19] = [
+    static ALL: [&DeviceDescriptor; 21] = [
         &eq::DESCRIPTOR,
         &compressor::DESCRIPTOR,
         &limiter::DESCRIPTOR,
         &transient::DESCRIPTOR,
+        &gate::DESCRIPTOR,
         &delay::DESCRIPTOR,
         &reverb::DESCRIPTOR,
         &drive::DESCRIPTOR,
         &crush::DESCRIPTOR,
+        &tape::DESCRIPTOR,
         &filter::DESCRIPTOR,
         &chorus::DESCRIPTOR,
         &utility::DESCRIPTOR,
@@ -92,6 +98,8 @@ pub fn create(type_id: &str) -> Option<Box<dyn Device>> {
         "peel.fx.compressor" => Box::new(compressor::Compressor::new()),
         "peel.fx.limiter" => Box::new(limiter::Limiter::new()),
         "peel.fx.transient" => Box::new(transient::Transient::new()),
+        "peel.fx.gate" => Box::new(gate::Gate::new()),
+        "peel.fx.tape" => Box::new(tape::Tape::new()),
         "peel.fx.delay" => Box::new(delay::Delay::new()),
         "peel.fx.reverb" => Box::new(reverb::Reverb::new()),
         "peel.fx.drive" => Box::new(drive::Drive::new()),
@@ -119,6 +127,8 @@ pub fn presets(type_id: &str) -> &'static [Preset] {
         "peel.fx.compressor" => &compressor::PRESETS,
         "peel.fx.limiter" => &limiter::PRESETS,
         "peel.fx.transient" => &transient::PRESETS,
+        "peel.fx.gate" => &gate::PRESETS,
+        "peel.fx.tape" => &tape::PRESETS,
         "peel.fx.delay" => &delay::PRESETS,
         "peel.fx.reverb" => &reverb::PRESETS,
         "peel.fx.drive" => &drive::PRESETS,

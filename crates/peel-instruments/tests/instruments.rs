@@ -120,7 +120,7 @@ fn presets_are_valid_and_first_matches_defaults() {
     for d in peel_instruments::descriptors() {
         let presets = peel_instruments::presets(d.type_id);
         assert!(
-            (3..=24).contains(&presets.len()),
+            (3..=32).contains(&presets.len()),
             "{}: {} presets",
             d.type_id,
             presets.len()

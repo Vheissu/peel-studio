@@ -170,7 +170,7 @@ pub static DESC: DeviceDescriptor = DeviceDescriptor {
     params: &PARAMS,
 };
 
-pub static PRESETS: [Preset; 15] = [
+pub static PRESETS: [Preset; 19] = [
     Preset {
         name: "Punch",
         params: &[
@@ -438,6 +438,75 @@ pub static PRESETS: [Preset; 15] = [
             ("click.tone", 4_000.0),
             ("out.velocity", 0.5),
             ("out.level", 0.0),
+        ],
+    },
+    Preset {
+        name: "Trap Kick",
+        params: &[
+            ("body.acoustic", 0.0),
+            ("body.circuit", 0.0),
+            ("pitch.freq", 58.0),
+            ("pitch.sweep", 26.0),
+            ("pitch.snap", 12.0),
+            ("pitch.sweep_time", 0.02),
+            ("body.decay", 0.16),
+            ("body.drive", 0.45),
+            ("body.clip", 0.5),
+            ("body.tone", 11_000.0),
+            ("click.level", 0.7),
+            ("click.tone", 3_600.0),
+        ],
+    },
+    Preset {
+        name: "Boom Bap",
+        params: &[
+            ("body.acoustic", 0.0),
+            ("body.circuit", 0.0),
+            ("pitch.freq", 60.0),
+            ("pitch.sweep", 14.0),
+            ("pitch.snap", 5.0),
+            ("pitch.sweep_time", 0.035),
+            ("body.decay", 0.3),
+            ("body.drive", 0.5),
+            ("body.clip", 0.45),
+            ("body.tone", 3_800.0),
+            ("click.level", 0.4),
+            ("click.tone", 1_800.0),
+        ],
+    },
+    Preset {
+        name: "Synthwave Kick",
+        params: &[
+            ("body.acoustic", 0.0),
+            ("body.circuit", 1.0),
+            ("pitch.freq", 55.0),
+            ("pitch.sweep", 22.0),
+            ("pitch.snap", 9.0),
+            ("pitch.sweep_time", 0.028),
+            ("body.decay", 0.32),
+            ("body.drive", 0.3),
+            ("body.clip", 0.35),
+            ("body.tone", 9_000.0),
+            ("click.level", 0.7),
+            ("click.tone", 3_000.0),
+        ],
+    },
+    Preset {
+        name: "Lo-Fi Kick",
+        params: &[
+            ("body.acoustic", 0.0),
+            ("body.circuit", 0.0),
+            ("pitch.freq", 57.0),
+            ("pitch.sweep", 12.0),
+            ("pitch.snap", 3.0),
+            ("pitch.sweep_time", 0.045),
+            ("body.decay", 0.26),
+            ("body.drive", 0.3),
+            ("body.clip", 0.2),
+            ("body.tone", 1_800.0),
+            ("click.level", 0.2),
+            ("click.tone", 1_200.0),
+            ("out.velocity", 0.5),
         ],
     },
 ];

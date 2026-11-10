@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use peel_document::{Clip, ClipContent, Id, Marker, Note, PALETTE, Pattern, Project, Time, Track};
 
+use super::kit::slides;
 use super::{add_channel, device};
 
 /// One bar of 4/4, in quarter notes.
@@ -343,15 +344,17 @@ pub fn rap() -> Project {
 
 /// Trap at 140 BPM in C minor, felt in half time: the snare lands on beat
 /// three, hats roll in sixteenth triplets and thirty-seconds, and an 808
-/// carries the low end under a bell melody and dark strings.
+/// carries the low end under a bell melody and dark strings. The 808
+/// slides up an octave at the end of each hook bar: the note before the
+/// jump runs into it.
 pub fn trap() -> Project {
     let mut s = Song::new(140.0, 0.0, &["Drums", "808", "Bells", "Strings"]);
-    let kick = s.part("Kick", 0, "peel.drum.kick", "909 Kick", HIT, -9.0);
+    let kick = s.part("Kick", 0, "peel.drum.kick", "Trap Kick", HIT, -11.0);
     let snare = s.part("Snare", 9, "peel.drum.snare", "808 Snare", HIT, -9.0);
-    let clap = s.part("Clap", 1, "peel.drum.clap", "Snappy", HIT, -13.0);
-    let hat = s.part("Hat", 2, "peel.drum.hat", "808 Closed", HIT, -15.0);
-    let open = s.part("Open hat", 3, "peel.drum.hat", "Open", HIT, -18.0);
-    let bass = s.part("808", 6, "peel.synth.bass", "808", 36, -10.0);
+    let clap = s.part("Clap", 1, "peel.drum.clap", "Trap", HIT, -13.0);
+    let hat = s.part("Hat", 2, "peel.drum.hat", "Trap Tight", HIT, -15.0);
+    let open = s.part("Open hat", 3, "peel.drum.hat", "Trap Open", HIT, -18.0);
+    let bass = s.part("808", 6, "peel.bass.808", "Slide", 36, -10.0);
     let bell = s.part("Bells", 5, "peel.synth.poly", "Glass Bell", 72, -8.0);
     let strings = s.part(
         "Strings",
@@ -395,24 +398,23 @@ pub fn trap() -> Project {
     verse.extend(roll(hat, HIT, Time::beats(7), triplet, 6, (0.4, 0.75)));
     let verse = s.pattern("Verse drums", 0, 2, verse);
 
-    // The 808 follows the kick and jumps an octave at the end of each bar.
-    let hook_808 = s.pattern(
-        "Hook 808",
-        6,
-        4,
-        bassline(
-            bass,
-            &roots,
-            &[(0, 6, 0), (7, 3, 0), (10, 4, 0), (14, 2, 12)],
-            0.9,
-        ),
-    );
-    let verse_808 = s.pattern(
-        "Verse 808",
-        6,
-        4,
-        bassline(bass, &roots, &[(0, 10, 0), (10, 6, 0)], 0.85),
-    );
+    // The 808 follows the kick and slides up an octave at the end of each
+    // bar; the verse holds longer notes and slides once, into its last bar.
+    let mut hook_808 = Vec::new();
+    let mut verse_808 = Vec::new();
+    for (bar, &root) in roots.iter().enumerate() {
+        let at = bar as i64 * 16;
+        hook_808.extend([
+            (at, 6, root, false),
+            (at + 7, 3, root, false),
+            (at + 10, 4, root, true),
+            (at + 14, 2, root + 12, false),
+        ]);
+        let into_last = bar == 2;
+        verse_808.extend([(at, 10, root, false), (at + 10, 6, root, into_last)]);
+    }
+    let hook_808 = s.pattern("Hook 808", 6, 4, slides(bass, &hook_808, 0.9));
+    let verse_808 = s.pattern("Verse 808", 6, 4, slides(bass, &verse_808, 0.85));
 
     // A 3-3-2 bell figure over each chord.
     let tones: [[u8; 3]; 4] = [[79, 75, 72], [80, 75, 72], [80, 77, 72], [79, 74, 71]];
@@ -462,10 +464,10 @@ pub fn trap() -> Project {
 /// and an alto sax line for the hook.
 pub fn hip_hop() -> Project {
     let mut s = Song::new(88.0, 0.45, &["Drums", "Bass", "Keys", "Horn"]);
-    let kick = s.part("Kick", 0, "peel.drum.kick", "Deep", HIT, -7.0);
-    let snare = s.part("Snare", 9, "peel.drum.snare", "Fat", HIT, -9.0);
-    let hat = s.part("Hat", 2, "peel.drum.hat", "Dark", HIT, -12.0);
-    let bass = s.part("Bass", 6, "peel.synth.bass", "Fingered", 38, -7.0);
+    let kick = s.part("Kick", 0, "peel.drum.kick", "Boom Bap", HIT, -9.0);
+    let snare = s.part("Snare", 9, "peel.drum.snare", "Dusty", HIT, -10.0);
+    let hat = s.part("Hat", 2, "peel.drum.hat", "Dusty", HIT, -12.0);
+    let bass = s.part("Bass", 6, "peel.synth.bass", "Upright", 38, -8.0);
     let keys = s.part("Keys", 4, "peel.keys.tine", "Mellow", 50, -6.0);
     let horn = s.part("Sax", 5, "peel.wind.sax", "Smooth Alto", 69, -9.0);
     s.fx(keys, "peel.fx.chorus", "Subtle Width");
@@ -554,15 +556,15 @@ pub fn hip_hop() -> Project {
 /// chorused pad and a sync lead for the chorus.
 pub fn synthwave() -> Project {
     let mut s = Song::new(100.0, 0.0, &["Drums", "Bass", "Arp", "Pad", "Lead"]);
-    let kick = s.part("Kick", 0, "peel.drum.kick", "909 Kick", HIT, -7.0);
-    let snare = s.part("Snare", 9, "peel.drum.snare", "909 Snare", HIT, -10.0);
-    let hat = s.part("Hat", 2, "peel.drum.hat", "808 Closed", HIT, -15.0);
+    let kick = s.part("Kick", 0, "peel.drum.kick", "Synthwave Kick", HIT, -7.0);
+    let snare = s.part("Snare", 9, "peel.drum.snare", "Gated", HIT, -10.0);
+    let hat = s.part("Hat", 2, "peel.drum.hat", "909 Closed", HIT, -15.0);
     let tom = s.part("Toms", 3, "peel.drum.tom", "909 Tom", HIT, -12.0);
-    let bass = s.part("Bass", 6, "peel.synth.bass", "Synthwave", 40, -9.0);
-    let arp_ch = s.part("Arp", 7, "peel.synth.poly", "Arp", 64, -7.0);
-    let pad = s.part("Pad", 5, "peel.synth.poly", "Warm Pad", 52, -7.0);
+    let bass = s.part("Bass", 6, "peel.synth.bass", "Octave Drive", 40, -9.0);
+    let arp_ch = s.part("Arp", 7, "peel.synth.poly", "Analog Arp", 64, -7.0);
+    let pad = s.part("Pad", 5, "peel.synth.poly", "PWM Pad", 52, -7.0);
     let lead = s.part("Lead", 4, "peel.synth.cross", "Sync Lead", 71, -12.0);
-    s.fx(snare, "peel.fx.reverb", "Big Hall");
+    s.fx(snare, "peel.fx.reverb", "Snare Plate");
     s.fx(arp_ch, "peel.fx.delay", "Dotted Ping-Pong");
     s.fx(pad, "peel.fx.vintage_chorus", "Mode II");
     s.fx(pad, "peel.fx.reverb", "Warm Hall");

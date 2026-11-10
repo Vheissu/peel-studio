@@ -96,7 +96,10 @@ scan on demand, or use the desktop or `peel-mcp --audio`.
 
 A typical sequence is:
 
-1. Create a project with `peel_new_project` and a title.
+1. Create a project with `peel_new_project` and a title. Add
+   `song` to start from a built-in song instead: a demo song by title
+   (`"Night Shift"`, `"Neon Coast"`, `"Corner Store"`, `"Afterglow"`) or a
+   song starter by name (`"Trap"`, `"Synthwave"` and so on).
 2. Call `peel_devices`, then `peel_add_channel` with an instrument's
    `type_id`. Keep the returned channel, device and mixer track IDs.
 3. Read `/patterns` and `/arrangements` with `peel_read_project` to find
