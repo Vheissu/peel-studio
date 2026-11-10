@@ -91,11 +91,7 @@ fn main() {
         return;
     }
     let prefs = prefs::Prefs::load();
-    let project = if starts_with_demo() {
-        template::showcase()
-    } else {
-        template::empty()
-    };
+    let project = startup_project();
     // `PEEL_SILENT` (development): the software clock, no audio or MIDI
     // hardware, for screenshots that play the transport.
     let mut session = if std::env::var_os("PEEL_SILENT").is_some() {
@@ -129,12 +125,18 @@ fn main() {
     }
 }
 
-/// Peel Studio opens on a blank project. The demo song is for development:
-/// `PEEL_DEMO=1` asks for it, and screenshot runs (`PEEL_SCREENSHOT`) get
-/// it unless `PEEL_DEMO=0`, since their view hooks expect its channels.
-fn starts_with_demo() -> bool {
+/// Peel Studio opens on a blank project. The demo songs are for
+/// development: `PEEL_DEMO=1` asks for the first, `PEEL_DEMO=<title>` for
+/// one by name, and screenshot runs (`PEEL_SCREENSHOT`) get the first
+/// unless `PEEL_DEMO=0`, since their view hooks expect its channels.
+fn startup_project() -> peel_document::Project {
     match std::env::var("PEEL_DEMO") {
-        Ok(v) => v != "0",
-        Err(_) => std::env::var_os("PEEL_SCREENSHOT").is_some(),
+        Ok(v) if v == "0" => template::empty(),
+        Ok(v) => template::demos()
+            .into_iter()
+            .find(|d| d.title.eq_ignore_ascii_case(&v))
+            .map_or_else(template::showcase, |d| (d.make)()),
+        Err(_) if std::env::var_os("PEEL_SCREENSHOT").is_some() => template::showcase(),
+        Err(_) => template::empty(),
     }
 }
