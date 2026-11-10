@@ -66,6 +66,8 @@ pub(crate) struct StepLayout {
     per_beat: i64,
     /// Steps per lighter sub-pulse inside a beat (0 for none).
     per_pulse: i64,
+    /// Beats in a bar.
+    beats: i64,
 }
 
 impl StepLayout {
@@ -105,6 +107,9 @@ impl StepLayout {
         } else {
             0
         };
+        let beats = bar
+            .checked_div(beat)
+            .map_or(4, |q| q.floor_int().max(1) as i64);
         StepLayout {
             step,
             xs,
@@ -112,6 +117,7 @@ impl StepLayout {
             width: x,
             per_beat,
             per_pulse,
+            beats,
         }
     }
 
@@ -144,9 +150,10 @@ impl StepLayout {
             .map_or(0, |q| q.floor_int().max(0) as usize)
     }
 
-    /// Beats alternate between two neutral fills so a bar reads in beats.
-    fn beat_odd(&self, i: usize) -> bool {
-        (i as i64 / self.per_beat) % 2 == 1
+    /// Which of the four key colors a step takes: its beat of the bar,
+    /// so a bar reads red, orange, yellow, cream like a drum machine's keys.
+    fn key_color(&self, i: usize) -> usize {
+        ((i as i64 / self.per_beat) % self.beats % 4) as usize
     }
 
     /// The step starts a sub-pulse inside the beat (a sixteenth in a
@@ -940,7 +947,6 @@ fn step_row(
     pid: Id,
 ) {
     let t = ui.theme.clone();
-    let c = col(ch.color);
     let l = grid.layout;
     let view = grid.view(row.y, row.h);
     ui.scene.push_clip(view);
@@ -964,20 +970,17 @@ fn step_row(
             )
         };
         let resp = ui.interact_button(id, target, &label);
-        let off_fill = if l.beat_odd(i) {
-            t.control.lighten(0.04)
-        } else {
-            t.control.darken(0.18)
-        };
-        let off_fill = if l.pulse_start(i) {
-            off_fill.lighten(0.05)
-        } else {
-            off_fill
-        };
+        // An unlit key is a dark tint of its beat's color; a hit lights
+        // it, dimmer the softer it is played.
+        let key = t.step_keys[l.key_color(i)];
+        let off_fill = t.panel.mix(key, if l.pulse_start(i) { 0.2 } else { 0.15 });
         let hot = resp.hovered as i32 as f32;
         if let Some(n) = note {
-            let fill = c.mix(t.control, (1.0 - n.velocity) * 0.55);
-            ui.scene.rect(cell, t.radius_s, fill.lighten(hot * 0.1));
+            let fill = key
+                .mix(off_fill, (1.0 - n.velocity) * 0.6)
+                .lighten(hot * 0.1);
+            ui.scene
+                .rect_gradient_v(cell, t.radius_s, fill.lighten(0.12), fill.darken(0.1));
         } else {
             ui.scene
                 .rect(cell, t.radius_s, off_fill.lighten(hot * 0.08));
@@ -994,7 +997,7 @@ fn step_row(
                     h: cell.h - 6.0,
                 },
                 1.0,
-                if on { ink_on(c).alpha(0.7) } else { c },
+                if on { ink_on(key).alpha(0.7) } else { key },
             );
         }
         if playing == Some(i) {
@@ -1692,6 +1695,32 @@ pub(crate) mod tests {
             ]
         );
         assert!(new.iter().all(|n| n.length == Time::new(1, 6)));
+    }
+
+    #[test]
+    fn step_keys_take_their_color_from_the_beat_of_the_bar() {
+        let bar = Time::beats(4);
+        let colors = |step: Time, length: Time, bar: Time| -> Vec<usize> {
+            let l = crate::rack::StepLayout::new(step, length, bar, 2000.0);
+            (0..l.count()).map(|i| l.key_color(i)).collect()
+        };
+        // Sixteenths in 4/4: four keys of each color, starting again at
+        // the next bar.
+        let two_bars = colors(Time::new(1, 4), Time::beats(8), bar);
+        let one: Vec<usize> = (0..16).map(|i| i / 4).collect();
+        assert_eq!(two_bars[..16], one[..]);
+        assert_eq!(two_bars[16..], one[..]);
+        // Sixteenth triplets: six keys to a beat.
+        let triplets = colors(Time::new(1, 6), bar, bar);
+        assert_eq!(triplets.len(), 24);
+        assert!(triplets.iter().enumerate().all(|(i, &c)| c == i / 6));
+        // 3/4 uses three colors and restarts on every bar line.
+        let waltz = colors(Time::new(1, 4), Time::beats(6), Time::beats(3));
+        assert_eq!(waltz[8..12], [2, 2, 2, 2]);
+        assert_eq!(waltz[12..16], [0, 0, 0, 0]);
+        // A fifth beat wraps onto the first color.
+        let five = colors(Time::new(1, 4), Time::beats(5), Time::beats(5));
+        assert_eq!(five[16..20], [0, 0, 0, 0]);
     }
 
     #[test]
