@@ -39,6 +39,8 @@ render options:
   --bits <16|24|32> PCM bit depth; 32-bit float is WAV only (default: 24)
   --bitrate <kbps>  MP3 CBR bitrate: 128, 192, 256, 320 (default: 320)
   --tail <seconds>  Effect tail, 0 to 60 seconds (default: 3)
+  --solo <tracks>  Solo these mixer tracks (names separated by commas)
+  --dry-master     Leave out the master track's effects
   --mono           Downmix to mono
   --normalize      Normalize each file to -1 dBFS peak
   --no-dither      Disable TPDF dither for integer PCM";
@@ -164,7 +166,17 @@ fn check(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn render_options(args: &[String]) -> Result<(&str, AudioExportSettings), String> {
+/// What `peel render` was asked for.
+struct RenderOptions<'a> {
+    src: &'a str,
+    settings: AudioExportSettings,
+    /// Mixer tracks to solo, by name.
+    solo: Vec<String>,
+    /// Render without the master track's effects.
+    dry_master: bool,
+}
+
+fn render_options(args: &[String]) -> Result<RenderOptions<'_>, String> {
     let src = args.first().ok_or(USAGE)?.as_str();
     let path = PathBuf::from(args.get(1).ok_or(USAGE)?);
     let format = peel_media::AudioFormat::from_extension(&path).map_err(|e| e.to_string())?;
@@ -176,10 +188,18 @@ fn render_options(args: &[String]) -> Result<(&str, AudioExportSettings), String
         format,
         ..AudioExportSettings::default()
     };
+    let mut solo = Vec::new();
+    let mut dry_master = false;
     let mut i = 2;
     while i < args.len() {
         let option = args[i].as_str();
         match option {
+            "--solo" => {
+                i += 1;
+                let names = args.get(i).ok_or("Missing value for --solo")?;
+                solo.extend(names.split(',').map(|n| n.trim().to_string()));
+            }
+            "--dry-master" => dry_master = true,
             "--mono" => settings.mono = true,
             "--normalize" => settings.normalize = true,
             "--no-dither" => settings.dither = false,
@@ -202,13 +222,35 @@ fn render_options(args: &[String]) -> Result<(&str, AudioExportSettings), String
         i += 1;
     }
     settings.validate()?;
-    Ok((src, settings))
+    Ok(RenderOptions {
+        src,
+        settings,
+        solo,
+        dry_master,
+    })
 }
 
 fn render(args: &[String]) -> Result<(), String> {
-    let (src, settings) = render_options(args)?;
+    let RenderOptions {
+        src,
+        settings,
+        solo,
+        dry_master,
+    } = render_options(args)?;
     let rate = settings.render.sample_rate;
-    let project = load(src)?;
+    let mut project = load(src)?;
+    if dry_master && let Some(master) = project.mixer.tracks.first_mut() {
+        master.inserts.clear();
+    }
+    for name in &solo {
+        let track = project
+            .mixer
+            .tracks
+            .iter_mut()
+            .find(|t| t.name.eq_ignore_ascii_case(name))
+            .ok_or_else(|| format!("No mixer track called {name}"))?;
+        track.solo = true;
+    }
     // Decode sample assets for sample-based devices.
     let base = builtin(src).is_none().then(|| PathBuf::from(src));
     let mut samples = HashMap::new();
@@ -333,7 +375,7 @@ mod tests {
 
     fn options(args: &[&str]) -> Result<AudioExportSettings, String> {
         let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
-        render_options(&args).map(|(_, options)| options)
+        render_options(&args).map(|o| o.settings)
     }
 
     #[test]
