@@ -7,15 +7,32 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32};
 
+mod audition;
+
 use peel_document::validate;
 use peel_session::{AudioExportSettings, ExportSettings, render_audio, template};
 
 const USAGE: &str = "usage:
-  peel info <project.peelproj>
-  peel validate <project.peelproj>
-  peel render <project.peelproj | --demo> <out.wav|mp3|flac|aiff> [options]
+  peel info <project>
+  peel validate <project>
+  peel render <project> <out.wav|mp3|flac|aiff> [options]
   peel devices
-  peel script <project.peelproj | --demo> <action.js|lua|py> <out.peelproj>
+  peel songs
+  peel audition <device type> <out.wav> [audition options]
+  peel script <project> <action.js|lua|py> <out.peelproj>
+
+<project> is a .peelproj file or a built-in song:
+  --demo             The first demo song
+  --demo=<title>     A demo song by title, as listed by `peel songs`
+  --template=<name>  A song starter by name
+
+audition plays a native device on its own: an instrument plays one note
+per preset, an effect processes a drum hit and a chord. It prints the peak
+and RMS level of each preset.
+  --preset <name>   One preset instead of all of them
+  --key <0-127>     Note to play (default: 60 for drums, 48 otherwise)
+  --seconds <s>     Length per preset (default: 2)
+  --set <key=value> Override a parameter after the preset (repeatable)
 
 render options:
   --rate <Hz>       Sample rate (default: 48000)
@@ -37,6 +54,22 @@ fn main() -> ExitCode {
         Some("validate") => check(&args[1..]),
         Some("render") => render(&args[1..]),
         Some("script") => script(&args[1..]),
+        Some("audition") => audition::run(&args[1..]),
+        Some("songs") => {
+            for d in template::demos() {
+                println!(
+                    "--demo={:<22} {}, {} BPM, {}",
+                    format!("\"{}\"", d.title),
+                    d.style,
+                    d.bpm,
+                    d.key
+                );
+            }
+            for (name, _) in template::templates() {
+                println!("--template=\"{name}\"");
+            }
+            Ok(())
+        }
         Some("devices") => {
             for d in peel_devices::all() {
                 println!(
@@ -61,9 +94,35 @@ fn main() -> ExitCode {
     }
 }
 
+/// A built-in song named on the command line, if `src` is one:
+/// `--demo`, `--demo=<title>` or `--template=<name>` (names ignore case).
+fn builtin(src: &str) -> Option<Result<peel_document::Project, String>> {
+    let demos = template::demos();
+    if src == "--demo" {
+        return demos.first().map(|d| Ok((d.make)()));
+    }
+    if let Some(title) = src.strip_prefix("--demo=") {
+        return Some(
+            demos
+                .iter()
+                .find(|d| d.title.eq_ignore_ascii_case(title))
+                .map(|d| (d.make)())
+                .ok_or_else(|| format!("No demo song called {title}; see `peel songs`")),
+        );
+    }
+    let name = src.strip_prefix("--template=")?;
+    Some(
+        template::templates()
+            .into_iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, make)| make())
+            .ok_or_else(|| format!("No template called {name}; see `peel songs`")),
+    )
+}
+
 fn load(path: &str) -> Result<peel_document::Project, String> {
-    if path == "--demo" {
-        return Ok(template::showcase());
+    if let Some(project) = builtin(path) {
+        return project;
     }
     let loaded = peel_project::load(std::path::Path::new(path)).map_err(|e| e.to_string())?;
     for w in loaded.warnings {
@@ -151,7 +210,7 @@ fn render(args: &[String]) -> Result<(), String> {
     let rate = settings.render.sample_rate;
     let project = load(src)?;
     // Decode sample assets for sample-based devices.
-    let base = (src != "--demo").then(|| PathBuf::from(src));
+    let base = builtin(src).is_none().then(|| PathBuf::from(src));
     let mut samples = HashMap::new();
     for a in &project.assets {
         let path = match (&base, a.managed) {
@@ -192,7 +251,7 @@ fn script(args: &[String]) -> Result<(), String> {
     let action = peel_extensions::Script::from_path(std::path::Path::new(&args[1]))?;
     // The session exists before the script starts so live calls act on it.
     let mut session = peel_session::Session::new_silent(project.clone());
-    if args[0] != "--demo" {
+    if !args[0].starts_with("--demo") && !args[0].starts_with("--template=") {
         session.path = Some(std::fs::canonicalize(&args[0]).map_err(|e| e.to_string())?);
     }
     let mut control = peel_mcp::Control::default();
