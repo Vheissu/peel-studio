@@ -233,9 +233,10 @@ pub static PRESETS: [Preset; 23] = [
         params: &[
             ("tone.acoustic", 0.0),
             ("tone.circuit", 0.0),
-            ("amp.decay", 0.9),
+            ("amp.decay", 1.8),
+            ("out.level", -2.0),
             ("tone.metal", 0.75),
-            ("tone.bright", 6_000.0),
+            ("tone.bright", 4_500.0),
             ("tone.wash", 0.25),
             ("tone.shimmer", 0.25),
         ],
@@ -395,7 +396,7 @@ pub static PRESETS: [Preset; 23] = [
             ("tone.wash", 0.45),
             ("tone.shimmer", 0.6),
             ("tone.ping", 0.0),
-            ("amp.decay", 1.1),
+            ("amp.decay", 1.3),
             ("amp.bloom", 0.001),
             ("amp.choke", 0.012),
             ("amp.gate", 0.0),
@@ -479,7 +480,7 @@ pub static PRESETS: [Preset; 23] = [
             ("tone.wash", 0.0),
             ("tone.shimmer", 0.0),
             ("tone.ping", 0.0),
-            ("amp.decay", 0.9),
+            ("amp.decay", 1.3),
             ("amp.bloom", 0.000_2),
             ("amp.choke", 0.006),
             ("amp.gate", 0.0),
@@ -531,7 +532,7 @@ pub static PRESETS: [Preset; 23] = [
             ("tone.metal", 0.85),
             ("tone.color", 9_500.0),
             ("tone.bright", 7_000.0),
-            ("amp.decay", 0.6),
+            ("amp.decay", 0.9),
             ("amp.choke", 0.012),
             ("amp.gate", 1.0),
             ("out.width", 0.15),
@@ -579,7 +580,7 @@ pub static PRESETS: [Preset; 23] = [
             ("tone.bright", 4_000.0),
             ("tone.wash", 0.4),
             ("tone.shimmer", 0.45),
-            ("amp.decay", 0.8),
+            ("amp.decay", 1.3),
             ("amp.bloom", 0.001),
             ("amp.choke", 0.02),
             ("amp.gate", 1.0),
@@ -591,6 +592,16 @@ pub static PRESETS: [Preset; 23] = [
 
 pub(crate) fn create() -> Box<dyn Device> {
     Box::new(Instrument::new(&DESC, Hat::new()))
+}
+
+/// Peaks for the fast and slow parts of a hit's envelope, which a voice
+/// mixes as `fast_mix * fast + (1 - fast_mix) * slow`. A short hat is mostly
+/// its first few milliseconds; an open one holds its level and then rings
+/// out, so the fast part shrinks as the decay grows. The two always sum to
+/// full level at the hit.
+fn envelope_peaks(decay: f32, fast_mix: f32) -> (f32, f32) {
+    let fast = lerp(1.0, 0.15, ((decay - 0.2) / 0.5).clamp(0.0, 1.0));
+    (fast, (1.0 - fast_mix * fast) / (1.0 - fast_mix))
 }
 
 /// Plate modes in the acoustic model.
@@ -1253,10 +1264,11 @@ impl Hat {
         v.common.reseed(hits.wrapping_add(8_000));
         v.noise_l.reseed(hits.wrapping_mul(2).wrapping_add(8_100));
         v.noise_r.reseed(hits.wrapping_mul(2).wrapping_add(8_101));
+        let (fast, slow) = envelope_peaks(self.decay, 0.6);
         v.fast.set_t60(self.decay * 0.3, sr);
-        v.fast.trigger(1.0, self.bloom.min(0.004), sr);
+        v.fast.trigger(fast, self.bloom.min(0.004), sr);
         v.slow.set_t60(self.decay, sr);
-        v.slow.trigger(1.0, self.bloom, sr);
+        v.slow.trigger(slow, self.bloom, sr);
         v.tick_pulse.start(0.000_06, sr);
         v.tick_hp.set_cutoff(5_000.0, sr);
         v.tick_gain = 0.6 * velocity * velocity;
@@ -1330,10 +1342,11 @@ impl Hat {
         v.tone = 0.0;
         v.set_tone(&x, sr);
         let atk = self.bloom;
+        let (fast, slow) = envelope_peaks(self.decay, 0.6);
         v.fast.set_t60(self.decay * 0.25, sr);
-        v.fast.trigger(1.0, atk.min(0.004), sr);
+        v.fast.trigger(fast, atk.min(0.004), sr);
         v.slow.set_t60(self.decay, sr);
-        v.slow.trigger(1.0, atk, sr);
+        v.slow.trigger(slow, atk, sr);
         v.strike.set_t60((self.decay * 0.1).clamp(0.02, 0.2), sr);
         v.strike.trigger(1.0, 0.000_2, sr);
         for k in 0..3 {
@@ -1469,10 +1482,11 @@ impl Synth for Hat {
         v.tone = 0.0;
         v.set_tone(&x, sr);
         let atk = self.bloom;
+        let (fast, slow) = envelope_peaks(self.decay, 0.55);
         v.fast.set_t60(self.decay * 0.3, sr);
-        v.fast.trigger(1.0, atk.min(0.004), sr);
+        v.fast.trigger(fast, atk.min(0.004), sr);
         v.slow.set_t60(self.decay, sr);
-        v.slow.trigger(1.0, atk, sr);
+        v.slow.trigger(slow, atk, sr);
 
         // Wash bands.
         v.strike.set_t60((self.decay * 0.1).clamp(0.02, 0.2), sr);

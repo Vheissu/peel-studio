@@ -465,6 +465,18 @@ fn hats_decay_in_the_right_order_for_both_kits() {
 }
 
 #[test]
+fn open_hats_hold_their_level_before_ringing_out() {
+    // An open hat that drops straight after the hit reads as a long closed
+    // one: the level has to stay up for a while first.
+    for name in ["Open", "Acoustic Open", "808 Open", "Dusty Open"] {
+        let mut d = drum(HAT, name);
+        let (l, r) = render(d.as_mut(), &[note_on(0, 60, 0.9, 1)], 3 * SR as usize, 256);
+        let fall = fall_ms(&mid(&l, &r), 20.0, SR);
+        assert!(fall > 300.0, "{name} falls 20 dB in {fall} ms");
+    }
+}
+
+#[test]
 fn hats_choke_on_retrigger_and_release_and_panic() {
     for (open, closed) in [
         ("Acoustic Open", "Acoustic Closed"),
