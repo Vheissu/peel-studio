@@ -42,7 +42,8 @@ an existing setting. Reset and listen again after changing the source.
 The Mastering effect combines input trim, broad tone EQ, linked bus
 compression, stereo width and a lookahead limiter. Simple and Advanced
 views edit the same parameters; switching views does not change the sound.
-Clean, Balanced, Warm, Punch and Loud presets provide starting points.
+Clean, Balanced, Warm, Punch and Loud presets provide starting points;
+Low End, Neon and Dusty are voiced for trap, synthwave and boom bap.
 
 Low and Air are shelves at 120 Hz and 8 kHz; Body is a broad bell at
 500 Hz. Compression uses a soft knee and an 80 Hz detector filter.
@@ -145,6 +146,83 @@ recordings are embedded, so saved projects and personal templates need no
 external files. The original modeled Guitar and synth Bass remain
 available. Sources, licences and processing are in
 `assets/strings/recorded/`.
+
+## 808
+
+**808** is a tuned sub bass that plays one note at a time. A sine starts at
+its zero crossing and drops onto the note from Punch semitones above over
+Punch Time, holds at full level for Hold, then decays. Shape leans the sine
+towards a triangle and Octave adds a second harmonic, both before the
+drive, so the bass can be heard on small speakers. Tune it by key: C1 to
+C2 is the usual range.
+
+Glide sets what a new note does:
+
+| Glide | A note played while another is held | A separate note |
+| --- | --- | --- |
+| Off | Restarts on its own pitch | Restarts |
+| Legato | Slides to the new pitch, no restart | Restarts |
+| Always | Slides to the new pitch, no restart | Restarts and slides in from the last pitch |
+
+To write a slide, overlap two notes in the Piano Roll: drag the end of the
+first note past the start of the second. Glide Time is how long the slide
+takes, whatever the interval, and the pitch moves in a straight line.
+Letting go of the upper note while the lower is still held slides back. A
+restart over a note that is still sounding crossfades the old one out over
+4 ms, so retriggers do not click.
+
+Note Off is Release or Ring. With Release the key gates the note and
+Release sets how fast it stops, down to a 5 ms choke. With Ring the decay
+always runs out, like a one-shot sample, and a new note cuts the old one.
+Sustain holds a level while the key is down. Decay Track shortens the decay
+as notes go up: at full, an octave up halves it.
+
+Drive has four curves, all at four times the sample rate. Warm is a
+symmetric soft clip, Tube is asymmetric and adds even harmonics, Clip is a
+hard clip and Fold wraps the wave back on itself. Fold eases off above
+about 260 Hz to stay free of aliasing. Tone is a 12 dB low-pass after the
+drive; Click and Click Tone add a short attack after it. Velocity scales
+the output, not the drive.
+
+Presets: Classic, Clean Sub, Long, Punchy, Distorted, Fuzz, Slide,
+Portamento, Deep, Bright, Tape, Thump, Small Speaker and Held Sub. Slide
+and Held Sub sustain under a held key, which suits long bends.
+
+Per-note pitch, pressure and timbre work as on the other instruments.
+Timbre moves the Tone filter by up to two octaves and adds or removes
+drive.
+
+## Tape
+
+**Tape** is a tape machine in one insert. Drive pushes the signal into a
+soft, slightly asymmetric saturation: quiet material rises by half the
+drive and a full-scale signal stays just under full scale. Head Bump lifts
+85 Hz by up to 5 dB. Tone is a gentle high cut; fully open it does nothing.
+Wow is a slow pitch drift (up to about half a percent at under 1 Hz) and
+Flutter a faster one near 7 Hz. Hiss rides on the signal and stops when it
+does.
+
+Tape delays the signal by 3 ms and reports it, so delay compensation keeps
+it in time. The dry part of Mix is delayed to match.
+
+Presets: Warm, Master Glue (no motion, top end open), Cassette, Worn,
+Wobble and Hot.
+
+## Gate
+
+**Gate** turns a track down when it falls quiet. It opens when the level
+passes Threshold and closes once the level has stayed below Threshold minus
+Hysteresis for the Hold time, at the Release rate. Range is how far it
+turns down: at the bottom it mutes, higher values duck. Both channels share
+one gain.
+
+Route a sidechain to make the gate listen to another track. For a gated
+reverb, put a reverb at 100% mix on a return, add Gate after it and key
+the gate from the dry snare: the tail is cut off shortly after each hit.
+Sidechain HP keeps low rumble from opening the gate. The strip's reduction
+meter shows the gate at work.
+
+Presets: Default, Tight Drums, Gated Reverb, Noise Floor and Chop.
 
 ## MIDI
 
