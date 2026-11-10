@@ -14,7 +14,7 @@ colors:
   well: "#121110"
   text: "#F3EEE4"
   text-dim: "#B9B2A6"
-  text-faint: "#8F887C"
+  text-faint: "#999286"
   text-on-accent: "#1F1305"
   accent: "#F7992B"
   focus: "#7FC8EA"
@@ -127,7 +127,7 @@ identifies it everywhere it appears.
 | `well` | `#121110` | Recessed trays: transport groups, insert slots, scrollbar tracks |
 | `text` | `#F3EEE4` | Primary text, knob pointers, fader index lines |
 | `text_dim` | `#B9B2A6` | Secondary text |
-| `text_faint` | `#8F887C` | Labels and hints |
+| `text_faint` | `#999286` | Labels and hints |
 | `accent` | `#F7992B` | Primary action, playhead, the peel |
 | `display` | `#FFB454` | Position and tempo figures in the time display |
 | `play` | `#9FD65B` | Play state, signal present, meters below -6 dB (orange above, red at clip) |
@@ -298,6 +298,10 @@ is a dark tint of its color; a hit lights it, dimmer the softer it is
 played. The playing step brightens. The channel's own color stays on its
 name button, its knobs and its note preview.
 
+The Add menu lists kits above the instruments, under their own heading. A
+kit adds one row and one mixer track per piece, as a single undo step, and
+is refused whole when the mixer has no room for all of it.
+
 ## Rhythm
 
 The rack's Steps picker sets the spacing of drum hits, independently of the
@@ -419,6 +423,16 @@ Notes never hang. Mouse notes end on release, when the pointer leaves the
 window with the button up, when the editor closes, when the target changes
 and when the window loses focus; the same focus loss ends held computer
 keys and centres a held Pitch or Pressure, and Panic silences every channel.
+
+## Slides
+
+A mono instrument that glides (the 808 with Glide on, the mono bass in a
+legato mode) slides when notes overlap. The Piano Roll draws each slide as
+a cream line from a dot on the held note to the note it moves to, over a
+dark underlay so it reads on any note color. It follows last-note
+priority: when the newer note ends first, a second line returns to the
+note still held. The lines are drawn from the notes, never edited
+directly; move or resize a note and they follow.
 
 ## Piano roll lanes
 

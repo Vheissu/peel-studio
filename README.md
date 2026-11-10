@@ -58,7 +58,7 @@ effects. There is no web view.
   and AIFF export of the mix or stems, undo history.
 - Screen reader support through AccessKit and keyboard focus traversal.
 
-| Piano Roll with a scale | Mixer with a sidechain duck |
+| Piano Roll with 808 slides | Mixer |
 | --- | --- |
 | ![Piano Roll](docs/images/piano-roll.png) | ![Mixer](docs/images/mixer.png) |
 
@@ -74,8 +74,10 @@ song starters, alongside House and Beat and melody. Rock / Metal opens
 Channels on a one-bar Double kick pattern with the step grid at 1/16T, so
 the six-kick bursts on beats one and three line up with the steps. Trap
 uses the 808 instrument and slides it up an octave at the end of each hook
-bar; Synthwave and Hip-hop use the gated and dusty drum presets. The demo
-songs are a separate choice.
+bar; Synthwave and Hip-hop use the gated and dusty drum presets.
+
+The demo songs are a separate choice: the start screen lists them with
+their style, tempo and key, and File > Demo songs opens the same list.
 File > Close project returns to the start screen. New, Open and Close ask
 before replacing unsaved work; cancelling Save As keeps the current project.
 
@@ -111,7 +113,13 @@ requires attribution when publishing audio that uses these recordings. See
 Kick, Snare, Hat and Tom also offer modeled acoustic and 808/909 circuit
 sounds. Existing projects and older presets retain their sound.
 
-In Channels, **Steps** sets the drum grid; the bar count sets the pattern's
+In Channels, the Add menu lists kits above the instruments. Trap kit adds
+a kick, snare, clap, closed and open hats and an 808 set to slide; Acoustic
+kit adds six pieces of the recorded kit. Each piece gets its own row and
+mixer track, and the whole kit is one undo step.
+
+Step keys are colored by beat, four to a color, so the bar reads at a
+glance. **Steps** sets the drum grid; the bar count sets the pattern's
 length. Choose 1/32 or 1/64 for fast repeated kicks. The Piano Roll has
 separate **Grid** and **Note length** controls, with quarter notes, eighths,
 sixteenths, finer divisions and triplets. Note length also offers dotted
@@ -126,7 +134,8 @@ plays one note at a time. With Glide on Legato, a note that starts while
 another is still held slides to the new pitch instead of restarting, so a
 slide is two overlapping notes in the Piano Roll: lengthen the first until
 it runs under the second. Always also slides between separate notes; Off
-restarts every note. Glide Time is the same for any interval.
+restarts every note. Glide Time is the same for any interval. The Piano
+Roll draws a line from one note to the next wherever a slide will happen.
 
 Note Off chooses Release (the key gates the note; a short Release chokes
 it) or Ring (the decay always runs out, like a one-shot sample). Decay
