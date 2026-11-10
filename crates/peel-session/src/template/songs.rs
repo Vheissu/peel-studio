@@ -247,7 +247,7 @@ fn arp(ch: Id, prog: &[&[u8]], every: i64, vel: f32) -> Vec<Note> {
 /// clap, a pad and a kalimba riff.
 pub fn rap() -> Project {
     let mut s = Song::new(92.0, 0.22, &["Drums", "Bass", "Keys", "Pad", "Hook"]);
-    let kick = s.part("Kick", 0, "peel.drum.kick", "Punch", HIT, -6.0);
+    let kick = s.part("Kick", 0, "peel.drum.kick", "Punch", HIT, -7.0);
     let snare = s.part("Snare", 9, "peel.drum.snare", "Crack", HIT, -9.0);
     let clap = s.part("Clap", 1, "peel.drum.clap", "Dry", HIT, -12.0);
     let hat = s.part("Hat", 2, "peel.drum.hat", "Closed", HIT, -15.0);
@@ -464,7 +464,7 @@ pub fn trap() -> Project {
 /// and an alto sax line for the hook.
 pub fn hip_hop() -> Project {
     let mut s = Song::new(88.0, 0.45, &["Drums", "Bass", "Keys", "Horn"]);
-    let kick = s.part("Kick", 0, "peel.drum.kick", "Boom Bap", HIT, -9.0);
+    let kick = s.part("Kick", 0, "peel.drum.kick", "Boom Bap", HIT, -10.0);
     let snare = s.part("Snare", 9, "peel.drum.snare", "Dusty", HIT, -10.0);
     let hat = s.part("Hat", 2, "peel.drum.hat", "Dusty", HIT, -12.0);
     let bass = s.part("Bass", 6, "peel.synth.bass", "Upright", 38, -8.0);
@@ -768,11 +768,11 @@ pub fn edm() -> Project {
 /// half-time chugs.
 pub fn rock_metal() -> Project {
     let mut s = Song::new(108.0, 0.0, &["Drums", "Bass", "Rhythm", "Chug"]);
-    let kick = s.part("Kick", 0, "peel.drum.acoustic", "Kick", HIT, -2.0);
-    let snare = s.part("Snare", 9, "peel.drum.acoustic", "Snare", HIT, -4.0);
-    let hat = s.part("Hat", 2, "peel.drum.acoustic", "Closed Hat", HIT, -11.0);
-    let crash = s.part("Crash", 3, "peel.drum.acoustic", "Crash", HIT, -15.0);
-    let tom = s.part("Toms", 8, "peel.drum.acoustic", "Floor Tom", HIT, -7.0);
+    let kick = s.part("Kick", 0, "peel.drum.acoustic", "Kick", HIT, -5.0);
+    let snare = s.part("Snare", 9, "peel.drum.acoustic", "Snare", HIT, -7.0);
+    let hat = s.part("Hat", 2, "peel.drum.acoustic", "Closed Hat", HIT, -14.0);
+    let crash = s.part("Crash", 3, "peel.drum.acoustic", "Crash", HIT, -18.0);
+    let tom = s.part("Toms", 8, "peel.drum.acoustic", "Floor Tom", HIT, -10.0);
     let bass = s.part("Bass", 6, "peel.bass.recorded", "Rock Pick", 28, -3.0);
     let gtr = s.part("Guitar", 4, "peel.guitar.recorded", "High Gain", 40, -14.0);
     let chug = s.part(

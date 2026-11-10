@@ -428,7 +428,9 @@ fn released_tails_keep_their_own_snapshot() {
         };
         let a = go(&[vx(14_000, 1, 2.0, 0.0, 0.5)]);
         let b = go(&[]);
-        let ratio = detect_pitch(&a[26_000..32_000], SR) / detect_pitch(&b[26_000..32_000], SR);
+        // While the tail is still there: the piano's dampers leave nothing
+        // to measure a third of a second after the release.
+        let ratio = detect_pitch(&a[20_000..26_000], SR) / detect_pitch(&b[20_000..26_000], SR);
         assert!(
             (ratio / 2f32.powf(2.0 / 12.0) - 1.0).abs() < 0.03,
             "{id}: {ratio}"

@@ -1,9 +1,11 @@
 //! `peel.drum.kick`: a sine body whose pitch falls in two exponential stages
-//! (a very fast snap, then a slower sweep, as in analogue kick circuits), a
-//! top layer of band-passed noise plus a short tone burst, waveshaping drive,
-//! a tone filter, a final soft clipper for loudness and a DC blocker. The
-//! body phase starts at zero and the click fades in over a fraction of a
-//! millisecond, so a hit never starts with a step. Output is mono.
+//! (a very fast snap, then a slower sweep, as in analogue kick circuits) and
+//! whose level holds for a few tens of milliseconds before it decays, so the
+//! sweep lands at full weight. On top sits a click: band-passed noise, a
+//! sub-millisecond high-passed tick and a short tone burst. Then waveshaping
+//! drive, a tone filter, a final soft clipper for loudness and a DC blocker.
+//! The body phase starts at zero and the click fades in over a fraction of
+//! a millisecond, so a hit never starts with a step. Output is mono.
 
 use peel_dsp::envelope::Decay;
 use peel_dsp::filter::{OnePole, Svf, tanh_approx};
@@ -123,7 +125,7 @@ static PARAMS: [ParamDescriptor; 14] = [
         "Click",
         0.0,
         1.0,
-        0.65,
+        0.8,
         Unit::Percent,
     ),
     ParamDescriptor::log(
@@ -182,7 +184,7 @@ pub static PRESETS: [Preset; 19] = [
             ("body.drive", 0.3),
             ("body.clip", 0.25),
             ("body.tone", 9_000.0),
-            ("click.level", 0.65),
+            ("click.level", 0.8),
             ("click.tone", 3_200.0),
             ("out.velocity", 0.6),
             ("out.level", 0.0),
@@ -515,6 +517,13 @@ pub(crate) fn create() -> Box<dyn Device> {
     Box::new(Instrument::new(&DESC, Kick::new()))
 }
 
+/// Linear rise of the body.
+const ATTACK_S: f32 = 0.000_4;
+/// The body stays at full level for this fraction of its decay time before
+/// it starts to fall, up to [`HOLD_MAX_S`].
+const HOLD: f32 = 0.07;
+const HOLD_MAX_S: f32 = 0.035;
+
 /// Soft clipper: unity gain for small signals, rounding off peaks smoothly
 /// toward full scale. `g` is the drive into the curve.
 #[inline]
@@ -534,9 +543,15 @@ struct KickVoice {
     snap_env: f32,
     snap_coef: f32,
     amp: Decay,
+    /// Samples left of the attack, then of the hold at full level.
+    attack_left: u32,
+    hold_left: u32,
     click_env: f32,
     click_coef: f32,
     click_gain: f32,
+    tick_env: f32,
+    tick_coef: f32,
+    tick_hp: OnePole,
     click_atk: f32,
     click_atk_inc: f32,
     burst_phase: f32,
@@ -572,9 +587,14 @@ impl KickVoice {
             snap_env: 0.0,
             snap_coef: 0.0,
             amp: Decay::new(),
+            attack_left: 0,
+            hold_left: 0,
             click_env: 0.0,
             click_coef: 0.0,
             click_gain: 0.0,
+            tick_env: 0.0,
+            tick_coef: 0.0,
+            tick_hp: OnePole::new(),
             click_atk: 0.0,
             click_atk_inc: 1.0,
             burst_phase: 0.0,
@@ -601,8 +621,16 @@ impl KickVoice {
             (self.f0 + self.f_span * self.pitch_env + self.f_snap * self.snap_env) * self.bend;
         self.pitch_env *= self.pitch_coef;
         self.snap_env *= self.snap_coef;
+        let amp = if self.attack_left > 0 {
+            self.attack_left -= 1;
+            self.amp.tick()
+        } else if self.hold_left > 0 {
+            self.hold_left -= 1;
+            self.amp.level()
+        } else {
+            self.amp.tick()
+        };
         // Read the phase before advancing it so the first sample is exactly 0.
-        let amp = self.amp.tick();
         let sine = fast_sin(self.phase) * amp;
         self.phase += (freq * sr_inv).min(0.45);
         if self.phase >= 1.0 {
@@ -619,15 +647,18 @@ impl KickVoice {
         // fade in over about 0.3 ms so the hit starts from zero.
         let atk = self.click_atk;
         self.click_atk = (atk + self.click_atk_inc).min(1.0);
-        let noise = self.band.tick(self.noise.white()).band_unity * self.click_env;
+        let white = self.noise.white();
+        let noise = self.band.tick(white).band_unity * self.click_env;
         self.click_env *= self.click_coef;
+        let tick = self.tick_hp.high(white) * self.tick_env;
+        self.tick_env *= self.tick_coef;
         self.burst_phase += self.burst_dt;
         if self.burst_phase >= 1.0 {
             self.burst_phase -= 1.0;
         }
         let burst = fast_sin(self.burst_phase) * self.burst_env;
         self.burst_env *= self.burst_coef;
-        let click = (noise * 0.7 + burst * 0.5) * self.click_gain * atk;
+        let click = (noise * 0.7 + tick * 0.5 + burst * 0.5) * self.click_gain * atk;
 
         let y = self.lp.low(body + click);
         // Final soft clip pushes the level up without exceeding full scale.
@@ -780,7 +811,7 @@ impl AcKickVoice {
         let atk = self.hiss_atk;
         self.hiss_atk = (atk + self.hiss_atk_inc).min(1.0);
         let hiss = self.band.tick(self.noise.white()).band_unity * self.hiss.tick() * atk;
-        let y = self.lp.low(body + (slap + 0.35 * hiss) * self.click_gain);
+        let y = self.lp.low(body + (slap + 0.9 * hiss) * self.click_gain);
         let y = lerp(y, soft_clip(y, p.clip_g, p.clip_norm), p.clip_mix);
         let y = self.dc.high(y);
         let out = y * self.gain * self.fade.tick() * self.xgain;
@@ -1035,7 +1066,7 @@ impl Kick {
             snap: 8.0,
             sweep_time: 0.032,
             decay: 0.42,
-            click: 0.65,
+            click: 0.8,
             click_tone: 3_200.0,
             vel_sens: 0.6,
             drive: Ramp::new(0.3),
@@ -1235,12 +1266,12 @@ impl Kick {
         v.noise.reseed(self.hits.wrapping_add(77));
         v.band.set_q((self.click_tone * 1.4).min(0.4 * sr), 0.7, sr);
         v.band.reset();
-        v.hiss.set_t60(0.006, sr);
+        v.hiss.set_t60(0.014, sr);
         v.hiss.trigger(1.0, 0.000_25, sr);
         v.hiss_atk = 0.0;
         v.hiss_atk_inc = 1.0 / (0.000_3 * sr);
         v.click_gain =
-            self.click * 0.45 * velocity.powf(1.5) * (1.0 + 0.12 * rng.next()) * x.tone_ratio(1.0);
+            self.click * 0.52 * velocity.powf(1.5) * (1.0 + 0.12 * rng.next()) * x.tone_ratio(1.0);
         v.bright = lerp(0.35, 1.0, velocity.sqrt());
         v.push = lerp(0.7, 1.0, velocity);
         v.lp.set_cutoff(tone_hz * v.bright * v.tone_r, sr);
@@ -1330,11 +1361,17 @@ impl Synth for Kick {
         v.snap_env = 1.0;
         v.snap_coef = (-1.0 / (0.004 * sr)).exp();
         v.amp.set_t60(self.decay, sr);
-        v.amp.trigger(1.0, 0.000_4, sr);
+        v.amp.trigger(1.0, ATTACK_S, sr);
+        v.attack_left = (ATTACK_S * sr) as u32 + 1;
+        v.hold_left = ((HOLD * self.decay).min(HOLD_MAX_S) * sr) as u32;
         v.click_env = 1.0;
-        v.click_coef = (-1.0 / (0.002 * sr)).exp();
+        v.click_coef = (-1.0 / (0.003_5 * sr)).exp();
+        v.tick_env = 1.0;
+        v.tick_coef = (-1.0 / (0.000_5 * sr)).exp();
+        v.tick_hp.set_cutoff(5_000.0, sr);
+        v.tick_hp.reset();
         // Timbre also sets how hard the beater clicks.
-        v.click_gain = self.click * 0.9 * lerp(0.35, 1.0, velocity) * x.tone_ratio(1.0);
+        v.click_gain = self.click * 2.2 * lerp(0.35, 1.0, velocity) * x.tone_ratio(1.0);
         v.click_atk = 0.0;
         v.click_atk_inc = 1.0 / (0.000_3 * sr);
         v.band

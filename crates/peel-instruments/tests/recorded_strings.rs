@@ -151,15 +151,6 @@ fn tone(b: &[f32], hz: f32, sr: f32) -> f32 {
     ((re * re + im * im).sqrt() / n as f64) as f32
 }
 
-/// The strongest component among the candidates.
-#[allow(dead_code)]
-fn loudest(b: &[f32], candidates: &[f32], sr: f32) -> f32 {
-    *candidates
-        .iter()
-        .max_by(|a, c| tone(b, **a, sr).total_cmp(&tone(b, **c, sr)))
-        .unwrap()
-}
-
 /// Detected pitch of a held note, measured on its sustained part.
 fn pitch_of(id: &str, preset: &str, key: u8, sr: f32) -> f32 {
     let mut d = at_rate(id, preset, sr);

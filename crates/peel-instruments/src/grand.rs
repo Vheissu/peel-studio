@@ -20,9 +20,15 @@
 //!   resonances that glues the notes together. With the sustain pedal down an
 //!   88 key bank of undamped strings answers the sound (sympathetic
 //!   resonance).
+//! * Width spreads the image three ways: keys run bass left to treble right,
+//!   each partial above the fundamental has its own fixed place between the
+//!   sides, and a short allpass chain makes the phase differences a pair of
+//!   microphones would hear. The last two are pure side signal, so a mono
+//!   sum is the same at any Width.
 
 use std::f32::consts::{PI, TAU};
 
+use peel_dsp::delay::DelayLine;
 use peel_dsp::filter::{OnePole, Svf};
 use peel_dsp::noise::Noise;
 use peel_dsp::param::{ParamDescriptor, Unit};
@@ -727,6 +733,12 @@ impl GrandVoice {
             ]
         };
         let side: [f32; 3] = [0.0, 1.0, -1.0];
+        // Where each partial sits between the two sides. A soundboard
+        // radiates every frequency in its own pattern, which a pair of
+        // microphones hears as a fixed spread of the partials; it belongs to
+        // the key, not the stroke. The fundamental keeps the key's own
+        // position and the lowest partials stay close to it.
+        let mut place = Noise::new(0x51DE_0000 ^ key as u32);
 
         // Hammer: spectral slope depends on velocity and Tone.
         let dyn_v = lerp(0.75, vel.max(0.03), s.dynamics);
@@ -823,6 +835,11 @@ impl GrandVoice {
             let a_k = amp[k] * norm;
             max_amp = max_amp.max(a_k);
             e_sum += a_k * a_k;
+            let placed = if k == 0 {
+                0.0
+            } else {
+                0.7 * place.white() * freq[k] / (freq[k] + 250.0)
+            };
             for string in 0..nv {
                 let ratio = (cents[string] * (std::f32::consts::LN_2 / 1200.0)).exp();
                 let fk = freq[k] * ratio;
@@ -840,7 +857,7 @@ impl GrandVoice {
                     a_k * weights[string] * var,
                     sigma,
                     phase[k],
-                    side[string],
+                    placed + 0.3 * side[string],
                 );
             }
         }
@@ -899,7 +916,7 @@ impl GrandVoice {
         let (l, r) = pan_gains(pan);
         self.pan_l = l;
         self.pan_r = r;
-        self.spread = 0.22 * s.width;
+        self.spread = 1.1 * s.width;
 
         // Envelope estimates used for stealing and the release thud.
         self.after = fa;
@@ -1226,6 +1243,7 @@ pub(crate) struct Grand {
     out_gain: f32,
     body: Box<ResBank<BODY_CHUNKS>>,
     body_live: bool,
+    spread: Spread,
     symp: Box<ResBank<SYMP_CHUNKS>>,
     symp_live: bool,
     symp_gate: f32,
@@ -1264,6 +1282,7 @@ impl Grand {
             out_gain: 1.0,
             body: Box::new(ResBank::new()),
             body_live: false,
+            spread: Spread::new(48_000.0),
             symp: Box::new(ResBank::new()),
             symp_live: false,
             symp_gate: 0.0,
@@ -1348,6 +1367,7 @@ impl Grand {
                 self.idle += CTRL as u32;
                 if self.idle as f32 > 0.6 * sr {
                     self.body.clear();
+                    self.spread.clear();
                     self.body_live = false;
                 }
             } else {
@@ -1380,12 +1400,14 @@ impl Synth for Grand {
         self.ctrl = 0;
         self.idle = 0;
         self.symp_gate = 0.0;
+        self.spread = Spread::new(sample_rate);
         self.build_banks();
     }
 
     fn reset(&mut self) {
         self.pool.kill_all();
         self.body.clear();
+        self.spread.clear();
         self.symp.clear();
         self.body_live = false;
         self.symp_live = false;
@@ -1479,6 +1501,7 @@ impl Synth for Grand {
     fn all_sound_off(&mut self) {
         self.pool.kill_all();
         self.body.clear();
+        self.spread.clear();
         self.symp.clear();
         self.body_live = false;
         self.symp_live = false;
@@ -1504,7 +1527,8 @@ impl Synth for Grand {
                 r += sr * g;
             }
             if self.body_live {
-                let (bl, br) = self.body.tick((l + r) * 0.5);
+                let dry = (l + r) * 0.5;
+                let (bl, br) = self.body.tick(dry);
                 // The soundboard's left and right responses only differ as
                 // far as Width allows.
                 let mid = (bl + br) * 0.5;
@@ -1512,6 +1536,9 @@ impl Synth for Grand {
                 let g = self.body_amt.get() * BODY_GAIN;
                 l += (mid + (bl - mid) * wd) * g;
                 r += (mid + (br - mid) * wd) * g;
+                let side = self.spread.tick(dry) * self.width_r.get() * SPREAD_GAIN;
+                l += side;
+                r -= side;
             }
             left[n] = l * self.out_gain;
             right[n] = r * self.out_gain;
@@ -1524,6 +1551,56 @@ impl Synth for Grand {
 
     fn is_silent(&self) -> bool {
         self.pool.is_silent() && !self.body_live && !self.symp_live
+    }
+}
+
+/// Allpass delays of the stereo spread, in seconds, and their gain.
+const SPREAD_S: [f32; 3] = [0.003_1, 0.005_3, 0.008_9];
+const SPREAD_G: f32 = 0.55;
+/// Side level at full Width.
+const SPREAD_GAIN: f32 = 0.6;
+
+/// The difference between two microphones over a soundboard. The same sound
+/// reaches each a few milliseconds apart and by other paths, so its phase
+/// differs from one side to the other at every frequency. Three allpasses
+/// in series make that difference from the middle signal; it is added to
+/// one side and subtracted from the other, so a mono sum is unchanged. The
+/// bass stays in the middle.
+struct Spread {
+    lines: [DelayLine; 3],
+    len: [usize; 3],
+    hp: OnePole,
+}
+
+impl Spread {
+    fn new(sample_rate: f32) -> Spread {
+        let len = SPREAD_S.map(|t| ((t * sample_rate) as usize).max(1));
+        let mut hp = OnePole::new();
+        hp.set_cutoff(180.0, sample_rate);
+        Spread {
+            lines: len.map(DelayLine::new),
+            len,
+            hp,
+        }
+    }
+
+    fn clear(&mut self) {
+        for line in &mut self.lines {
+            line.clear();
+        }
+        self.hp.reset();
+    }
+
+    #[inline]
+    fn tick(&mut self, mid: f32) -> f32 {
+        let mut x = self.hp.high(mid);
+        for (line, &len) in self.lines.iter_mut().zip(&self.len) {
+            let delayed = line.read(len);
+            let y = delayed - SPREAD_G * x;
+            line.push(x + SPREAD_G * y);
+            x = y;
+        }
+        x
     }
 }
 
