@@ -1336,7 +1336,62 @@ fn edit_canvas(
             );
         }
     }
+    // Slides: where a mono instrument glides between overlapping notes.
+    if let Some(secs) = slide_time(ch) {
+        let beats = f64::from(secs) * s.project().bpm() / 60.0;
+        let mid = |key: u8| v.row_top(i32::from(key)) + v.row_h * 0.5;
+        for (at, from, to) in slides(&fresh) {
+            let a = vec2(v.x(at.as_f64()), mid(from));
+            let b = vec2(v.x(at.as_f64() + beats), mid(to));
+            ui.scene.line(a, b, 3.5, t.bg.alpha(0.7));
+            ui.scene.line(a, b, 1.5, t.text);
+            ui.scene.circle(a, 2.5, t.text);
+        }
+    }
     ui.scene.pop_clip();
+}
+
+/// How long the channel's instrument takes to slide from one overlapping
+/// note to the next, if it slides at all: the 808 with Glide on, and Bass
+/// in Legato or Slide mode with some glide.
+pub(crate) fn slide_time(ch: &Channel) -> Option<f32> {
+    let p = |key: &str, default: f32| ch.device.params.get(key).copied().unwrap_or(default);
+    let secs = match ch.device.type_id.as_str() {
+        "peel.bass.808" if p("glide.mode", 1.0) >= 0.5 => p("glide.time", 0.08),
+        "peel.synth.bass" if p("voice.mode", 1.0) >= 0.5 => p("voice.glide", 0.0),
+        _ => return None,
+    };
+    (secs > 0.0).then_some(secs)
+}
+
+/// Every slide a last-note-priority instrument makes playing `notes`, as
+/// `(when, from key, to key)`: onto a note that starts while another is
+/// held, and back to the held note when the top one ends first.
+pub(crate) fn slides(notes: &[Note]) -> Vec<(Time, u8, u8)> {
+    let mut out = Vec::new();
+    // The newest of the notes sounding across `at`, other than `skip`.
+    let held = |at: Time, skip: Id| {
+        notes
+            .iter()
+            .filter(|n| n.id != skip && n.start < at && n.end() > at)
+            .max_by_key(|n| n.start)
+    };
+    for n in notes {
+        if let Some(under) = held(n.start, n.id)
+            && under.key != n.key
+        {
+            out.push((n.start, under.key, n.key));
+        }
+        // The note ends while an older one is still down, and nothing
+        // newer has taken over: back to the older one.
+        if let Some(back) = held(n.end(), n.id)
+            && back.start <= n.start
+            && back.key != n.key
+        {
+            out.push((n.end(), n.key, back.key));
+        }
+    }
+    out
 }
 
 /// The lane under the notes: the lane picker in the label column, then
@@ -2137,6 +2192,72 @@ mod tests {
     use crate::workspace::{DockTab, NoteLength};
 
     const KEY: u8 = 64;
+
+    #[test]
+    fn slides_follow_the_newest_held_note() {
+        let ch = Id::new();
+        let n = |start: i64, len: i64, key: u8| {
+            Note::new(ch, Time::new(start, 4), Time::new(len, 4), key, 0.8)
+        };
+        // Separate notes never slide, nor do notes that only touch.
+        let apart = [n(0, 4, 36), n(4, 4, 43), n(12, 2, 36)];
+        assert!(super::slides(&apart).is_empty());
+        // A note over a held one slides up at its start; ending first, it
+        // slides back down to the note still held.
+        let over = [n(0, 16, 36), n(8, 4, 48)];
+        assert_eq!(
+            super::slides(&over),
+            [(Time::new(8, 4), 36, 48), (Time::new(12, 4), 48, 36)]
+        );
+        // Outlasting the held note, it only slides up.
+        let last = [n(0, 8, 36), n(6, 8, 43)];
+        assert_eq!(super::slides(&last), [(Time::new(6, 4), 36, 43)]);
+        // A third note takes over before the second ends: the second's
+        // end changes nothing, and each slide starts from the note on top.
+        let three = [n(0, 16, 36), n(4, 6, 40), n(8, 4, 43)];
+        assert_eq!(
+            super::slides(&three),
+            [
+                (Time::new(4, 4), 36, 40),
+                (Time::new(8, 4), 40, 43),
+                (Time::new(12, 4), 43, 36),
+            ]
+        );
+        // The same key again is a restrike or a tie, not a slide.
+        assert!(super::slides(&[n(0, 8, 36), n(4, 8, 36)]).is_empty());
+    }
+
+    #[test]
+    fn only_gliding_mono_instruments_show_slides() {
+        use peel_session::template::{add_channel, device};
+        let mut p = peel_session::template::empty();
+        let mut ch = |type_id: &str, set: &[(&str, f32)]| {
+            let mut dev = device(type_id, None);
+            for (k, v) in set {
+                dev.params.insert((*k).to_string(), *v);
+            }
+            let id = add_channel(&mut p, "X", 0, dev, 36);
+            p.channel(id).unwrap().clone()
+        };
+        // Bass slides in Legato and Slide mode once it has some glide.
+        assert_eq!(super::slide_time(&ch("peel.synth.bass", &[])), None);
+        let legato = ch("peel.synth.bass", &[("voice.glide", 0.12)]);
+        assert_eq!(super::slide_time(&legato), Some(0.12));
+        let retrigger = ch(
+            "peel.synth.bass",
+            &[("voice.glide", 0.12), ("voice.mode", 0.0)],
+        );
+        assert_eq!(super::slide_time(&retrigger), None);
+        // The 808 slides unless Glide is off.
+        let sub = ch("peel.bass.808", &[]);
+        let time = sub.device.params["glide.time"];
+        assert!(time > 0.0);
+        assert_eq!(super::slide_time(&sub), Some(time));
+        let off = ch("peel.bass.808", &[("glide.mode", 0.0)]);
+        assert_eq!(super::slide_time(&off), None);
+        // Polyphonic instruments never do.
+        assert_eq!(super::slide_time(&ch("peel.synth.poly", &[])), None);
+    }
 
     fn open(h: &mut Harness) -> Id {
         let kick = h.channel("Kick");
