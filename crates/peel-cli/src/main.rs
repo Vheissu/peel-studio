@@ -414,8 +414,44 @@ mod tests {
             vec!["--demo", "song.wav", "--bits"],
             vec!["--demo", "song.wav", "--wat"],
             vec!["--demo", "song.unknown"],
+            vec!["--demo", "song.wav", "--solo"],
         ] {
             assert!(options(&args).is_err(), "{args:?}");
         }
+    }
+
+    #[test]
+    fn solo_and_dry_master_are_render_options() {
+        let args: Vec<String> = [
+            "--demo",
+            "stem.wav",
+            "--solo",
+            "Drum Bus, 808",
+            "--dry-master",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let o = render_options(&args).unwrap();
+        assert_eq!(o.solo, ["Drum Bus", "808"]);
+        assert!(o.dry_master);
+        let plain: Vec<String> = ["--demo", "mix.wav"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let o = render_options(&plain).unwrap();
+        assert!(o.solo.is_empty() && !o.dry_master);
+    }
+
+    #[test]
+    fn built_in_songs_are_found_by_title_and_name_ignoring_case() {
+        let title = |src: &str| builtin(src).unwrap().unwrap().meta.title;
+        assert_eq!(title("--demo"), "Afterglow");
+        assert_eq!(title("--demo=night shift"), "Night Shift");
+        assert_eq!(title("--demo=Neon Coast"), "Neon Coast");
+        assert!(builtin("--template=trap").unwrap().is_ok());
+        assert!(builtin("--demo=Polka").unwrap().is_err());
+        assert!(builtin("--template=Polka").unwrap().is_err());
+        assert!(builtin("song.peelproj").is_none());
     }
 }
