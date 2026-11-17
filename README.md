@@ -1,290 +1,154 @@
-# Peel Studio
+<p align="center">
+  <img src="assets/icons/peel-256.png" width="96" alt="">
+</p>
 
-An open source, pattern-based music workstation for Windows, macOS and
-Linux. Build a beat or a melody as a pattern, paint it into an arrangement,
-change the source once and every instance follows.
+<h1 align="center">Peel Studio</h1>
 
-Peel Studio is native Rust end to end: a `wgpu` interface (Metal, D3D12,
-Vulkan), a lock-free realtime engine and project-owned instruments and
-effects. There is no web view.
+<p align="center">
+  A pattern-based music workstation for macOS, Windows and Linux.<br>
+  Native Rust, free and open source.
+</p>
 
-![The Peel Studio workspace: browser, playlist, channel rack and device panel](docs/images/studio.png)
+<p align="center">
+  <a href="https://github.com/Vheissu/peel-studio/actions/workflows/ci.yml"><img src="https://github.com/Vheissu/peel-studio/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue" alt="License: GPL-3.0-or-later"></a>
+</p>
 
-> Early development. The foundation (document model, realtime engine,
-> native instruments and effects, UI toolkit and the core editors) works
-> today; see [docs/ROADMAP.md](docs/ROADMAP.md) for what is next.
+![Peel Studio playing the Afterglow demo: browser, playlist, channel rack and device panel](docs/images/studio.png)
 
-## What works today
+Build a beat or a melody as a pattern, paint it into an arrangement, then
+change the pattern once and every copy follows. Peel Studio ships with
+recorded drums, guitars and bass, synths, an 808 that slides, a full mixer
+and four finished demo songs to pull apart.
 
-- Pattern workflow: a Channel Rack step sequencer (with a velocity graph)
-  and a Piano Roll edit the same notes; patterns are painted into the
-  Playlist as linked clips, and Make unique splits one off.
-- Twenty-one native instruments: a recorded acoustic kit, sustained and
-  palm-muted guitars, recorded bass, five synthesized drums, a tuned 808
-  sub bass that slides between notes, Mallet modal percussion, Poly and
-  Cross synths, a mono bass, tine electric piano, acoustic piano, electric
-  guitar with amp and cabinet, bowed violin, Zither plucked strings,
-  saxophone and sampler. Twenty-one effects cover EQ, dynamics, delay,
-  reverb, distortion, filtering and modulation, with Glitch, Transient,
-  Gate, Tape, Crush, Resonator and Mastering for further shaping. Over 380
-  factory presets are available in the Browser, alongside installed CLAP
-  plugins.
-- Four demo songs, each a finished arrangement with buses, sends,
-  sidechains, automation and a mastering chain. "Afterglow" is 80 bars of
-  progressive house with tempo ramps, a slower breakdown, two drops and a
-  key change. "Night Shift" is trap built on the 808, with slides, hat
-  rolls and a filtered break. "Neon Coast" is synthwave with a gated snare
-  plate, an arpeggio and a gliding lead. "Corner Store" is swung boom bap
-  through tape and a twelve-bit crusher.
-- Arrangement: pattern, audio and automation clips; trims, fades, slicing,
-  marquee selection, Alt-drag copies, markers, tempo changes, alternate
-  arrangements; audio loops that follow the tempo; render to audio.
-- Mixing: console-style strips with inserts, bus routing, post-fader sends,
-  sidechain compression, gain reduction meters, pan, faders, meters, mute
-  and solo; curved automation of any device parameter, track volume or pan.
-- Performance: launch Playlist clips live by lane and scene on the next
-  bar, and capture the performance as a new arrangement.
-- Composing tools: legato, articulate, chop, arpeggiate, strum, flam,
-  humanize, velocity levels, flip and tidy, previewed live before they
-  apply.
-- Playing and recording: computer keyboard and hardware MIDI keyboards with
-  sustain, note recording into patterns, audio recording onto armed
-  Playlist lanes with input monitoring, scales and chord stamping,
-  quantize, swing, tap tempo.
-- Exact rational musical time, sample-accurate playback that cannot drift,
-  and a realtime audio path verified to make no allocations.
-- Open project files with atomic saves, autosave and crash recovery,
-  Standard MIDI File import and export with MPE expression, WAV, MP3, FLAC
-  and AIFF export of the mix or stems, undo history.
-- Screen reader support through AccessKit and keyboard focus traversal.
+It's native Rust from the interface to the audio engine: `wgpu` drawing
+on Metal, D3D12 or Vulkan, and a lock-free realtime engine. There is no
+web view.
 
-| Piano Roll with 808 slides | Mixer |
+> [!NOTE]
+> Peel Studio is in early development. The core editors, engine, devices
+> and file format work today. [docs/ROADMAP.md](docs/ROADMAP.md) tracks
+> what's next. Expect rough edges, and please report them.
+
+## Screenshots
+
+| Piano Roll | Mixer |
 | --- | --- |
-| ![Piano Roll](docs/images/piano-roll.png) | ![Mixer](docs/images/mixer.png) |
+| ![Piano Roll with 808 slides in Night Shift](docs/images/piano-roll.png) | ![Mixer with inserts, sends and meters](docs/images/mixer.png) |
+| **Channel Rack** | **Performance** |
+| ![Channel Rack step sequencer playing the Night Shift hook](docs/images/channel-rack.png) | ![Performance view with clips arranged by lane and scene](docs/images/perform.png) |
+| **EQ** | **Instrument editor** |
+| ![EQ on the master with a live spectrum](docs/images/eq.png) | ![Poly synth editor with an on-screen keyboard](docs/images/instrument.png) |
 
-| Performance with tempo changes |
-| --- |
-| ![Performance view](docs/images/perform.png) |
+## Features
 
-## Projects
+- **Patterns.** A Channel Rack step sequencer and a Piano Roll edit the
+  same notes. Pattern clips in the Playlist stay linked until you make one
+  unique.
+- **21 instruments.** A recorded acoustic kit, recorded guitars and bass,
+  synthesized drums, a tuned 808, Poly and Cross synths, electric and
+  acoustic pianos, mallets, violin, zither, saxophone and a sampler.
+- **21 effects.** EQ, compressor, multiband, limiter, delay, reverb,
+  distortion, filter, modulation, Tape, Gate, Glitch, Crush and a
+  mastering chain. Over 380 factory presets across instruments and
+  effects, and CLAP plugins load alongside them.
+- **Arrangement.** Pattern, audio and automation clips, fades, slicing,
+  markers, tempo changes and ramps, alternate arrangements, and audio
+  loops that follow the tempo.
+- **Mixing.** Console strips with inserts, buses, post-fader sends,
+  sidechain compression, gain reduction meters and curved automation of
+  any parameter.
+- **Performance.** Launch clips by lane and scene on the next bar and
+  record the performance as a new arrangement.
+- **Note tools.** Legato, chop, arpeggiate, strum, flam, humanize and
+  more, previewed live before they apply.
+- **Recording.** Computer keyboard and MIDI keyboards (with MPE), note
+  recording, and audio recording onto armed lanes with input monitoring.
+- **Files.** Open project format with atomic saves, autosave and crash
+  recovery. MIDI import and export. WAV, MP3, FLAC and AIFF export of the
+  mix or stems.
+- **Scripting and agents.** JavaScript, Lua and Python actions, a headless
+  renderer, and an MCP server so AI agents can compose, mix and export.
+- **Accessibility.** Screen reader support through AccessKit and keyboard
+  focus traversal.
 
-File > New project starts blank, with no instruments or notes. File > New
-from template offers Rap, Trap, Hip-hop, Synthwave, EDM and Rock / Metal
-song starters, alongside House and Beat and melody. Rock / Metal opens
-Channels on a one-bar Double kick pattern with the step grid at 1/16T, so
-the six-kick bursts on beats one and three line up with the steps. Trap
-uses the 808 instrument and slides it up an octave at the end of each hook
-bar; Synthwave and Hip-hop use the gated and dusty drum presets.
+Timing uses exact rational musical time, so playback is sample-accurate
+and can't drift, and tests verify that the realtime audio path never
+allocates.
 
-The demo songs are a separate choice: the start screen lists them with
-their style, tempo and key, and File > Demo songs opens the same list.
-File > Close project returns to the start screen. New, Open and Close ask
-before replacing unsaved work; cancelling Save As keeps the current project.
+## Download
 
-File > Save as template… stores a copy of the open project under a name you
-choose: instruments and their settings, plugin state, mixer routing,
-patterns, recorded expression and the arrangement. Audio comes along too,
-including files the project only referenced, so the template still works if
-the original project or those files move. Saving a template leaves the open
-project as it was, with the same file, title and unsaved changes. Names must
-be unique; an existing template is never replaced.
+There are no packaged releases yet. When there are, builds for macOS
+(Apple silicon), Windows and Linux will be on the
+[releases page](https://github.com/Vheissu/peel-studio/releases). Until
+then, build from source.
 
-Your templates are listed under File > New from template > My templates and
-behind the My templates button on the start screen. Picking one starts a new
-Untitled project. The first save asks where to put it and copies its audio
-there, so the template itself is never changed. Templates live in a
-`Templates` folder next to the app's settings (on macOS,
-`~/Library/Application Support/Peel Studio/Templates`). There's no rename or
-delete in the app yet; remove a template's `.peelproj` file and `.peeldata`
-folder by hand.
+## Build from source
 
-Acoustic Kit plays real recordings of kick, snare, closed/open hats, ride,
-crash and toms, with four velocity layers and three alternate takes per
-piece. Choose its Full Kit preset for a GM drum keyboard, or a piece preset
-for a Channel Rack row. New Rock / Metal songs use the recorded kit.
-They also use Recorded Guitar for sustained power chords, Palm-Muted Guitar
-for chugs and Recorded Bass for a picked bass line. These instruments use
-bundled multisamples, with alternate takes, velocity response and no
-external sample files. The guitars include clean and amplified sounds.
-Palm-Muted Guitar uses dedicated palm-muted recordings from Guitar-TECHS
-under CC BY 4.0. Exports do not generate credit files; the licence still
-requires attribution when publishing audio that uses these recordings. See
-[sample credits](assets/strings/palm-muted/README.md).
-Kick, Snare, Hat and Tom also offer modeled acoustic and 808/909 circuit
-sounds. Existing projects and older presets retain their sound.
-
-In Channels, the Add menu lists kits above the instruments. Trap kit adds
-a kick, snare, clap, closed and open hats and an 808 set to slide; Acoustic
-kit adds six pieces of the recorded kit. Each piece gets its own row and
-mixer track, and the whole kit is one undo step.
-
-Step keys are colored by beat, four to a color, so the bar reads at a
-glance. **Steps** sets the drum grid; the bar count sets the pattern's
-length. Choose 1/32 or 1/64 for fast repeated kicks. The Piano Roll has
-separate **Grid** and **Note length** controls, with quarter notes, eighths,
-sixteenths, finer divisions and triplets. Note length also offers dotted
-values. Changing the grid leaves existing notes untouched. Cmd/Ctrl+wheel
-zooms the Piano Roll; Shift+wheel scrolls a long step grid sideways.
-
-## 808
-
-The 808 instrument is a tuned sub bass: a sine that drops onto its note for
-the punch, holds, then decays, through a drive stage and a tone filter. It
-plays one note at a time. With Glide on Legato, a note that starts while
-another is still held slides to the new pitch instead of restarting, so a
-slide is two overlapping notes in the Piano Roll: lengthen the first until
-it runs under the second. Always also slides between separate notes; Off
-restarts every note. Glide Time is the same for any interval. The Piano
-Roll draws a line from one note to the next wherever a slide will happen.
-
-Note Off chooses Release (the key gates the note; a short Release chokes
-it) or Ring (the decay always runs out, like a one-shot sample). Decay
-Track shortens higher notes. Drive offers Warm, Tube, Clip and Fold;
-Shape and Octave add harmonics before it so the bass reads on small
-speakers. Fourteen presets run from Clean Sub to Fuzz. The Trap starter
-and Night Shift use Slide.
-
-## Presets
-
-Hat, Snare, Clap, Kick, Bass, Poly, Cross, Mallet and Tine have presets
-for trap, boom bap and synthwave: Trap Tight and Trap Open hats (Open is
-cut by the note's length), Dusty drums, Rim Click and Finger Snap, a Gated
-snare and clap, Trap Bell, Flute Lead, Synth Brass, PWM Pad, Night Lead,
-Cowbell and more. Reverb, Delay, Compressor and Mastering have presets to
-match, such as Snare Plate, Neon Hall, Worn Echo and 808 Duck.
-
-## Tape and Gate
-
-**Tape** adds saturation, a head bump, a high cut, wow, flutter and hiss
-that only sounds under a signal. **Gate** mutes or ducks a track below a
-threshold, with hold, hysteresis and a sidechain: put it after a reverb on
-a return and key it from the dry snare for a gated reverb.
-
-## Clip editing
-
-Right-click an arrangement clip for Duplicate, Copy or Cut. Use the Select
-tool or Shift-click to work with a group. Cmd/Ctrl+D repeats the selection
-with its timing and lane spacing intact.
-
-Right-click an empty lane to paste at that grid position, or point at the
-destination and press Cmd/Ctrl+V. Cmd/Ctrl+A selects every arrangement clip.
-Copies share their source pattern; use Make unique to edit one independently.
-
-## Build
-
-You need Rust (the exact toolchain is pinned in `rust-toolchain.toml`, and
-`rustup` installs it automatically).
+Install Rust with [`rustup`](https://rustup.rs). The toolchain is pinned in
+`rust-toolchain.toml` and installs itself on first build. You also need a
+C compiler for the bundled MP3 encoder (Xcode Command Line Tools, Visual
+Studio Build Tools, or GCC/Clang). On Linux, install the ALSA headers
+(`libasound2-dev` on Debian and Ubuntu) and a Vulkan driver.
 
 ```sh
-cargo run --release            # the desktop app
+cargo run --release            # the app
 cargo run -p peel-cli -- help  # headless tools
 cargo test --workspace
 ```
 
-The MP3 encoder is built from bundled LAME sources, so building also needs
-a C compiler (Xcode Command Line Tools on macOS, Visual Studio Build Tools
-on Windows, or a C toolchain on Linux). Audio export needs no external
-encoder at runtime.
-
-Linux also needs ALSA development headers (`libasound2-dev` on Debian and
-Ubuntu) and a Vulkan driver.
-
-To build a macOS app bundle and disk image in `dist/`:
-
-```sh
-scripts/package-macos.sh
-```
-
-Set `SIGN_ID` to a Developer ID identity to sign for distribution;
-without it the bundle is ad-hoc signed for local use.
+`scripts/package-macos.sh` builds an app bundle and disk image in
+`dist/`. Set `SIGN_ID` to a Developer ID identity to sign it; otherwise
+it's ad-hoc signed for local use.
 
 ## Headless tools
+
+The `peel` command renders, inspects and validates projects without a
+window:
 
 ```sh
 peel render song.peelproj mix.wav --rate 48000 --bits 24
 peel render song.peelproj mix.mp3 --bitrate 192 --normalize
-peel render song.peelproj mix.flac --bits 24 --rate 96000
-peel render song.peelproj mix.aiff --mono --tail 8
-peel render --demo demo.wav       # the first demo song
 peel render "--demo=Night Shift" night.wav
-peel render --template=Trap trap.wav
 peel render song.peelproj drums.wav --solo "Drum Bus" --dry-master
 peel songs                        # demo songs and song starters
-peel info song.peelproj
-peel validate song.peelproj
 peel devices                      # every native instrument and effect
 peel audition peel.bass.808 808.wav --key 33
 ```
 
-`--solo` renders only the named mixer tracks (a stem) and `--dry-master`
-leaves out the master track's effects. `peel audition` plays one native
-device on its own, preset by preset, and prints each preset's level: an
-instrument plays a note, an effect processes a drum hit and a chord.
+Run `peel help` for every option.
 
-## MCP
+## Documentation
 
-Agents can use Peel Studio through MCP to compose, arrange, mix, play,
-record, import files and export audio. Launch `peel-studio --mcp` to share
-a desktop session with an agent, or `peel-studio --mcp-headless` for a
-silent session without a window. A separate `peel-mcp` executable supports
-headless playback with `--audio`.
-
-Edits use the app's undo history. The server discovers the current
-instrument and effect catalog, exposes device parameters and presets,
-and supports validated transactions across the full project document.
-See [docs/MCP.md](docs/MCP.md) for client configuration, tools and examples.
-
-## Scripts
-
-Run JavaScript, Lua and Python actions from **Scripts** in the status bar
-or **F8**. Actions edit a project snapshot and apply successful changes as
-one undo step. Releases bundle JavaScript, Lua and a private Python runtime
-with PyTheory, so no extra installation is needed. A custom Python
-interpreter can be selected for additional packages. Factory examples,
-installation and the API are in [docs/SCRIPTING.md](docs/SCRIPTING.md).
-
-## Export
-
-Open Export from the toolbar or press Cmd/Ctrl+E. Choose a mix or one file
-per mixer track, then the format and quality:
-
-| Format | Quality |
+| Guide | Covers |
 | --- | --- |
-| WAV | 16-bit or 24-bit PCM, or 32-bit float |
-| MP3 | 128, 192, 256 or 320 kbps constant bitrate; 44.1 or 48 kHz |
-| FLAC | Lossless 16-bit or 24-bit PCM; up to 96 kHz |
-| AIFF | Uncompressed 16-bit or 24-bit PCM |
+| [Guide](docs/GUIDE.md) | Projects, templates, kits, the 808, presets, clip editing, export |
+| [Audio tools](docs/AUDIO_TOOLS.md) | Mixing, EQ, mastering, instruments, MIDI and recording |
+| [Scripting](docs/SCRIPTING.md) | JavaScript, Lua and Python actions and their API |
+| [MCP](docs/MCP.md) | Connecting AI agents to a live or headless session |
+| [Architecture](docs/ARCHITECTURE.md) | How the crates fit together |
+| [Realtime rules](docs/REALTIME.md) | What may and may not run on the audio thread |
+| [Design](docs/DESIGN.md) | The visual system |
+| [Roadmap](docs/ROADMAP.md) | What's done and what's next |
+| [Specification](docs/SPEC.md) | The full product specification |
 
-WAV and AIFF offer sample rates from 44.1 to 192 kHz; FLAC supports up to
-96 kHz. Stereo or mono, effect tails and optional normalization are
-available for every format.
-Normalization adjusts each rendered file independently to -1 dBFS peak;
-it isn't a loudness target. Leave it off for stems whose relative levels
-you want to preserve. MP3 encoding can shift the decoded peak slightly.
-TPDF dither can be enabled for integer PCM output.
+## Contributing
 
-The headless renderer chooses the format from the output extension and
-accepts `--rate`, `--bits`, `--bitrate`, `--tail`, `--mono`, `--normalize`
-and `--no-dither`. Existing WAV render commands still work.
-
-## Layout
-
-| Path | Contents |
-| --- | --- |
-| `crates/` | The Cargo workspace. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) explains each crate |
-| `assets/` | Fonts and icons, each with its license |
-| `docs/` | Architecture, realtime rules, roadmap |
-| `open-source-fl-studio-alternative-spec.md` | The full product specification |
+Bug reports and pull requests are welcome. Read
+[CONTRIBUTING.md](CONTRIBUTING.md) first, and report security problems
+privately as described in [SECURITY.md](SECURITY.md).
 
 ## License
 
-GPL-3.0-or-later. MP3 encoding statically links LAME through
-`mp3lame-encoder` and `mp3lame-sys` (LGPL-3.0); FLAC encoding uses
-`flacenc` (Apache-2.0). Bundled fonts and icons keep their own licenses; see
-[assets/LICENSES.md](assets/LICENSES.md).
+Peel Studio is licensed under [GPL-3.0-or-later](LICENSE).
 
-Peel Studio is an independent project. It is not affiliated with
-Image-Line, and it does not use FL Studio code, artwork, presets or samples.
+MP3 encoding statically links LAME through `mp3lame-encoder` and
+`mp3lame-sys` (LGPL-3.0); FLAC encoding uses `flacenc` (Apache-2.0). Bundled fonts, icons and recordings keep their own
+licenses, listed in [assets/LICENSES.md](assets/LICENSES.md). The
+palm-muted guitar recordings are CC BY 4.0: if you publish audio that uses
+them, credit them as described in
+[their notice](assets/strings/palm-muted/README.md).
 
-Mixing, EQ, mastering, instruments, MIDI and recording are covered in the
-[audio tools guide](docs/AUDIO_TOOLS.md).
+Peel Studio is an independent project. It isn't affiliated with or
+endorsed by Image-Line, and it doesn't use FL Studio code, artwork, presets
+or samples.
