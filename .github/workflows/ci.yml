@@ -34,6 +34,7 @@ jobs:
           toolchain: "1.99.0"
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
       - run: cargo build --workspace --all-targets
       - uses: astral-sh/setup-uv@v10.3.3
         with:
@@ -41,6 +42,8 @@ jobs:
       - name: Bundle Python and PyTheory
         run: uv run --no-project --python 3.12.13 scripts/bundle-python.py target/debug/python --replace
       - run: cargo test --workspace
+      - name: Realtime allocation checks
+        run: cargo test -p peel-engine --features rt-check
       - name: Verify bundled Python without system Python
         run: cargo test -p peel-cli --test bundled_python -- --ignored
       - run: cargo clippy --workspace --all-targets -- -D warnings
