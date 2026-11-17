@@ -2,7 +2,7 @@
 
 Peel Studio is a native Rust application. There is no web view and no
 scripting runtime in the audio path. The full product specification is
-[`open-source-fl-studio-alternative-spec.md`](../open-source-fl-studio-alternative-spec.md);
+[`SPEC.md`](SPEC.md);
 this document describes how the code is organized today and which parts of
 the specification each crate owns.
 
