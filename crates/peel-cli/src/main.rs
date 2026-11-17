@@ -7,6 +7,19 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32};
 
+/// `println!` that exits quietly when stdout has closed (`peel devices |
+/// head`) instead of panicking. Other pipes keep their errors.
+macro_rules! out {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        if let Err(e) = writeln!(std::io::stdout().lock(), $($arg)*)
+            && e.kind() == std::io::ErrorKind::BrokenPipe
+        {
+            std::process::exit(0);
+        }
+    }};
+}
+
 mod audition;
 
 use peel_document::validate;
@@ -59,7 +72,7 @@ fn main() -> ExitCode {
         Some("audition") => audition::run(&args[1..]),
         Some("songs") => {
             for d in template::demos() {
-                println!(
+                out!(
                     "--demo={:<22} {}, {} BPM, {}",
                     format!("\"{}\"", d.title),
                     d.style,
@@ -68,13 +81,13 @@ fn main() -> ExitCode {
                 );
             }
             for (name, _) in template::templates() {
-                println!("--template=\"{name}\"");
+                out!("--template=\"{name}\"");
             }
             Ok(())
         }
         Some("devices") => {
             for d in peel_devices::all() {
-                println!(
+                out!(
                     "{:<22} {:<10} {:<10} v{}  {} params",
                     d.type_id,
                     d.name,
@@ -135,21 +148,21 @@ fn load(path: &str) -> Result<peel_document::Project, String> {
 
 fn info(args: &[String]) -> Result<(), String> {
     let p = load(args.first().ok_or(USAGE)?)?;
-    println!("title:     {}", p.meta.title);
-    println!(
+    out!("title:     {}", p.meta.title);
+    out!(
         "tempo:     {:.2} BPM, {}/{}",
         p.bpm(),
         p.time_signature.numerator,
         p.time_signature.denominator
     );
-    println!("channels:  {}", p.channels.len());
+    out!("channels:  {}", p.channels.len());
     for c in &p.channels {
-        println!("  {:<16} {}", c.name, c.device.type_id);
+        out!("  {:<16} {}", c.name, c.device.type_id);
     }
-    println!("patterns:  {}", p.patterns.len());
-    println!("clips:     {}", p.arrangement().clips.len());
-    println!("length:    {} beats", p.arrangement().end());
-    println!("mixer:     {} tracks", p.mixer.tracks.len());
+    out!("patterns:  {}", p.patterns.len());
+    out!("clips:     {}", p.arrangement().clips.len());
+    out!("length:    {} beats", p.arrangement().end());
+    out!("mixer:     {} tracks", p.mixer.tracks.len());
     Ok(())
 }
 
@@ -157,12 +170,12 @@ fn check(args: &[String]) -> Result<(), String> {
     let p = load(args.first().ok_or(USAGE)?)?;
     let issues = validate(&p);
     for i in &issues {
-        println!("{:?}: {}", i.severity, i.message);
+        out!("{:?}: {}", i.severity, i.message);
     }
     if issues.iter().any(|i| i.is_error()) {
         return Err("project has errors".into());
     }
-    println!("ok");
+    out!("ok");
     Ok(())
 }
 
@@ -270,7 +283,7 @@ fn render(args: &[String]) -> Result<(), String> {
     let cancel = AtomicBool::new(false);
     let started = std::time::Instant::now();
     render_audio(&project, &samples, &settings, &progress, &cancel)?;
-    println!(
+    out!(
         "rendered {} in {:.2} s",
         settings.render.path.display(),
         started.elapsed().as_secs_f32()
@@ -310,7 +323,7 @@ fn script(args: &[String]) -> Result<(), String> {
     };
     let saved = result.and_then(|output| {
         for line in &output.logs {
-            println!("{line}");
+            out!("{line}");
         }
         finish_exports(&mut control, &mut session);
         output.apply(&mut session)?;
@@ -318,7 +331,7 @@ fn script(args: &[String]) -> Result<(), String> {
     });
     // Stops playback, previews, inputs and any export still running.
     control.disconnect(&mut session);
-    println!("Saved {}", saved?.display());
+    out!("Saved {}", saved?.display());
     Ok(())
 }
 

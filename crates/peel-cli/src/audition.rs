@@ -184,7 +184,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         let peak = l.iter().chain(&r).fold(0.0f32, |m, x| m.max(x.abs()));
         let head = &l[..l.len().min((0.25 * RATE) as usize)];
         let rms = (head.iter().map(|x| x * x).sum::<f32>() / head.len().max(1) as f32).sqrt();
-        println!(
+        out!(
             "{:<24} peak {:6.1} dBFS   first 250 ms {:6.1} dB RMS",
             preset.map_or("(default)", |p| p.name),
             db(peak),
@@ -203,6 +203,6 @@ pub fn run(args: &[String]) -> Result<(), String> {
         },
     )
     .map_err(|e| e.to_string())?;
-    println!("wrote {}", o.out.display());
+    out!("wrote {}", o.out.display());
     Ok(())
 }
