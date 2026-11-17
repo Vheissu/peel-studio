@@ -446,7 +446,7 @@ impl Studio {
                 self.session.arm_lane(lane, true);
             }
         }
-        // `PEEL_HIDE=browser,inspector,editor` and `PEEL_HELP=1` set pane
+        // `PEEL_HIDE=browser,inspector,editor,status` and `PEEL_HELP=1` set pane
         // choices for screenshots (not saved: screenshots skip prefs).
         if let Ok(list) = std::env::var("PEEL_HIDE") {
             for pane in list.split(',') {
@@ -454,6 +454,7 @@ impl Studio {
                     "browser" => self.prefs.show_browser = false,
                     "inspector" => self.prefs.set_inspector(false),
                     "editor" => self.prefs.show_editor = false,
+                    "status" => self.prefs.show_status_details = false,
                     _ => {}
                 }
             }
@@ -671,6 +672,14 @@ impl Studio {
         }
         if std::env::var("PEEL_SONG").is_ok() {
             self.session.set_mode(PlayMode::Song);
+        }
+        // `PEEL_AT=<bar>` moves the playhead to the start of that bar.
+        if let Some(bar) = std::env::var("PEEL_AT")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+        {
+            let len = self.session.project().time_signature.bar_length().as_f64();
+            self.session.seek(f64::from(bar.saturating_sub(1)) * len);
         }
         if std::env::var("PEEL_PLAY").is_ok() {
             self.session.play();
