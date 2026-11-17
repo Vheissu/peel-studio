@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -82,9 +83,12 @@ def bundle(destination, replace=False):
                 if entry.name not in {"python", "python3", f"python{VERSION.rsplit('.', 1)[0]}"}:
                     entry.unlink()
         # Hash-based caches survive zip timestamp rounding and avoid compiling
-        # the standard library and NumPy during every user action.
+        # the standard library and NumPy during every user action. The Windows
+        # build's tcl/ folder is Tcl/Tk data, and one of its sample .py files
+        # mixes tabs and spaces, so it is skipped.
         run([interpreter, "-I", "-m", "compileall", "-q", "-j", "2",
-             "--invalidation-mode", "unchecked-hash", runtime], env=env)
+             "--invalidation-mode", "unchecked-hash",
+             "-x", re.escape(str(runtime / "tcl")), runtime], env=env)
         info = {
             "application": "Peel Studio", "schema": 1,
             "python": VERSION, "python_build": BUILD, "pytheory": "0.57.13",
