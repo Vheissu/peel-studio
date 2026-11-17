@@ -474,8 +474,10 @@ fn reed_flow(t: &[f32], s: f32) -> f32 {
         return 0.0;
     }
     let x = ((s - REED_S_MIN) * ((REED_N - 1) as f32 / (1.0 - REED_S_MIN))).max(0.0);
-    let i = x as usize;
-    let fr = x - i as f32;
+    // An `s` just below 1.0 can round `x` up to `REED_N - 1`, so keep the
+    // pair `i, i + 1` inside the table.
+    let i = (x as usize).min(REED_N - 2);
+    let fr = (x - i as f32).min(1.0);
     t[i] + (t[i + 1] - t[i]) * fr
 }
 
@@ -1318,5 +1320,21 @@ impl Synth for Sax {
 
     fn is_silent(&self) -> bool {
         self.pool.is_silent()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reed_flow_stays_in_the_table_just_below_one() {
+        let t = build_reed(0.5);
+        let mut s = 1.0f32;
+        for _ in 0..64 {
+            s = f32::from_bits(s.to_bits() - 1);
+            assert!(reed_flow(&t, s).is_finite());
+        }
+        assert!(reed_flow(&t, REED_S_MIN - 1.0).is_finite());
     }
 }
